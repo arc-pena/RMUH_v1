@@ -24,8 +24,13 @@ OUT = ROOT / "parametric-cad.html"
 # OpenCascade for the browser: a trimmed OCCT build, 22 MB of WebAssembly.
 KERNEL_PACKAGE = "replicad-opencascadejs"
 
+# The showroom renderer. Packed the same way and unpacked only when someone
+# opens the showroom, so a session that never does never pays for it.
+STAGE_PACKAGE = "playcanvas"
+STAGE_FILE = "build/playcanvas.min.js"
+
 # Concatenated in this order into one module script.
-MODULES = ["ocaf.js", "wasm-kernel.js", "http-kernel.js", "app.js"]
+MODULES = ["ocaf.js", "wasm-kernel.js", "http-kernel.js", "showroom.js", "app.js"]
 
 IMPORT = re.compile(r"^\s*import\s.*?;\s*$", re.M)
 EXPORT = re.compile(r"^export\s+(?=(?:const|let|var|class|function|async)\b)", re.M)
@@ -37,25 +42,36 @@ def strip_modules(text):
     return EXPORT.sub("", IMPORT.sub("", text))
 
 
-def fetch_kernel():
-    """OpenCascade for the browser, from npm. Cached in docs/.kernel."""
-    cache = ROOT / ".kernel"
-    dist = cache / "package" / "dist"
-    if (dist / "replicad_single.wasm").exists():
-        return dist
+def fetch_npm(package, cache_name, member_prefix, marker):
+    """Pulls one package from npm and unpacks the files we need. Cached."""
+    cache = ROOT / cache_name
+    if (cache / marker).exists():
+        return cache / pathlib.PurePosixPath(member_prefix).parent
 
     cache.mkdir(exist_ok=True)
-    print("fetching %s from npm…" % KERNEL_PACKAGE)
-    subprocess.run(["npm", "pack", KERNEL_PACKAGE], cwd=cache, check=True,
-                   stdout=subprocess.DEVNULL)
-    tarballs = sorted(cache.glob("replicad-opencascadejs-*.tgz"))
+    print("fetching %s from npm…" % package)
+    subprocess.run(["npm", "pack", package], cwd=cache, check=True, stdout=subprocess.DEVNULL)
+    tarballs = sorted(cache.glob("%s-*.tgz" % package))
     if not tarballs:
-        sys.exit("npm pack produced no tarball")
+        sys.exit("npm pack produced no tarball for %s" % package)
     with tarfile.open(tarballs[-1]) as archive:
-        wanted = [m for m in archive.getmembers()
-                  if m.name.startswith("package/dist/replicad_single.")]
+        wanted = [m for m in archive.getmembers() if m.name.startswith(member_prefix)]
+        if not wanted:
+            sys.exit("%s does not contain %s" % (package, member_prefix))
         archive.extractall(cache, members=wanted)
-    return dist
+    return cache / pathlib.PurePosixPath(member_prefix).parent
+
+
+def fetch_kernel():
+    """OpenCascade for the browser, from npm. Cached in docs/.kernel."""
+    return fetch_npm(KERNEL_PACKAGE, ".kernel", "package/dist/replicad_single.",
+                     "package/dist/replicad_single.wasm")
+
+
+def fetch_stage():
+    """PlayCanvas, for the showroom. Cached in docs/.stage."""
+    return fetch_npm(STAGE_PACKAGE, ".stage", "package/" + STAGE_FILE,
+                     "package/" + STAGE_FILE)
 
 
 def main():
@@ -82,6 +98,12 @@ def main():
 
     packed = base64.b64encode(gzip.compress(wasm_path.read_bytes(), 9)).decode("ascii")
 
+    stage_path = fetch_stage() / pathlib.PurePosixPath(STAGE_FILE).name
+    if not stage_path.exists():
+        sys.exit("missing %s" % stage_path)
+    stage_packed = base64.b64encode(
+        gzip.compress(stage_path.read_bytes(), 9)).decode("ascii")
+
     bodies, seen = [], {}
     for name in MODULES:
         text = strip_modules((SRC / name).read_text())
@@ -96,7 +118,9 @@ def main():
     # opaque element text the HTML tokenizer just scans past it, and the module
     # reads it at run time.
     payload = ("<script type=\"application/octet-stream\" id=\"kernel-payload\">"
-               + packed + "</script>")
+               + packed + "</script>\n"
+               + "<script type=\"application/octet-stream\" id=\"showroom-payload\">"
+               + stage_packed + "</script>")
 
     script = "\n".join([
         "<script type=\"module\">",
@@ -108,9 +132,10 @@ def main():
 
     OUT.write_text(shell.rstrip() + "\n\n" + payload + "\n\n" + script + "\n")
     size = OUT.stat().st_size
-    print("wrote %s  %.1f MB  (wasm %.1f MB raw -> %.1f MB packed)" % (
+    print("wrote %s  %.1f MB  (kernel %.1f -> %.1f MB, showroom %.1f -> %.1f MB)" % (
         OUT.relative_to(ROOT.parent), size / 1048576,
-        wasm_path.stat().st_size / 1048576, len(packed) / 1048576))
+        wasm_path.stat().st_size / 1048576, len(packed) / 1048576,
+        stage_path.stat().st_size / 1048576, len(stage_packed) / 1048576))
     if size > 16 * 1048576:
         sys.exit("over the 16 MB artifact limit")
 

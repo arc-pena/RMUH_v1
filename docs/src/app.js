@@ -1,5 +1,6 @@
 import { createWasmKernel } from "./wasm-kernel.js";
 import { createHttpKernel } from "./http-kernel.js";
+import { ENVIRONMENTS, FINISHES, Showroom, findFinish } from "./showroom.js";
 
 "use strict";
 
@@ -229,7 +230,10 @@ function groupFromStream(mesh, entry) {
   return group;
 }
 
+const streams = new Map();   // feature id -> the triangles the kernel last sent
+
 function setShape(mesh) {
+  streams.set(mesh.id, mesh);
   const existing = shapes.get(mesh.id);
   if (existing) disposeGroup(existing.group);
   const group = groupFromStream(mesh, feature(mesh.id));
@@ -252,7 +256,7 @@ async function syncShapes() {
     if (entry.built && (!have || have.revision !== entry.revision)) stale.push(entry.id);
   }
   for (const id of [...shapes.keys()]) {
-    if (!feature(id)) { disposeGroup(shapes.get(id).group); shapes.delete(id); }
+    if (!feature(id)) { disposeGroup(shapes.get(id).group); shapes.delete(id); streams.delete(id); }
   }
 
   if (stale.length && kernel) {
@@ -267,6 +271,7 @@ async function syncShapes() {
   applyVisibility();
   paintSelection();
   draw();
+  if (staging && showroom.ready) showroom.setScene(state.tree.features, streams);
 }
 
 function applyVisibility() {
@@ -863,6 +868,7 @@ function select(id, openDefinition) {
     ? "<b>" + escapeHtml(entry.name) + "</b> · " + entry.entry + " · " + entry.type
     : "click a body · double-click to edit it";
   buildTree(); buildPanel(); refreshToolbar(); paintSelection();
+  if (staging) refreshStageSelection();
 }
 
 //! Everything the kernel says, in one place: mirror the tree, redraw the
@@ -997,6 +1003,161 @@ document.getElementById("btn-connect").addEventListener("click", async () => {
     setTimeout(() => { button.textContent = "Connect"; }, 2600);
   }
 });
+
+/* ----------------------------------------------------------------- showroom
+
+   The modelling view and the stage are two renderers over one document: the
+   kernel's triangles go to both, and neither owns the model.                */
+
+const showroom = new Showroom({
+  canvas: document.getElementById("stage-canvas"),
+  payloadId: "showroom-payload",
+});
+const stage = document.getElementById("showroom");
+const stageUi = document.getElementById("stage-ui");
+let staging = false;
+
+function buildStageControls() {
+  const finishes = document.getElementById("stage-finishes");
+  for (const finish of FINISHES) {
+    const button = document.createElement("button");
+    button.className = "swatch";
+    button.dataset.finish = finish.key;
+    button.title = finish.label;
+    button.setAttribute("aria-label", finish.label);
+    button.setAttribute("aria-pressed", "false");
+    const [r, g, b] = finish.color;
+    button.style.background = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+    if (finish.metalness > 0.5)
+      button.style.backgroundImage =
+        "linear-gradient(140deg, rgba(255,255,255,.75), rgba(255,255,255,0) 55%)";
+    button.addEventListener("click", () => applyFinish(finish.key));
+    finishes.appendChild(button);
+  }
+
+  const envs = document.getElementById("stage-envs");
+  for (const preset of ENVIRONMENTS) {
+    const button = document.createElement("button");
+    button.textContent = preset.label;
+    button.dataset.env = preset.key;
+    button.setAttribute("aria-pressed", preset.key === showroom.environment ? "true" : "false");
+    button.addEventListener("click", () => {
+      showroom.applyEnvironment(preset.key);
+      for (const other of envs.children)
+        other.setAttribute("aria-pressed", other === button ? "true" : "false");
+      syncStageToggles();
+    });
+    envs.appendChild(button);
+  }
+}
+
+//! The scene presets carry their own floor and reflection, so the toggles
+//! follow whichever stage is showing rather than arguing with it.
+function syncStageToggles() {
+  document.getElementById("btn-stage-ground")
+    .setAttribute("aria-pressed", showroom.ground && showroom.ground.enabled ? "true" : "false");
+  document.getElementById("btn-stage-reflect")
+    .setAttribute("aria-pressed", showroom.reflection > 0.01 ? "true" : "false");
+}
+
+function refreshStageSelection() {
+  const entry = feature(state.selected);
+  document.getElementById("stage-part").textContent = entry ? entry.name : "nothing selected";
+  const current = entry && entry.appearance ? entry.appearance.finish : null;
+  for (const button of document.querySelectorAll("#stage-finishes .swatch"))
+    button.setAttribute("aria-pressed", button.dataset.finish === current ? "true" : "false");
+  if (showroom.ready) showroom.highlight(state.selected);
+}
+
+async function applyFinish(key) {
+  const entry = feature(state.selected);
+  if (!entry) return;
+  const appearance = { finish: key, color: findFinish(key).color };
+  showroom.paint(entry.id, appearance);
+  try {
+    const payload = await kernel.setAppearance(entry.id, appearance);
+    if (payload.tree) state.tree = payload.tree;
+  } catch (err) { showError(err.message); }
+  refreshStageSelection();
+}
+
+function stageResize() {
+  if (!showroom.ready) return;
+  showroom.resize(innerWidth, innerHeight);
+}
+
+async function enterShowroom() {
+  const button = document.getElementById("btn-stage");
+  const was = button.textContent;
+  button.disabled = true;
+  button.textContent = "opening…";
+  try {
+    const firstTime = !showroom.ready;
+    await showroom.start();
+    if (firstTime) {
+      buildStageControls();
+      showroom.onPick = id => { state.selected = id; refreshStageSelection(); };
+      addEventListener("resize", stageResize);
+    }
+    stageResize();
+    showroom.setScene(state.tree.features, streams);
+    syncStageToggles();
+
+    // Arrive from where the modelling camera was looking, then ease to the
+    // hero view - the move is the transition.
+    showroom.orbit.yaw = -(view.yaw * 180 / Math.PI) - 90;
+    showroom.orbit.pitch = Math.max(-8, Math.min(80, view.pitch * 180 / Math.PI));
+    showroom.place();
+
+    staging = true;
+    document.body.classList.add("staging");
+    stage.classList.add("on");
+    requestAnimationFrame(() => stageUi.classList.add("shown"));
+    showroom.frame(null, 950);
+    button.textContent = was;
+  } catch (err) {
+    button.textContent = err.message.slice(0, 34);
+    setTimeout(() => { button.textContent = was; }, 3200);
+  } finally { button.disabled = false; }
+}
+
+function leaveShowroom() {
+  staging = false;
+  showroom.turntable = false;
+  document.getElementById("btn-stage-spin").setAttribute("aria-pressed", "false");
+  stageUi.classList.remove("shown");
+  stage.classList.remove("on");
+  document.body.classList.remove("staging");
+  buildTree(); buildPanel(); refreshToolbar();
+}
+
+document.getElementById("btn-stage").addEventListener("click", enterShowroom);
+document.getElementById("btn-stage-exit").addEventListener("click", leaveShowroom);
+document.getElementById("btn-stage-ground").addEventListener("click", event => {
+  const on = event.currentTarget.getAttribute("aria-pressed") !== "true";
+  event.currentTarget.setAttribute("aria-pressed", on ? "true" : "false");
+  showroom.setGroundVisible(on);
+});
+document.getElementById("btn-stage-reflect").addEventListener("click", event => {
+  const on = event.currentTarget.getAttribute("aria-pressed") !== "true";
+  event.currentTarget.setAttribute("aria-pressed", on ? "true" : "false");
+  showroom.setReflection(on ? 0.42 : 0);
+});
+document.getElementById("btn-stage-spin").addEventListener("click", event => {
+  showroom.turntable = event.currentTarget.getAttribute("aria-pressed") !== "true";
+  event.currentTarget.setAttribute("aria-pressed", showroom.turntable ? "true" : "false");
+});
+document.getElementById("stage-exposure").addEventListener("input", event => {
+  showroom.setExposure(Number(event.target.value));
+});
+
+let lastSpin = performance.now();
+(function spinLoop(now) {
+  const dt = Math.min(0.1, ((now || performance.now()) - lastSpin) / 1000);
+  lastSpin = now || performance.now();
+  if (staging && showroom.ready) showroom.spin(dt);
+  requestAnimationFrame(spinLoop);
+})();
 
 /* ---------------------------------------------------------------- exporting */
 
@@ -1152,7 +1313,10 @@ addEventListener("keydown", event => {
   if (event.target.matches("input, textarea, select")) return;
   if (event.key === "f" || event.key === "F") fitView();
   if (event.key === "t" || event.key === "T") toggleTree();
-  if (event.key === "Escape") { state.edited = null; buildPanel(); logPop.hidden = true; }
+  if (event.key === "Escape") {
+    if (staging) return leaveShowroom();
+    state.edited = null; buildPanel(); logPop.hidden = true;
+  }
 });
 
 (async function start() {

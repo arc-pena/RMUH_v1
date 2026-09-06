@@ -162,6 +162,12 @@ export const FIRST_ARG_TAG = 1, RESULT_TAG = 100, ERROR_TAG = 101, REVISION_TAG 
 //! sliders without compiling anything.
 export const PARAM_TAG_BASE = 10, PARAM_TAG_LIMIT = 50, SPECS_TAG = 51;
 
+//! How a feature should look, as opposed to what shape it is. Kept on the
+//! feature so it saves with the model and survives regeneration, but outside the
+//! arguments, because it drives no geometry - XCAF keeps colour beside a shape
+//! for the same reason.
+export const APPEARANCE_TAG = 52;
+
 const byType = new Map(CATALOGUE.map(t => [t.type, t]));
 const byGuid = new Map(CATALOGUE.map(t => [t.guid, t]));
 export const typeSpec = type => byType.get(type) || null;
@@ -235,6 +241,17 @@ export const F = {
       ? label.attr.TDataStd_AsciiString : fallback;
   },
   setCode(f, key, text) { F.argLabel(f, key, true).attr.TDataStd_AsciiString = text; },
+
+  appearance(f) {
+    const label = f.findChild(APPEARANCE_TAG);
+    if (!label || typeof label.attr.TDataStd_AsciiString !== "string") return null;
+    try { return JSON.parse(label.attr.TDataStd_AsciiString); } catch (e) { return null; }
+  },
+  setAppearance(f, appearance) {
+    const label = f.findChild(APPEARANCE_TAG, true);
+    if (!appearance) label.attr.TDataStd_AsciiString = "";
+    else label.attr.TDataStd_AsciiString = JSON.stringify(appearance);
+  },
 
   //! What the script last declared, so the panel can draw its sliders without
   //! compiling the code again.
@@ -500,6 +517,10 @@ export class Doc {
     this.log.touch(F.argLabel(f, key));
   }
 
+  //! Appearance drives no geometry, so it is set without touching the logbook:
+  //! nothing needs rebuilding, only redrawing.
+  setAppearance(f, appearance) { F.setAppearance(f, appearance); }
+
   setReference(f, key, target) {
     const spec = F.spec(f);
     const arg = spec && spec.args.find(a => a.key === key && a.kind === "ref");
@@ -629,6 +650,8 @@ export class Doc {
           const stored = F.paramValues(f);
           entry.params = F.paramSpecs(f).map(p => ({ ...p, value: stored[p.key] ?? p.def }));
         }
+        const appearance = F.appearance(f);
+        if (appearance) entry.appearance = appearance;
         if (F.error(f)) entry.error = F.error(f);
         if (consumer) entry.consumedBy = F.id(consumer);
         return entry;
@@ -657,7 +680,10 @@ export class Doc {
             if (target) args[arg.key] = { ref: F.id(target) };
           }
         }
-        return { id: F.id(f), type: spec.type, name: F.name(f), args };
+        const entry = { id: F.id(f), type: spec.type, name: F.name(f), args };
+        const appearance = F.appearance(f);
+        if (appearance) entry.appearance = appearance;
+        return entry;
       }),
     };
   }
@@ -665,7 +691,11 @@ export class Doc {
   static fromModel(drivers, model) {
     if (!model || !Array.isArray(model.features)) throw new Error('no "features" array');
     const doc = new Doc(drivers, model.name || "Part1", model.units || "mm");
-    for (const entry of model.features) doc.addFeature(entry.type, entry.id, entry.name);
+    for (const entry of model.features) {
+      const f = doc.addFeature(entry.type, entry.id, entry.name);
+      if (entry.appearance && typeof entry.appearance === "object")
+        F.setAppearance(f, entry.appearance);
+    }
     for (const entry of model.features) {
       const f = doc.find(entry.id);
       const spec = F.spec(f);

@@ -44,6 +44,7 @@ export async function createHttpKernel(base) {
       return this.get("/api/mesh" + (ids && ids.length
         ? "?ids=" + encodeURIComponent(ids.join(",")) : ""));
     },
+    setAppearance(id, appearance) { return this.post("/api/appearance", { id, appearance }); },
     exportStep() { return this.get("/api/step"); },
 
     //! Only the native kernels can do this: write the document to disk beside

@@ -826,6 +826,15 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       return state({ functions: 0, executed: [], skipped: [], failed: [] });
     },
 
+    //! What a feature should look like. No rebuild follows - appearance is not
+    //! geometry - so the tree comes back with no regeneration report.
+    async setAppearance(id, appearance) {
+      const f = doc.find(id);
+      if (!f) throw new Error("no feature '" + id + "'");
+      doc.setAppearance(f, appearance);
+      return { ok: true, tree: doc.treeJson(), report: null };
+    },
+
     //! The scene as STEP, for taking into any other CAD system. Every visible
     //! solid is transferred as its own root, so the parts stay separate rather
     //! than arriving as one lump.

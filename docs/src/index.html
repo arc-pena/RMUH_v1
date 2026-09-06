@@ -348,6 +348,52 @@ select {
 }
 #view-tools button:hover { background: var(--panel-2); color: var(--ink); }
 
+/* ------------------------------------------------------------- showroom */
+#showroom { position: fixed; inset: 0; z-index: 6; opacity: 0; pointer-events: none; }
+#showroom.on { opacity: 1; pointer-events: auto; }
+#showroom canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+/* The move between the two views is a dissolve, not a cut. */
+#showroom, .fades { transition: opacity .5s cubic-bezier(.4,0,.2,1); }
+body.staging .fades { opacity: 0; pointer-events: none; }
+
+#stage-ui {
+  position: fixed; left: 50%; bottom: 18px; transform: translate(-50%, 0);
+  z-index: 7; display: flex; flex-direction: column; gap: 10px; align-items: center;
+  opacity: 0; pointer-events: none;
+  transition: opacity .45s .18s cubic-bezier(.4,0,.2,1), transform .45s .18s cubic-bezier(.4,0,.2,1);
+}
+body.staging #stage-ui { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+#stage-ui:not(.shown) { transform: translate(-50%, 22px); }
+
+.tray {
+  display: flex; align-items: center; gap: 3px; padding: 5px;
+  border-radius: 12px; background: rgba(16, 20, 26, .68); border: 1px solid rgba(255,255,255,.12);
+  backdrop-filter: blur(20px) saturate(150%); -webkit-backdrop-filter: blur(20px) saturate(150%);
+  box-shadow: 0 8px 30px rgba(0,0,0,.35); color: #eef3f7;
+}
+.tray .divider { width: 1px; align-self: stretch; margin: 3px 5px; background: rgba(255,255,255,.14); }
+.tray .caption {
+  font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: rgba(238,243,247,.5); padding: 0 8px 0 4px;
+}
+.tray button {
+  border: 0; background: none; color: inherit; cursor: pointer;
+  padding: 6px 11px; border-radius: 8px; font-size: 12px;
+}
+.tray button:hover { background: rgba(255,255,255,.1); }
+.tray button[aria-pressed="true"] { background: rgba(255,255,255,.92); color: #10151b; font-weight: 500; }
+.tray .part { font-family: var(--mono); font-size: 11px; padding: 0 10px; color: rgba(238,243,247,.85); }
+.swatch {
+  width: 26px; height: 26px; border-radius: 50%; padding: 0;
+  border: 1px solid rgba(255,255,255,.28); cursor: pointer;
+}
+.swatch[aria-pressed="true"] { outline: 2px solid #fff; outline-offset: 2px; }
+.tray input[type="range"] { width: 96px; accent-color: #fff; margin: 0 8px; }
+#stage-hint {
+  font-family: var(--mono); font-size: 10px; color: rgba(238,243,247,.55);
+  text-shadow: 0 1px 6px rgba(0,0,0,.6);
+}
+
 /* ------------------------------------------------------------ boot state */
 #boot {
   position: fixed; inset: 0; z-index: 10;
@@ -416,7 +462,7 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
      kernel; after that it is instant.</p>
 </div>
 
-<div class="float" id="chip">
+<div class="float fades" id="chip">
   <button id="btn-tree" title="Specification tree (T)">
     <span class="name" id="doc-title">Part1</span>
     <span class="count" id="doc-count"></span>
@@ -427,9 +473,11 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
   <button id="btn-model" title="The parametric model file">Model</button>
   <div class="sep"></div>
   <button id="btn-step" title="Export every visible solid as STEP">STEP</button>
+  <div class="sep"></div>
+  <button id="btn-stage" title="See it as a product">Showroom</button>
 </div>
 
-<aside class="float" id="tree-panel">
+<aside class="float fades" id="tree-panel">
   <div class="panel-head">
     <h2>Specification tree</h2>
     <span class="count" id="tree-entry" style="font-family:var(--mono);font-size:9.5px;color:var(--ink-3)">0:1:1</span>
@@ -437,7 +485,7 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
   <ul id="tree"></ul>
 </aside>
 
-<nav class="float" id="rail">
+<nav class="float fades" id="rail">
   <div id="tools-datum"></div>
   <hr>
   <div id="tools-body"></div>
@@ -445,7 +493,7 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
   <div id="tools-op"></div>
 </nav>
 
-<aside class="float" id="def-panel" hidden>
+<aside class="float fades" id="def-panel" hidden>
   <div class="panel-head">
     <h2>Definition</h2>
     <button class="icon-btn" id="btn-def-close" title="Close (Esc)" aria-label="Close"></button>
@@ -453,7 +501,7 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
   <div id="def"></div>
 </aside>
 
-<div class="float" id="status">
+<div class="float fades" id="status">
   <span id="status-sel">nothing selected</span>
   <div class="sep"></div>
   <button id="btn-log" title="What the last regeneration did"><span id="status-regen">ready</span></button>
@@ -462,12 +510,37 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
 </div>
 <div class="float" id="log-pop" hidden></div>
 
-<div class="float" id="view-tools">
+<div class="float fades" id="view-tools">
   <button data-view="iso">ISO</button>
   <button data-view="top">TOP</button>
   <button data-view="front">FRONT</button>
   <button data-view="right">RIGHT</button>
   <button data-view="fit">FIT</button>
+</div>
+
+<div id="showroom"><canvas id="stage-canvas"></canvas></div>
+
+<div id="stage-ui">
+  <div id="stage-hint">drag to orbit · shift-drag to pan · wheel to zoom · click a part to re-finish it</div>
+  <div class="tray" id="tray-finish">
+    <span class="part" id="stage-part">nothing selected</span>
+    <div class="divider"></div>
+    <span class="caption">Finish</span>
+    <span id="stage-finishes" style="display:flex;gap:4px"></span>
+  </div>
+  <div class="tray">
+    <button id="btn-stage-exit">← Modelling</button>
+    <div class="divider"></div>
+    <span class="caption">Scene</span>
+    <span id="stage-envs" style="display:flex;gap:2px"></span>
+    <div class="divider"></div>
+    <span class="caption">Light</span>
+    <input type="range" id="stage-exposure" min="0.4" max="2" step="0.05" value="1">
+    <div class="divider"></div>
+    <button id="btn-stage-ground" aria-pressed="false">Floor</button>
+    <button id="btn-stage-reflect" aria-pressed="true">Reflection</button>
+    <button id="btn-stage-spin" aria-pressed="false">Turntable</button>
+  </div>
 </div>
 
 <dialog id="modal-step">
