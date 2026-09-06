@@ -76,14 +76,26 @@ can reach for either without one replacing the other:
 | **Script** | a spiral stair — centre pole, treads, risers, stringer and handrail |
 | **Ribbon** | a lofted shell taken in bands, after Heydar Aliyev |
 
+A declared parameter that names its alternatives becomes a switch rather than a
+slider, and the panel draws it as a segmented control:
+
+```js
+{ key: "direction", label: "Ribbon direction", options: ["U", "V"], def: 0 }
+```
+
+The value stored is still a number — the index — so storage, regeneration, the
+model file and undo are untouched; only the panel knows the difference.
+
 `Ribbon` is the more instructive of the two. The driver surface is never built:
 it is defined as a loft through CV curves — a section control polygon carried
 along the length by Catmull-Rom through height, width and drift — and because a
 band is only a strip of that definition, the strips are read straight off it
 rather than slicing a surface that would be thrown away. Each band is a run of
 closed sections, the strip's width across the surface given thickness along the
-surface normal, lofted down the length: every band a solid, and the whole thing
-exportable as STEP.
+surface normal, lofted along the run: every band a solid, and the whole thing
+exportable as STEP. A ribbon is constant in one surface parameter and runs the
+length of the other, so which is which is the only thing the **U / V** switch
+changes — along the building, or wrapped over it.
 
 A new Script feature starts as a **spiral stair** — centre pole, treads,
 risers, stringer and handrail as separate solids, thirteen parameters on
