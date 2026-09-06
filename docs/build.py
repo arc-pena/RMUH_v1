@@ -33,7 +33,9 @@ STAGE_FILE = "build/playcanvas.min.js"
 MODULES = ["ocaf.js", "wasm-kernel.js", "http-kernel.js", "mdl.js", "graph.js",
            "showroom.js", "app.js"]
 
-IMPORT = re.compile(r"^\s*import\s.*?;\s*$", re.M)
+# An import may wrap across lines; nothing but the statement itself may
+# contain a semicolon before its end.
+IMPORT = re.compile(r"^\s*import\s[^;]*;\s*$", re.M)
 EXPORT = re.compile(r"^export\s+(?=(?:const|let|var|class|function|async)\b)", re.M)
 DECLARE = re.compile(r"^(?:export\s+)?(?:async\s+)?(?:const|let|var|class|function)\s+([A-Za-z_$][\w$]*)", re.M)
 

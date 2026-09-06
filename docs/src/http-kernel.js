@@ -35,7 +35,9 @@ export async function createHttpKernel(base) {
       return this.post("/api/model", typeof model === "string" ? model : JSON.stringify(model));
     },
     setParameter(id, key, value) { return this.post("/api/param", { id, key, value }); },
-    setReference(id, key, target) { return this.post("/api/reference", { id, key, target }); },
+    setReference(id, key, target, remove = false) {
+      return this.post("/api/reference", { id, key, target, remove });
+    },
     setCode(id, key, text) { return this.post("/api/code", { id, key, text }); },
     addFeature(type, refs) { return this.post("/api/feature", { type, refs }); },
     deleteFeature(id) { return this.post("/api/delete", { id }); },

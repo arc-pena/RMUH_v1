@@ -411,10 +411,26 @@ export const SPIRAL_STAIR = `({
   }
 })`;
 
+//! A number. Every one of these can also be driven by a wire from a feature
+//! that produces numbers, in which case the slider shows what is arriving and
+//! the stored literal is kept but not read. That is the whole of the
+//! difference between a parameter and a computed value here.
 const real = (key, label, def, min, max, step, unit = "mm") =>
   ({ key, label, kind: "real", def, min, max, step, unit });
+//! One wire. \p accepts lists what a source may *produce*, not what type it is,
+//! so a new feature that produces curves is accepted by every curve input
+//! without any of them being told about it.
 const ref = (key, label, accepts, consumes = false) =>
   ({ key, label, kind: "ref", accepts, consumes });
+//! Many wires into one input, in order: the sections of a loft, the bodies of
+//! a union. Held as child labels of the argument, each with its own
+//! TDF_Reference.
+const refs = (key, label, accepts, consumes = false) =>
+  ({ key, label, kind: "refs", accepts, consumes });
+
+//! What a feature hands downstream. An input accepts a set of these.
+export const KINDS = ["number", "point", "vector", "curve", "plane", "solid", "text"];
+const ANY = KINDS.slice();
 //! Source the user edits, held as a TDataStd_AsciiString.
 const code = (key, label, def) => ({ key, label, kind: "code", def });
 //! A fixed set of alternatives, held as a TDataStd_Integer index.
@@ -428,67 +444,220 @@ const when = (arg, key, equals) => ({ ...arg, showWhen: { key, equals } });
 //! its OCAF child tag), the sliders and the neutral file format. It mirrors
 //! ocaf/src/Schema.cxx entry for entry, GUIDs included.
 export const CATALOGUE = [
+  /* ------------------------------------------------------------- datums */
   { type: "Point", guid: "9a1b2c30-0001-4c00-9e00-caf000000001", category: "datum",
-    summary: "A location in space. Drives origins and centres.",
-    args: [real("x", "X", 0, -500, 500, 0.5), real("y", "Y", 0, -500, 500, 0.5),
-           real("z", "Z", 0, -500, 500, 0.5)] },
+    produces: "point",
+    summary: "A location in space. Drives origins and centres. Wire a list of numbers "
+           + "into a coordinate and it becomes a row of points.",
+    args: [real("x", "X", 0, -2000, 2000, 0.5), real("y", "Y", 0, -2000, 2000, 0.5),
+           real("z", "Z", 0, -2000, 2000, 0.5)] },
   { type: "Vector", guid: "9a1b2c30-0002-4c00-9e00-caf000000002", category: "datum",
+    produces: "vector",
     summary: "A direction. Orients lines, planes and the solids placed on them.",
     args: [real("dx", "dX", 0, -100, 100, 0.1, ""), real("dy", "dY", 0, -100, 100, 0.1, ""),
            real("dz", "dZ", 1, -100, 100, 0.1, "")] },
   { type: "Line", guid: "9a1b2c30-0003-4c00-9e00-caf000000003", category: "datum",
+    produces: "curve",
     summary: "A bounded line: a start point, a direction, a length.",
-    args: [ref("origin", "Start point", ["Point"]), ref("direction", "Direction", ["Vector"]),
-           real("length", "Length", 100, 1, 1000, 1)] },
+    args: [ref("origin", "Start point", ["point"]), ref("direction", "Direction", ["vector"]),
+           real("length", "Length", 100, 1, 4000, 1)] },
   { type: "Plane", guid: "9a1b2c30-0004-4c00-9e00-caf000000004", category: "datum",
+    produces: "plane",
     summary: "A planar datum: an origin point and a normal vector.",
-    args: [ref("origin", "Origin", ["Point"]), ref("normal", "Normal", ["Vector"]),
-           real("size", "Display size", 160, 10, 1000, 5)] },
+    args: [ref("origin", "Origin", ["point"]), ref("normal", "Normal", ["vector"]),
+           real("size", "Display size", 160, 10, 2000, 5)] },
+
+  /* --------------------------------------------------------------- data
+     Nothing here makes geometry. They make the numbers geometry is made of,
+     and they are wired into any slider in the document. */
+  { type: "Number", guid: "9a1b2c30-0040-4c00-9e00-caf000000040", category: "data",
+    produces: "number",
+    summary: "One number, on a slider of its own, to be wired into as many inputs "
+           + "as you like. Change it once and everything reading it rebuilds.",
+    args: [real("value", "Value", 100, -10000, 10000, 0.1, "")] },
+  { type: "Series", guid: "9a1b2c30-0041-4c00-9e00-caf000000041", category: "data",
+    produces: "number",
+    summary: "A list of numbers: a start, a step, and how many. Wire it into a "
+           + "coordinate of a Point and you have a row of points.",
+    args: [real("start", "Start", 0, -10000, 10000, 1, ""),
+           real("step", "Step", 10, -1000, 1000, 0.5, ""),
+           real("count", "Count", 10, 1, 400, 1, "")] },
+  { type: "Range", guid: "9a1b2c30-0042-4c00-9e00-caf000000042", category: "data",
+    produces: "number",
+    summary: "A list of numbers spread evenly between two bounds - the parameters "
+           + "along a curve, the stations across a surface.",
+    args: [real("from", "From", 0, -10000, 10000, 0.01, ""),
+           real("to", "To", 1, -10000, 10000, 0.01, ""),
+           real("steps", "Steps", 10, 1, 400, 1, "")] },
+  { type: "Math", guid: "9a1b2c30-0043-4c00-9e00-caf000000043", category: "data",
+    produces: "number",
+    summary: "Two numbers and an operation. Both inputs take wires, and if either "
+           + "carries a list the answer is a list of the same length.",
+    args: [real("a", "A", 1, -10000, 10000, 0.1, ""),
+           real("b", "B", 1, -10000, 10000, 0.1, ""),
+           choice("op", "Operation",
+                  ["A + B", "A − B", "A × B", "A ÷ B", "A ^ B", "min", "max", "A mod B"], 0)] },
+  { type: "Expression", guid: "9a1b2c30-0044-4c00-9e00-caf000000044", category: "data",
+    produces: "number",
+    summary: "A formula over three wired numbers. Written as JavaScript over a, b and "
+           + "c, with i and n bound to the position and length when a list arrives.",
+    args: [real("a", "A", 1, -10000, 10000, 0.1, ""),
+           real("b", "B", 1, -10000, 10000, 0.1, ""),
+           real("c", "C", 0, -10000, 10000, 0.1, ""),
+           code("formula", "Formula", "a * Math.sin(b * i / n) + c")] },
+  { type: "Panel", guid: "9a1b2c30-0045-4c00-9e00-caf000000045", category: "data",
+    produces: "text",
+    summary: "Shows what is wired into it, as text, in the node and in the definition "
+           + "panel. It builds nothing; it is how you see what is flowing.",
+    args: [ref("input", "Input", ANY)] },
+
+  /* ------------------------------------------------------------- curves */
+  { type: "Circle", guid: "9a1b2c30-0050-4c00-9e00-caf000000050", category: "curve",
+    produces: "curve",
+    summary: "A circle on a plane. A profile to extrude, a section to loft, a rail "
+           + "to sweep along.",
+    args: [ref("plane", "Plane", ["plane"]), real("radius", "Radius", 60, 0.5, 4000, 0.5)] },
+  { type: "Polyline", guid: "9a1b2c30-0051-4c00-9e00-caf000000051", category: "curve",
+    produces: "curve",
+    summary: "Straight segments through a list of points.",
+    args: [ref("points", "Points", ["point"]),
+           choice("closed", "Ends", ["Open", "Closed"], 0)] },
+  { type: "Interpolate", guid: "9a1b2c30-0052-4c00-9e00-caf000000052", category: "curve",
+    produces: "curve",
+    summary: "One smooth B-spline through a list of points - the control curve a "
+           + "lofted surface is laid on.",
+    args: [ref("points", "Points", ["point"]),
+           choice("closed", "Ends", ["Open", "Closed"], 0),
+           real("degree", "Degree", 3, 1, 8, 1, "")] },
+
+  /* ----------------------------------------------------------- analysis
+     The other direction: geometry back into numbers and points. */
+  { type: "EvaluateCurve", guid: "9a1b2c30-0060-4c00-9e00-caf000000060", category: "analysis",
+    produces: "point",
+    summary: "The point at a parameter along a curve, with its tangent drawn. Wire a "
+           + "list of parameters in and a list of points comes out.",
+    args: [ref("curve", "Curve", ["curve"]),
+           real("t", "Parameter", 0.5, 0, 1, 0.001, ""),
+           real("tangent", "Tangent length", 40, 0, 1000, 1)] },
+  { type: "DivideCurve", guid: "9a1b2c30-0061-4c00-9e00-caf000000061", category: "analysis",
+    produces: "point",
+    summary: "A curve split into equal lengths, as a list of points.",
+    args: [ref("curve", "Curve", ["curve"]),
+           real("count", "Divisions", 10, 1, 400, 1, ""),
+           choice("ends", "Ends", ["Include", "Exclude"], 0)] },
+  { type: "EvaluateSurface", guid: "9a1b2c30-0062-4c00-9e00-caf000000062", category: "analysis",
+    produces: "point",
+    summary: "The point at (u, v) on the first face of a shape, with its normal drawn.",
+    args: [ref("surface", "Surface", ["plane", "solid"]),
+           real("u", "U", 0.5, 0, 1, 0.001, ""), real("v", "V", 0.5, 0, 1, 0.001, ""),
+           real("normal", "Normal length", 40, 0, 1000, 1)] },
+  { type: "Measure", guid: "9a1b2c30-0063-4c00-9e00-caf000000063", category: "analysis",
+    produces: "number",
+    summary: "A number taken off a shape - its length, its area, its volume, or the "
+           + "size of its bounding box - to be wired back into the model.",
+    args: [ref("shape", "Shape", ["curve", "plane", "solid", "point"]),
+           choice("quantity", "Quantity",
+                  ["Length", "Area", "Volume", "Size X", "Size Y", "Size Z", "Diagonal"], 0)] },
+
+  /* ------------------------------------------------------------- solids */
   { type: "Cube", guid: "9a1b2c30-0010-4c00-9e00-caf000000010", category: "body",
+    produces: "solid",
     summary: "A box placed at a point, oriented by a plane, sized in three axes.",
-    args: [ref("origin", "Corner point", ["Point"]), ref("plane", "Placement plane", ["Plane"]),
-           real("dx", "Length X", 80, 1, 500, 1), real("dy", "Length Y", 80, 1, 500, 1),
-           real("dz", "Length Z", 80, 1, 500, 1)] },
+    args: [ref("origin", "Corner point", ["point"]), ref("plane", "Placement plane", ["plane"]),
+           real("dx", "Length X", 80, 1, 4000, 1), real("dy", "Length Y", 80, 1, 4000, 1),
+           real("dz", "Length Z", 80, 1, 4000, 1)] },
   { type: "Sphere", guid: "9a1b2c30-0011-4c00-9e00-caf000000011", category: "body",
+    produces: "solid",
     summary: "A sphere centred on a point.",
-    args: [ref("center", "Centre point", ["Point"]), real("radius", "Radius", 50, 1, 400, 1)] },
-  { type: "Array", guid: "9a1b2c30-0021-4c00-9e00-caf000000021", category: "operation",
-    summary: "Repeats a body in a grid or around an axis. One feature in the tree, "
-           + "however many copies it makes.",
-    args: [ref("source", "Feature", ["Cube", "Sphere", "Fillet", "Array", "Script", "Ribbon", "Center"], true),
-           choice("mode", "Pattern", ["Rectangular", "Polar"], 0),
-           when(real("countX", "Count X", 3, 1, 40, 1, ""), "mode", 0),
-           when(real("spacingX", "Spacing X", 120, -600, 600, 1), "mode", 0),
-           when(real("countY", "Count Y", 1, 1, 40, 1, ""), "mode", 0),
-           when(real("spacingY", "Spacing Y", 120, -600, 600, 1), "mode", 0),
-           when(real("countZ", "Count Z", 1, 1, 20, 1, ""), "mode", 0),
-           when(real("spacingZ", "Spacing Z", 120, -600, 600, 1), "mode", 0),
-           when(ref("center", "Centre", ["Point"]), "mode", 1),
-           when(ref("axis", "Axis", ["Vector"]), "mode", 1),
-           when(real("count", "Count", 6, 1, 120, 1, ""), "mode", 1),
-           when(real("angle", "Sweep", 360, -360, 360, 5, "°"), "mode", 1)] },
+    args: [ref("center", "Centre point", ["point"]), real("radius", "Radius", 50, 1, 2000, 1)] },
   { type: "Script", guid: "9a1b2c30-0030-4c00-9e00-caf000000030", category: "body",
+    produces: "solid",
     summary: "A feature you write. The code declares its own parameters and returns "
            + "a shape, so anything the kernel can build can become a feature. "
            + "This one starts as a spiral stair.",
     args: [code("code", "Code", SPIRAL_STAIR)] },
   { type: "Center", guid: "9a1b2c30-0032-4c00-9e00-caf000000032", category: "body",
+    produces: "solid",
     summary: "A written feature starting from the Heydar Aliyev Center: a roof lofted "
            + "through section curves, and a soft grid of mullions on the glazed face "
            + "behind the peak.",
     args: [code("code", "Code", HEYDAR_CENTER)] },
   { type: "Ribbon", guid: "9a1b2c30-0031-4c00-9e00-caf000000031", category: "body",
+    produces: "solid",
     summary: "The same written feature, starting from a different sample: a lofted "
            + "shell taken in bands with a gap between each, after Heydar Aliyev. The "
            + "driver surface is never built - only the bands cut from it.",
     args: [code("code", "Code", HEYDAR)] },
+
+  /* --------------------------------------------------------- operations */
+  { type: "Extrude", guid: "9a1b2c30-0070-4c00-9e00-caf000000070", category: "operation",
+    produces: "solid",
+    summary: "Drags a profile along a direction. A closed profile can be capped into a "
+           + "solid; an open one comes out as a surface.",
+    args: [ref("profile", "Profile", ["curve", "plane"], true),
+           ref("direction", "Direction", ["vector"]),
+           real("distance", "Distance", 120, -4000, 4000, 1),
+           choice("cap", "Result", ["Solid", "Surface"], 0)] },
+  { type: "Loft", guid: "9a1b2c30-0071-4c00-9e00-caf000000071", category: "operation",
+    produces: "solid",
+    summary: "A skin through section curves, in the order they are wired. Two or more "
+           + "sections; add another port by dragging into the empty one.",
+    args: [refs("sections", "Sections", ["curve"], true),
+           choice("cap", "Result", ["Solid", "Surface"], 0),
+           choice("ruled", "Between sections", ["Smooth", "Ruled"], 0)] },
+  { type: "Boolean", guid: "9a1b2c30-0072-4c00-9e00-caf000000072", category: "operation",
+    produces: "solid",
+    summary: "Union, difference or intersection of two solids. Both stay in the tree "
+           + "and leave the 3D view.",
+    args: [ref("a", "A", ["solid"], true), ref("b", "B", ["solid"], true),
+           choice("op", "Operation", ["Union", "Difference", "Intersection"], 0)] },
+  { type: "Project", guid: "9a1b2c30-0073-4c00-9e00-caf000000073", category: "operation",
+    produces: "curve",
+    summary: "Drops a curve onto a surface: sampled along its length, each sample "
+           + "pulled to the nearest point on the target, and re-fitted.",
+    args: [ref("curve", "Curve", ["curve"]), ref("onto", "Onto", ["plane", "solid"]),
+           real("samples", "Samples", 40, 4, 400, 1, ""),
+           choice("fit", "Result", ["Smooth", "Segments"], 0)] },
+  { type: "Array", guid: "9a1b2c30-0021-4c00-9e00-caf000000021", category: "operation",
+    produces: "solid",
+    summary: "Repeats a body in a grid or around an axis. One feature in the tree, "
+           + "however many copies it makes.",
+    args: [ref("source", "Feature", ["solid"], true),
+           choice("mode", "Pattern", ["Rectangular", "Polar"], 0),
+           when(real("countX", "Count X", 3, 1, 40, 1, ""), "mode", 0),
+           when(real("spacingX", "Spacing X", 120, -4000, 4000, 1), "mode", 0),
+           when(real("countY", "Count Y", 1, 1, 40, 1, ""), "mode", 0),
+           when(real("spacingY", "Spacing Y", 120, -4000, 4000, 1), "mode", 0),
+           when(real("countZ", "Count Z", 1, 1, 20, 1, ""), "mode", 0),
+           when(real("spacingZ", "Spacing Z", 120, -4000, 4000, 1), "mode", 0),
+           when(ref("center", "Centre", ["point"]), "mode", 1),
+           when(ref("axis", "Axis", ["vector"]), "mode", 1),
+           when(real("count", "Count", 6, 1, 120, 1, ""), "mode", 1),
+           when(real("angle", "Sweep", 360, -360, 360, 5, "°"), "mode", 1)] },
   { type: "Fillet", guid: "9a1b2c30-0020-4c00-9e00-caf000000020", category: "operation",
+    produces: "solid",
     summary: "Rounds every edge of a body. The body stays in the tree but leaves the 3D view.",
-    args: [ref("body", "Body", ["Cube", "Sphere", "Fillet", "Array", "Script", "Ribbon", "Center"], true),
-           real("radius", "Radius", 10, 0.1, 200, 0.5)] },
+    args: [ref("body", "Body", ["solid"], true),
+           real("radius", "Radius", 10, 0.1, 2000, 0.5)] },
+];
+
+//! The order the toolbar and the graph's Add menu group them in.
+export const CATEGORIES = [
+  { key: "datum",     label: "datums" },
+  { key: "data",      label: "numbers" },
+  { key: "curve",     label: "curves" },
+  { key: "body",      label: "solids" },
+  { key: "analysis",  label: "analysis" },
+  { key: "operation", label: "operations" },
 ];
 
 export const FIRST_ARG_TAG = 1, RESULT_TAG = 100, ERROR_TAG = 101, REVISION_TAG = 102;
+
+//! Beside the B-Rep result, what the feature computed: numbers, points,
+//! vectors or lines of text. A Number has only this and no shape; an
+//! EvaluateCurve has both. Held the way OCAF holds such things - the kind as a
+//! TDataStd_AsciiString and the values as a TDataStd_RealArray.
+export const DATA_TAG = 103;
 
 //! A Script feature declares its own parameters, so they cannot live in the
 //! catalogue. Each gets a label of its own under the feature, carrying the
@@ -558,9 +727,36 @@ export const F = {
     if (label && create) label.attr.TDataStd_Name = key;
     return label;
   },
+  //! The number an argument is worth right now. A slider with a wire on it
+  //! reports what is arriving down the wire; the literal underneath is kept but
+  //! not read, so pulling the wire off puts the old value back. Every driver in
+  //! the kernel calls this, so every slider in the document is wireable without
+  //! a single driver knowing about it.
   real(f, key, fallback = 0) {
     const label = F.argLabel(f, key);
-    return label && typeof label.attr.TDataStd_Real === "number" ? label.attr.TDataStd_Real : fallback;
+    if (!label) return fallback;
+    const wired = F.wiredNumbers(label);
+    if (wired && wired.length) return wired[0];
+    return typeof label.attr.TDataStd_Real === "number" ? label.attr.TDataStd_Real : fallback;
+  },
+  //! The whole list arriving on an argument's wire, or null when it has none.
+  //! Only the components that mean something for a list read this.
+  reals(f, key, fallback = 0) {
+    const label = F.argLabel(f, key);
+    const wired = label && F.wiredNumbers(label);
+    if (wired && wired.length) return wired;
+    return [F.real(f, key, fallback)];
+  },
+  wiredNumbers(label) {
+    const source = label && label.attr.TDF_Reference;
+    if (!source) return null;
+    const data = F.data(source);
+    return data && data.kind === "number" ? data.values : null;
+  },
+  //! True when a slider is being driven from somewhere else.
+  driven(f, key) {
+    const label = F.argLabel(f, key);
+    return !!(label && label.attr.TDF_Reference);
   },
   setReal(f, key, value) { F.argLabel(f, key, true).attr.TDataStd_Real = value; },
   choice(f, key, fallback = 0) {
@@ -656,10 +852,64 @@ export const F = {
   },
   setReference(f, key, target) { F.argLabel(f, key, true).attr.TDF_Reference = target; },
 
+  //! An input that takes several wires in order. Each one lives on a child of
+  //! the argument's own label, so the order is the tag order and a gap left by
+  //! a removed wire closes itself.
+  references(f, key) {
+    const label = F.argLabel(f, key);
+    if (!label) return [];
+    return label.childList().map(child => child.attr.TDF_Reference).filter(Boolean);
+  },
+  setReferences(f, key, targets) {
+    const label = F.argLabel(f, key, true);
+    label.children.clear();
+    label.nextTag = 0;
+    for (const target of targets) if (target) label.newChild().attr.TDF_Reference = target;
+    return label;
+  },
+
   resultLabel: (f, create = false) => f.findChild(RESULT_TAG, create),
   shape(f) {
     const result = F.resultLabel(f);
     return result ? result.attr.TNaming_NamedShape || null : null;
+  },
+
+  //! What the feature computed, beside whatever it built. Numbers, points and
+  //! vectors are held as a flat TDataStd_RealArray with a stride; text is held
+  //! as a TDataStd_ExtStringArray, which is what a Panel shows.
+  dataLabel: (f, create = false) => f.findChild(DATA_TAG, create),
+  data(f) {
+    const label = F.dataLabel(f);
+    if (!label || !label.attr.TDataStd_AsciiString) return null;
+    const kind = label.attr.TDataStd_AsciiString;
+    return {
+      kind,
+      stride: kind === "point" || kind === "vector" ? 3 : 1,
+      values: label.attr.TDataStd_RealArray || [],
+      lines: label.attr.TDataStd_ExtStringArray || [],
+    };
+  },
+  setData(f, data) {
+    const label = F.dataLabel(f, true);
+    if (!data) {
+      label.attr.TDataStd_AsciiString = "";
+      label.attr.TDataStd_RealArray = [];
+      label.attr.TDataStd_ExtStringArray = [];
+      return label;
+    }
+    label.attr.TDataStd_AsciiString = data.kind;
+    label.attr.TDataStd_RealArray = (data.values || []).map(round);
+    label.attr.TDataStd_ExtStringArray = data.lines || [];
+    return label;
+  },
+  //! Points and vectors read back as triples, which is how every driver wants
+  //! them and how the interface previews them.
+  triples(data) {
+    if (!data || data.stride !== 3) return [];
+    const out = [];
+    for (let i = 0; i + 2 < data.values.length; i += 3)
+      out.push([data.values[i], data.values[i + 1], data.values[i + 2]]);
+    return out;
   },
   error(f) {
     const label = f.findChild(ERROR_TAG);
@@ -696,14 +946,26 @@ export class Driver {
   //! That is what orders the graph: edit a cube and its fillet must follow.
   arguments(f) {
     const args = [];
-    for (const child of f.childList()) {
-      if (child.tag === RESULT_TAG || child.tag === ERROR_TAG || child.tag === REVISION_TAG) continue;
-      if (child.attr.TDF_Reference) args.push(F.resultLabel(child.attr.TDF_Reference, true));
-      args.push(child);
-    }
+    const skip = new Set([RESULT_TAG, ERROR_TAG, REVISION_TAG, DATA_TAG]);
+    const walk = label => {
+      for (const child of label.childList()) {
+        if (label === f && skip.has(child.tag)) continue;
+        const target = child.attr.TDF_Reference;
+        if (target) {
+          // A wire carries both what was built and what was computed, and a
+          // reader may be waiting on either.
+          args.push(F.resultLabel(target, true));
+          args.push(F.dataLabel(target, true));
+        }
+        args.push(child);
+        // An input taking several wires keeps them on children of its own.
+        if (child.children.size) walk(child);
+      }
+    };
+    walk(f);
     return args;
   }
-  results(f) { return [F.resultLabel(f, true)]; }
+  results(f) { return [F.resultLabel(f, true), F.dataLabel(f, true)]; }
   mustExecute(f, log) {
     return log.isModified(f) || this.arguments(f).some(a => log.isModified(a));
   }
@@ -715,22 +977,29 @@ export class Driver {
     const objection = this.precondition(f);
     if (objection) { F.setError(f, objection); return 1; }
 
-    let shape = null;
+    let built = null;
     try {
-      shape = this.build(f);
+      built = this.build(f);
     } catch (err) {
       F.setError(f, this.describeError(err));
       return 1;
     }
-    if (!shape) { F.setError(f, "the driver produced no shape"); return 1; }
+    // A driver hands back a shape, or { shape, data }, or data alone - a Number
+    // and a Series compute something and build nothing.
+    const bare = built && typeof built.ShapeType === "function";
+    const shape = bare ? built : (built && built.shape) || null;
+    const data = bare ? null : (built && built.data) || null;
+    if (!shape && !data) { F.setError(f, "the driver produced nothing"); return 1; }
 
     const result = F.resultLabel(f, true);
     if (result.attr.TNaming_NamedShape) this.release(result.attr.TNaming_NamedShape);
     result.attr.TNaming_NamedShape = shape;
+    const dataLabel = F.setData(f, data);
 
     F.setError(f, "");
     F.bumpRevision(f);
     log.impact(result);
+    log.impact(dataLabel);
     log.impact(f);
     return 0;
   }
@@ -799,9 +1068,22 @@ export class Doc {
     return f;
   }
 
+  //! Every wire out of \p f, whichever kind of input it lands on - a reference
+  //! argument, a slider being driven, or one of several sections into a loft.
   dependents(f) {
-    return this.features().filter(other =>
-      F.spec(other).args.some(a => a.kind === "ref" && F.reference(other, a.key) === f));
+    return this.features().filter(other => this.wiresOf(other).includes(f));
+  }
+
+  wiresOf(f) {
+    const out = [];
+    for (const arg of F.spec(f).args) {
+      if (arg.kind === "refs") out.push(...F.references(f, arg.key));
+      else {
+        const target = F.reference(f, arg.key);
+        if (target) out.push(target);
+      }
+    }
+    return out;
   }
 
   deleteFeature(f) {
@@ -856,16 +1138,45 @@ export class Doc {
   //! nothing needs rebuilding, only redrawing.
   setAppearance(f, appearance) { F.setAppearance(f, appearance); }
 
+  //! Wiring. An input says what a source may *produce*, not which feature types
+  //! it will take, so a component added later is accepted everywhere its output
+  //! makes sense. A slider takes a wire too: any input at all accepts numbers.
   setReference(f, key, target) {
     const spec = F.spec(f);
-    const arg = spec && spec.args.find(a => a.key === key && a.kind === "ref");
-    if (!arg) throw new Error(F.name(f) + " has no reference argument '" + key + "'");
-    if (target && !arg.accepts.includes(F.spec(target).type))
-      throw new Error(arg.label + " takes " + arg.accepts.join(" or ") + ", not " + F.spec(target).type);
-    if (target && this.dependsOn(target, f))
-      throw new Error(F.name(target) + " already depends on " + F.name(f));
-    F.setReference(f, key, target);
-    this.log.touch(F.argLabel(f, key));
+    const arg = spec && spec.args.find(a => a.key === key);
+    if (!arg || arg.kind === "code")
+      throw new Error(F.name(f) + " has no input '" + key + "'");
+    if (target) {
+      const accepts = arg.kind === "ref" || arg.kind === "refs" ? arg.accepts : ["number"];
+      const gives = F.spec(target).produces;
+      if (!accepts.includes(gives))
+        throw new Error(arg.label + " takes " + accepts.join(" or ") + ", and "
+          + F.name(target) + " gives " + gives);
+      if (this.dependsOn(target, f))
+        throw new Error(F.name(target) + " already depends on " + F.name(f));
+    }
+    if (arg.kind === "refs") {
+      const already = F.references(f, key);
+      F.setReferences(f, key, target ? [...already, target] : already);
+    } else {
+      F.setReference(f, key, target);
+    }
+    this.log.touch(F.argLabel(f, key, true));
+  }
+
+  //! Removes one wire from an input, by the feature it came from. A single-wire
+  //! input clears; a multi-wire input closes the gap.
+  clearReference(f, key, target) {
+    const spec = F.spec(f);
+    const arg = spec && spec.args.find(a => a.key === key);
+    if (!arg) throw new Error(F.name(f) + " has no input '" + key + "'");
+    if (arg.kind === "refs") {
+      const kept = F.references(f, key).filter(t => t !== target);
+      F.setReferences(f, key, target ? kept : []);
+    } else {
+      F.setReference(f, key, null);
+    }
+    this.log.touch(F.argLabel(f, key, true));
   }
 
   //! True when \p f reads, directly or not, from \p other.
@@ -875,8 +1186,7 @@ export class Doc {
       if (current === other) return true;
       if (seen.has(current)) return false;
       seen.add(current);
-      return F.spec(current).args.some(a => {
-        const target = a.kind === "ref" ? F.reference(current, a.key) : null;
+      return this.wiresOf(current).some(target => {
         return target ? walk(target) : false;
       });
     };
@@ -887,7 +1197,11 @@ export class Doc {
   //! TFunction_Iterator derives from the same Arguments()/Results() lists.
   order() {
     const features = this.features();
-    const producer = new Map(features.map(f => [F.resultLabel(f, true), f]));
+    const producer = new Map();
+    for (const f of features) {
+      producer.set(F.resultLabel(f, true), f);
+      producer.set(F.dataLabel(f, true), f);
+    }
     const incoming = new Map(features.map(f => [f, new Set()]));
     const outgoing = new Map(features.map(f => [f, new Set()]));
 
@@ -936,15 +1250,18 @@ export class Doc {
     for (const f of features) F.setVisible(f, true);
     for (const f of features)
       for (const arg of F.spec(f).args) {
-        if (arg.kind !== "ref" || !arg.consumes) continue;
-        const source = F.reference(f, arg.key);
-        if (source) F.setVisible(source, false);
+        if (!arg.consumes) continue;
+        const sources = arg.kind === "refs" ? F.references(f, arg.key) : [F.reference(f, arg.key)];
+        for (const source of sources) if (source) F.setVisible(source, false);
       }
   }
   consumedBy(f) {
     for (const other of this.features())
-      for (const arg of F.spec(other).args)
-        if (arg.kind === "ref" && arg.consumes && F.reference(other, arg.key) === f) return other;
+      for (const arg of F.spec(other).args) {
+        if (!arg.consumes) continue;
+        const sources = arg.kind === "refs" ? F.references(other, arg.key) : [F.reference(other, arg.key)];
+        if (sources.includes(f)) return other;
+      }
     return null;
   }
 
@@ -957,13 +1274,24 @@ export class Doc {
       format: "ocaf-tree", version: 1, name: this.title, units: this.units,
       features: this.features().map(f => {
         const spec = F.spec(f);
-        const values = {}, refs = {}, labels = {};
+        const values = {}, refs = {}, labels = {}, driven = {}, lists = {};
         for (const arg of spec.args) {
           const label = F.argLabel(f, arg.key, true);
           labels[arg.key] = label.entry;
-          if (arg.kind === "real") values[arg.key] = F.real(f, arg.key, arg.def);
+          if (arg.kind === "real") {
+            values[arg.key] = F.real(f, arg.key, arg.def);
+            // A slider with a wire on it shows what is arriving; the literal
+            // underneath is what comes back when the wire is pulled off.
+            if (label.attr.TDF_Reference) {
+              driven[arg.key] = F.id(label.attr.TDF_Reference);
+              refs[arg.key] = driven[arg.key];
+              const wired = F.wiredNumbers(label);
+              if (wired && wired.length > 1) lists[arg.key] = wired.length;
+            }
+          }
           else if (arg.kind === "choice") values[arg.key] = F.choice(f, arg.key, arg.def);
           else if (arg.kind === "code") { /* published separately, below */ }
+          else if (arg.kind === "refs") lists[arg.key] = F.references(f, arg.key).map(F.id);
           else {
             const target = F.reference(f, arg.key);
             refs[arg.key] = target ? F.id(target) : null;
@@ -972,9 +1300,20 @@ export class Doc {
         const consumer = this.consumedBy(f);
         const entry = {
           id: F.id(f), name: F.name(f), type: spec.type, category: spec.category,
-          entry: f.entry, visible: F.visible(f), revision: F.revision(f),
-          built: !!F.shape(f), values, refs, labels,
+          produces: spec.produces, entry: f.entry, visible: F.visible(f),
+          revision: F.revision(f), built: !!F.shape(f), values, refs, labels, driven, lists,
         };
+        // What it computed, summarised: enough for a node to show it and for a
+        // Panel to print it, without moving a thousand numbers per redraw.
+        const data = F.data(f);
+        if (data && (data.values.length || data.lines.length)) {
+          entry.data = {
+            kind: data.kind, stride: data.stride,
+            count: data.lines.length ? data.lines.length
+                 : data.values.length / data.stride,
+            preview: previewData(data),
+          };
+        }
         // A script publishes its source and the parameters it declared, so the
         // panel can draw an editor and a slider per parameter without knowing
         // anything about what the script builds.
@@ -1001,7 +1340,17 @@ export class Doc {
         const spec = F.spec(f);
         const args = {};
         for (const arg of spec.args) {
-          if (arg.kind === "real") args[arg.key] = round(F.real(f, arg.key, arg.def));
+          if (arg.kind === "real") {
+            const label = F.argLabel(f, arg.key, true);
+            const literal = typeof label.attr.TDataStd_Real === "number"
+              ? round(label.attr.TDataStd_Real) : arg.def;
+            // A driven slider writes both: where the number comes from, and the
+            // value to fall back on when the wire is pulled off.
+            args[arg.key] = label.attr.TDF_Reference
+              ? { value: literal, from: F.id(label.attr.TDF_Reference) }
+              : literal;
+          }
+          else if (arg.kind === "refs") args[arg.key] = F.references(f, arg.key).map(t => ({ ref: F.id(t) }));
           else if (arg.kind === "choice") args[arg.key] = arg.options[F.choice(f, arg.key, arg.def)];
           else if (arg.kind === "code") {
             args[arg.key] = F.code(f, arg.key, arg.def);
@@ -1050,8 +1399,22 @@ export class Doc {
           continue;
         }
         if (arg.kind === "real") {
-          if (typeof value !== "number") throw new Error(key + " of " + entry.id + " must be a number");
-          F.setReal(f, key, value);
+          const literal = value && typeof value === "object" ? value.value : value;
+          if (typeof literal !== "number")
+            throw new Error(key + " of " + entry.id + " must be a number");
+          F.setReal(f, key, literal);
+          if (value && typeof value === "object" && value.from) {
+            const source = doc.find(value.from);
+            if (!source) throw new Error(entry.id + "." + key + " is driven by an unknown feature");
+            F.setReference(f, key, source);
+          }
+        } else if (arg.kind === "refs") {
+          const list = Array.isArray(value) ? value : [value];
+          F.setReferences(f, key, list.map(item => {
+            const target = doc.find(typeof item === "string" ? item : item && item.ref);
+            if (!target) throw new Error(entry.id + "." + key + " references an unknown feature");
+            return target;
+          }));
         } else if (arg.kind === "choice") {
           // Written as the option's name, read back as either name or index.
           const index = typeof value === "number" ? value : arg.options.indexOf(value);
@@ -1069,7 +1432,46 @@ export class Doc {
   }
 }
 
+//! Whether a feature may be wired into an input. Inputs name the kinds they
+//! take, not the feature types, so a component added later is accepted
+//! everywhere its output makes sense. Type names are still honoured, because a
+//! native kernel that predates kinds publishes those.
+export function acceptsFrom(accepts, entry) {
+  if (!entry) return false;
+  const list = Array.isArray(accepts) ? accepts : String(accepts || "").split(",");
+  return list.includes(entry.produces) || list.includes(entry.type);
+}
+
 export const round = v => Math.round(v * 1e6) / 1e6;
+
+//! What a Panel prints and a node shows under its header. Long lists are cut
+//! off with a count, because the point is to see the shape of the data.
+export function previewData(data, limit = 6) {
+  if (!data) return "";
+  if (data.lines.length)
+    return data.lines.slice(0, limit).join(" · ")
+         + (data.lines.length > limit ? " … +" + (data.lines.length - limit) : "");
+  if (data.stride === 3) {
+    const points = F.triples(data);
+    return points.slice(0, limit).map(p => "(" + p.map(trimNumber).join(", ") + ")").join(" ")
+         + (points.length > limit ? " … +" + (points.length - limit) : "");
+  }
+  return data.values.slice(0, limit).map(trimNumber).join(", ")
+       + (data.values.length > limit ? " … +" + (data.values.length - limit) : "");
+}
+
+//! Numbers as a person reads them: no trailing zeros, no fifteen decimals.
+export const trimNumber = v =>
+  Number.isFinite(v) ? String(Math.round(v * 1e4) / 1e4) : String(v);
+
+//! Every line of what a feature computed, for the Panel and for the clipboard.
+export function dataLines(data) {
+  if (!data) return [];
+  if (data.lines.length) return data.lines.slice();
+  if (data.stride === 3)
+    return F.triples(data).map(p => "(" + p.map(trimNumber).join(", ") + ")");
+  return data.values.map(trimNumber);
+}
 
 //! Keeps a value inside the range its declaration allows.
 export function clampTo(spec, value) {
@@ -1084,14 +1486,16 @@ export function clampTo(spec, value) {
 export function schemaJson() {
   return {
     format: "ocaf-feature-catalogue", version: 1,
+    kinds: KINDS, categories: CATEGORIES,
     types: CATALOGUE.map(spec => ({
-      type: spec.type, guid: spec.guid, category: spec.category, summary: spec.summary,
+      type: spec.type, guid: spec.guid, category: spec.category,
+      produces: spec.produces, summary: spec.summary,
       args: spec.args.map((arg, index) => {
         const base = { key: arg.key, label: arg.label, tag: FIRST_ARG_TAG + index, kind: arg.kind };
         if (arg.showWhen) base.showWhen = arg.showWhen;
         if (arg.kind === "real")
           return { ...base, default: arg.def, min: arg.min, max: arg.max,
-                   step: arg.step, unit: arg.unit };
+                   step: arg.step, unit: arg.unit, accepts: "number" };
         if (arg.kind === "choice")
           return { ...base, default: arg.def, options: arg.options };
         if (arg.kind === "code")

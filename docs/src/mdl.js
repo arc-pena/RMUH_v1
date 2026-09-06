@@ -1,3 +1,5 @@
+import { acceptsFrom } from "./ocaf.js";
+
 // The model description language.
 //
 // One rule holds this program together: the JSON *is* the model. It is not a
@@ -14,6 +16,7 @@
 // outside are the same program with different pictures on the buttons. Every
 // edit that runs is kept, in order, with its JSON - which is what the console in
 // the node editor shows, and what an external driver would send.
+
 
 //! An edit that changes geometry; the kernel re-executes what it touched.
 const modelOp = (op, fields, summary, example, run) =>
@@ -48,13 +51,15 @@ export async function defaultRefs(ctx, type) {
   const selected = features.find(f => f.id === chosen) || null;
   const refs = {};
   for (const arg of (spec ? spec.args : [])) {
+    // An input that takes several wires is left empty: one section is not a
+    // loft, and guessing the second is worse than guessing nothing.
     if (arg.kind !== "ref") continue;
-    const accepts = arg.accepts.split(",");
-    let target = (arg.consumes && selected && accepts.includes(selected.type) && !selected.consumedBy)
+    const accepts = arg.accepts;
+    let target = (arg.consumes && selected && acceptsFrom(accepts, selected) && !selected.consumedBy)
       ? selected : null;
     // Never pick a body another operation has already swallowed.
     if (!target)
-      target = features.find(f => accepts.includes(f.type) && !(arg.consumes && f.consumedBy)) || null;
+      target = features.find(f => acceptsFrom(accepts, f) && !(arg.consumes && f.consumedBy)) || null;
     if (target) refs[arg.key] = target.id;
   }
   return refs;
@@ -93,15 +98,19 @@ export const MDL_OPS = [
       needText(edit, "id"), needText(edit, "key"), needNumber(edit, "value"))),
 
   modelOp("connect", ["id", "key", "from"],
-    "Point a reference argument at another feature - one wire in the graph.",
+    "Wire one feature into another's input - a reference, a section of a loft, or a "
+    + "slider being driven by a number. What an input takes is what a source produces, "
+    + "not which feature type it is.",
     { op: "connect", id: "FI1", key: "body", from: "CB1" },
     (ctx, edit) => ctx.kernel.setReference(
       needText(edit, "id"), needText(edit, "key"), needText(edit, "from"))),
 
-  modelOp("disconnect", ["id", "key"],
-    "Clear a reference argument. The feature stops building until it is wired again.",
+  modelOp("disconnect", ["id", "key", "from?"],
+    "Pull a wire off an input. An input that takes several wires loses the one named "
+    + "in from, or all of them when it is left out.",
     { op: "disconnect", id: "FI1", key: "body" },
-    (ctx, edit) => ctx.kernel.setReference(needText(edit, "id"), needText(edit, "key"), null)),
+    (ctx, edit) => ctx.kernel.setReference(needText(edit, "id"), needText(edit, "key"),
+      edit.from ? String(edit.from) : null, true)),
 
   modelOp("code", ["id", "key", "text"],
     "Replace the source of a written feature. The parameters it declares are reconciled "

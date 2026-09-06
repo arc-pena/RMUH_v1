@@ -120,7 +120,7 @@ check("a value must be a number", refused.includes("number"), refused);
 
 refused = "";
 try { await mdl.run({ op: "connect", id: "CB1", key: "plane", from: "PT1" }); } catch (e) { refused = e.message; }
-check("a wire must respect the type", refused.includes("Plane"), refused);
+check("a wire must respect the type", refused.includes("plane"), refused);
 
 refused = "";
 try { await mdl.run({ op: "connect", id: "PL1", key: "origin", from: fillet.id }); } catch (e) { refused = e.message; }

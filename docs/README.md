@@ -22,6 +22,11 @@ code learns which one it got:
 | **the page kernel** | OpenCascade compiled to WebAssembly, running in the browser. Real B-Rep — a filleted box has twelve cylindrical faces and eight spherical corners — with the OCAF document model (labels, attributes, drivers, logbook, solver) in JavaScript. Needs nothing installed. |
 | **a native kernel** | `ocafcad serve` or `python -m ocafpy serve` over HTTP. A real `TDocStd_Document`: OCAF attributes, `TFunction` drivers, `TNaming` results, `.cbf` persistence, STEP and OBJ export. |
 
+The two catalogues have drifted: the written features and everything under
+**Numbers are features too** below are page-kernel features, and `ocaf/`'s
+`Schema.cxx` still carries only the original ten. A model using the rest is
+browser-only until that catches up.
+
 The Kernel chip in the toolbar switches between them and carries the part
 across.
 
@@ -146,6 +151,53 @@ selected body for an operation, the first datum of the right type for the rest
 — so `{"op":"add","type":"Fillet"}` typed into a console does what the toolbar
 does.
 
+## Numbers are features too
+
+Half the catalogue builds no geometry. It computes, and what it computes is
+wired into the sliders of the features that do build — which is the other half
+of what makes this a graph rather than a tree.
+
+**Every numeric input takes a wire.** `F.real` resolves it, so a slider driven
+from somewhere else reports what is arriving and the literal underneath is kept
+but not read; pull the wire off and the old value comes back. No driver in the
+kernel knows this is happening.
+
+| | |
+|---|---|
+| **numbers** | `Number` one on a slider of its own · `Series` start, step, count · `Range` evenly between two bounds · `Math` two inputs and an operation · `Expression` a formula over `a`, `b`, `c`, with `i` and `n` bound to the position in a list · `Panel` shows what is wired into it |
+| **curves** | `Circle` on a plane · `Polyline` through a list of points · `Interpolate` a smooth curve through them |
+| **analysis** | `EvaluateCurve` the point at a parameter, tangent drawn · `DivideCurve` equal lengths, as points · `EvaluateSurface` the point at (u, v), normal drawn · `Measure` length, area, volume or bounding size, back out as a number |
+| **operations** | `Extrude` a profile along a direction · `Loft` a skin through sections, in the order they are wired · `Boolean` union, difference, intersection · `Project` a curve pulled onto a surface |
+
+Inputs say what a source may **produce** — `number`, `point`, `vector`,
+`curve`, `plane`, `solid`, `text` — not which feature types they accept, so a
+component added later is taken by every input its output makes sense for
+without any of them being told about it.
+
+### Lists
+
+A `Series` wired into a coordinate of a `Point` makes a row of points; an
+`Interpolate` through those points is one curve; a `DivideCurve` of that curve
+is a list of points again. Where two lists meet, the shorter repeats its last
+item until the longer is exhausted, which is Grasshopper's longest-list rule.
+
+Lists travel through the data components and the components that take points.
+Everything else — `Cube`, `Sphere`, `Fillet` — reads the first item and says so
+on the slider. Making a hundred cubes from a hundred numbers wants a data tree,
+and this is not one.
+
+### Two honest approximations
+
+`Interpolate` is a Catmull–Rom spline sampled into a fine run of segments.
+OpenCascade's B-spline fitter needs a `TColgp_Array1OfPnt`, which this
+WebAssembly build does not export; the curve is drawn, lofted and divided as
+what it is.
+
+`Project` samples the curve, pulls each sample to the nearest point on the
+target's surfaces, and re-fits. An exact projected curve wants
+`BRepProj_Projection`, which this kernel does not carry either. The nearest
+point is exact at every sample, and the sample count is a parameter.
+
 ## The node graph
 
 **Nodes** opens the same document as a graph. The specification tree reads it
@@ -224,6 +276,7 @@ reproducible from `docs/src/`.
 | `src/http-kernel.js` | the same interface over HTTP |
 | `src/mdl.js` | the model description language: every edit, and the one channel they go through |
 | `src/graph.js` | the node editor — its own window, or a floating one |
+| `test/components.test.mjs` | the data half of the catalogue against a real kernel |
 | `src/showroom.js` | the PlayCanvas stage: finishes, environments, procedural lighting |
 | `src/app.js` | tree, viewport, definition panel, regeneration log |
 | `build.py` | assembles the single file |
@@ -233,10 +286,14 @@ reproducible from `docs/src/`.
 ```sh
 node docs/test/kernel.test.mjs
 node docs/test/mdl.test.mjs
+node docs/test/components.test.mjs
 ```
 
 The first builds the model, edits it, checks that only the downstream functions
 re-run, and walks through every way a fillet can fail. The second runs every
 edit in the language against a real kernel, checks that the refusals are refused
 and recorded rather than swallowed, and that the file the graph writes rebuilds
-the part and its layout.
+the part and its layout. The third builds a definition out of the data
+components — a series into a point into a spline into divisions into a panel —
+and checks the arithmetic, the measurements, the list rule, and that only the
+functions downstream of an edit re-run.

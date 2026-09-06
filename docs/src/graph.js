@@ -12,6 +12,7 @@
 // it can sit on a second screen the way Grasshopper does.
 
 import { MDL_OPS, parseEdits } from "./mdl.js";
+import { acceptsFrom } from "./ocaf.js";
 
 const GRAPH_CSS = `
 :root {
@@ -21,7 +22,8 @@ const GRAPH_CSS = `
   --g-ink: #15212b; --g-ink-2: #4a5b69; --g-ink-3: #7d8d99;
   --g-accent: #0a6cb0; --g-accent-soft: rgba(10,108,176,.13); --g-accent-ink: #fff;
   --g-datum: #b07408; --g-good: #1c7a52; --g-bad: #bb3a2c; --g-bad-soft: rgba(187,58,44,.13);
-  --g-wire: #8ea0ad; --g-shadow: 0 1px 2px rgba(16,28,38,.10), 0 8px 26px rgba(16,28,38,.13);
+  --g-wire: #8ea0ad; --g-num: #7a56c4; --g-crv: #1c7a52;
+  --g-shadow: 0 1px 2px rgba(16,28,38,.10), 0 8px 26px rgba(16,28,38,.13);
   --g-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --g-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
@@ -32,7 +34,8 @@ const GRAPH_CSS = `
   --g-ink: #e6eef4; --g-ink-2: #a6b6c2; --g-ink-3: #74858f;
   --g-accent: #4aa8ea; --g-accent-soft: rgba(74,168,234,.20); --g-accent-ink: #06131d;
   --g-datum: #e0a33c; --g-good: #4fb98a; --g-bad: #e2705f; --g-bad-soft: rgba(226,112,95,.17);
-  --g-wire: #4d616f; --g-shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px rgba(0,0,0,.45);
+  --g-wire: #4d616f; --g-num: #a98cf0; --g-crv: #4fb98a;
+  --g-shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px rgba(0,0,0,.45);
 }
 .g-root, .g-root * { box-sizing: border-box; }
 .g-root {
@@ -102,7 +105,7 @@ const GRAPH_CSS = `
 .g-body { padding: 5px 9px 8px; }
 .g-row { display: flex; align-items: center; gap: 6px; position: relative; min-height: 20px; }
 .g-row + .g-row { margin-top: 3px; }
-.g-row.wired-row { padding-left: 7px; }
+.g-row.wired-row { padding-left: 16px; }
 .g-lab {
   font-size: 10.5px; color: var(--g-ink-2); flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -131,6 +134,11 @@ const GRAPH_CSS = `
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .g-seg button[aria-pressed="true"] { background: var(--g-accent); border-color: var(--g-accent); color: var(--g-accent-ink); }
+.g-pick {
+  width: 100%; height: 20px; padding: 0 4px; border: 1px solid var(--g-line);
+  border-radius: 4px; background: var(--g-node); font-size: 10.5px;
+}
+.g-pick:focus { outline: none; border-color: var(--g-accent); }
 .g-params { max-height: 216px; overflow-y: auto; margin: 0 -3px; padding: 0 3px; }
 .g-params::-webkit-scrollbar { width: 6px; }
 .g-params::-webkit-scrollbar-thumb { background: var(--g-line); border-radius: 3px; }
@@ -142,6 +150,14 @@ const GRAPH_CSS = `
   margin: 0 9px 8px; padding: 4px 6px; border-radius: 5px; font-size: 10px;
   background: var(--g-bad-soft); color: var(--g-bad); line-height: 1.35;
 }
+.g-data {
+  margin: 5px 9px 8px; padding: 4px 7px; border-radius: 5px; font-family: var(--g-mono);
+  font-size: 9.5px; line-height: 1.5; color: var(--g-ink-2); background: var(--g-line-soft);
+  max-height: 58px; overflow: auto; word-break: break-word;
+}
+.g-node.panel { width: 250px; }
+.g-node.panel .g-data { max-height: 128px; font-size: 10px; }
+.g-data .g-count { color: var(--g-ink-3); }
 .g-code {
   margin: 0 0 3px; padding: 3px 6px; border-radius: 5px; font-family: var(--g-mono);
   font-size: 9.5px; color: var(--g-ink-3); background: var(--g-line-soft);
@@ -155,9 +171,19 @@ const GRAPH_CSS = `
   border: 2px solid var(--g-node); background: var(--g-wire); cursor: crosshair;
   z-index: 2;
 }
-.g-port.in { left: -6px; top: 50%; margin-top: -5.5px; }
+.g-port.in { left: -7px; top: 50%; margin-top: -5.5px; }
 .g-port.out { right: -6px; top: 50%; margin-top: -5.5px; }
 .g-port.wired { background: var(--g-accent); }
+/* A port is coloured by what goes through it, so a graph reads at a glance:
+   numbers, points and curves each have their own. */
+.g-port[data-kind="number"] { background: var(--g-num); }
+.g-port[data-kind="point"], .g-port[data-kind="vector"] { background: var(--g-datum); }
+.g-port[data-kind="curve"] { background: var(--g-crv); }
+.g-port[data-kind="text"] { background: var(--g-ink-3); }
+.g-port.slack { background: transparent; border-color: var(--g-wire); }
+.g-wires path.number { stroke: var(--g-num); }
+.g-wires path.point, .g-wires path.vector { stroke: var(--g-datum); }
+.g-wires path.curve { stroke: var(--g-crv); }
 .g-port.hot { background: var(--g-good); transform: scale(1.35); }
 .g-port:hover { background: var(--g-accent); }
 .g-node .g-head .g-port.out { right: -7px; }
@@ -273,6 +299,16 @@ const NODE_W = 216, NODE_W_DATUM = 190, COL_GAP = 92, ROW_GAP = 22;
 //! Ranks every feature by the longest path of references reaching it, which is
 //! the same order the solver runs them in - so the columns read left to right as
 //! the regeneration does top to bottom.
+//! Everything a feature reads from: reference arguments, sliders being driven,
+//! and each wire into an input that takes several.
+export function wiresInto(entry) {
+  if (!entry) return [];
+  const out = Object.values(entry.refs || {}).filter(Boolean);
+  for (const value of Object.values(entry.lists || {}))
+    if (Array.isArray(value)) out.push(...value.filter(Boolean));
+  return out;
+}
+
 export function graphRanks(features) {
   const byId = new Map(features.map(f => [f.id, f]));
   const rank = new Map();
@@ -282,8 +318,8 @@ export function graphRanks(features) {
     seen.add(id);
     const entry = byId.get(id);
     let depth = 0;
-    for (const target of Object.values(entry ? entry.refs || {} : {}))
-      if (target && byId.has(target)) depth = Math.max(depth, walk(target, seen) + 1);
+    for (const target of wiresInto(entry))
+      if (byId.has(target)) depth = Math.max(depth, walk(target, seen) + 1);
     seen.delete(id);
     rank.set(id, depth);
     return depth;
@@ -662,12 +698,15 @@ export class GraphEditor {
     menu.style.left = (anchor ? anchor.left - frame.left : 40) + "px";
     menu.style.top = (anchor ? anchor.bottom - frame.top + 6 : 40) + "px";
 
-    for (const category of ["datum", "body", "operation"]) {
-      const types = schema.types.filter(t => t.category === category);
+    const groups = schema.categories
+      || [{ key: "datum", label: "datums" }, { key: "body", label: "solids" },
+          { key: "operation", label: "operations" }];
+    for (const group of groups) {
+      const types = schema.types.filter(t => t.category === group.key);
       if (!types.length) continue;
       const head = doc.createElement("div");
       head.className = "g-sect";
-      head.textContent = category === "body" ? "solids" : category === "operation" ? "operations" : "datums";
+      head.textContent = group.label || group.key;
       menu.appendChild(head);
       for (const spec of types) {
         const button = doc.createElement("button");
@@ -716,10 +755,7 @@ export class GraphEditor {
     if (!this.showing) return;
     const { tree } = this.read();
     if (!tree) return;
-    const signature = tree.features.map(f =>
-      f.id + ":" + f.type + ":" + Object.keys(f.values).join(",") +
-      ":" + Object.entries(f.refs).map(([k, v]) => k + ">" + v).join(",") +
-      ":" + (f.params ? f.params.map(p => p.key).join(",") : "")).join("|");
+    const signature = this.shapeOf(tree);
     if (signature !== this.signature) this.rebuild();
     else this.update();
     this.refreshModelText();
@@ -737,14 +773,22 @@ export class GraphEditor {
     // Node heights are not known until they are on the page, so anything placed
     // by guesswork just now is packed again against what it actually measures.
     if (fresh.length) this.pack(tree.features, new Set(fresh));
-    this.signature = tree.features.map(f =>
-      f.id + ":" + f.type + ":" + Object.keys(f.values).join(",") +
-      ":" + Object.entries(f.refs).map(([k, v]) => k + ">" + v).join(",") +
-      ":" + (f.params ? f.params.map(p => p.key).join(",") : "")).join("|");
+    this.signature = this.shapeOf(tree);
     this.el.count.textContent = tree.features.length + " nodes · " +
-      tree.features.reduce((n, f) => n + Object.values(f.refs).filter(Boolean).length, 0) + " wires";
+      tree.features.reduce((n, f) => n + wiresInto(f).length, 0) + " wires";
     this.update();
     this.applyView();
+  }
+
+  //! What the graph is drawn from, as a string. When this changes the nodes are
+  //! rebuilt; when only the numbers move they are updated where they stand.
+  shapeOf(tree) {
+    return tree.features.map(f =>
+      f.id + ":" + f.type + ":" + Object.keys(f.values).join(",") +
+      ":" + Object.entries(f.refs).map(([k, v]) => k + ">" + v).join(",") +
+      ":" + Object.entries(f.lists || {}).map(([k, v]) =>
+        k + "*" + (Array.isArray(v) ? v.join("+") : v)).join(",") +
+      ":" + (f.params ? f.params.map(p => p.key).join(",") : "")).join("|");
   }
 
   //! Anything without a place gets one, in the columns the references imply.
@@ -801,8 +845,14 @@ export class GraphEditor {
   rowCount(entry) {
     const spec = this.spec(entry.type);
     if (!spec) return 0;
-    const args = spec.args.filter(a => a.kind !== "code" && this.applies(entry, a)).length;
-    return args + (entry.params ? Math.min(entry.params.length, 7) + 1 : 0) + (entry.code !== undefined ? 1 : 0);
+    let rows = 0;
+    for (const arg of spec.args) {
+      if (arg.kind === "code" || !this.applies(entry, arg)) continue;
+      rows += arg.kind === "refs" ? (entry.lists[arg.key] || []).length + 1
+            : arg.kind === "real" ? 2 : 1;
+    }
+    return rows + (entry.params ? Math.min(entry.params.length, 7) + 1 : 0)
+         + (entry.code !== undefined ? 1 : 0) + (entry.data ? 2 : 0);
   }
 
   spec(type) {
@@ -831,7 +881,8 @@ export class GraphEditor {
       '<span class="g-id">' + gesc(entry.id) + "</span>";
     const out = doc.createElement("div");
     out.className = "g-port out";
-    out.title = "the shape this feature builds";
+    out.dataset.kind = entry.produces || "solid";
+    out.title = "what this feature gives: " + (entry.produces || "a shape");
     out.dataset.out = entry.id;
     head.appendChild(out);
     el.appendChild(head);
@@ -845,9 +896,10 @@ export class GraphEditor {
 
     for (const arg of (spec ? spec.args : [])) {
       if (arg.kind === "code" || !this.applies(entry, arg)) continue;
-      if (arg.kind === "ref") body.appendChild(this.refRow(entry, arg, ports));
+      if (arg.kind === "ref" || arg.kind === "refs")
+        body.appendChild(this.refRow(entry, arg, ports));
       else if (arg.kind === "choice") body.appendChild(this.choiceRow(entry, arg));
-      else body.appendChild(this.realRow(entry, arg, arg.key, entry.values[arg.key]));
+      else body.appendChild(this.realRow(entry, arg, arg.key, entry.values[arg.key], ports));
     }
 
     if (entry.code !== undefined) {
@@ -875,9 +927,21 @@ export class GraphEditor {
         scroller.appendChild(param.options
           ? this.choiceRow(entry, { key: param.key, label: param.label, options: param.options },
                            Math.round(param.value))
-          : this.realRow(entry, param, param.key, param.value));
+          : this.realRow(entry, param, param.key, param.value, null));
       body.appendChild(scroller);
     }
+
+    // What it computed, under everything it takes. A Panel is nothing else.
+    if (entry.type === "Panel") el.classList.add("panel");
+    const readout = doc.createElement("div");
+    readout.className = "g-data";
+    readout.hidden = !entry.data;
+    if (entry.data) readout.innerHTML = '<span class="g-count">' + entry.data.count + " " +
+      gesc(entry.data.kind) + (entry.data.count === 1 ? "" : "s") + " · </span>" +
+      gesc(entry.data.preview);
+    readout.addEventListener("pointerdown", event => event.stopPropagation());
+    el.appendChild(readout);
+    record.readout = readout;
 
     const error = doc.createElement("div");
     error.className = "g-err";
@@ -909,18 +973,40 @@ export class GraphEditor {
     return el;
   }
 
-  realRow(entry, arg, key, value) {
+  //! A number, with the port that may be driving it. Wired, the slider shows
+  //! what is arriving and stops taking input.
+  realRow(entry, arg, key, value, ports) {
     const doc = this.doc;
+    const from = entry.driven ? entry.driven[key] : null;
+    const count = entry.lists ? entry.lists[key] : null;
     const row = doc.createElement("div");
-    row.className = "g-row";
+    row.className = "g-row wired-row";
     row.style.display = "block";
     row.innerHTML =
       '<div style="display:flex;align-items:center;gap:6px">' +
         '<span class="g-lab">' + gesc(arg.label || key) + "</span>" +
+        (count > 1 ? '<span class="g-sub" style="font-size:9px">×' + count + "</span>" : "") +
         '<input class="g-num" type="number" step="' + arg.step + '" min="' + arg.min +
-        '" max="' + arg.max + '" value="' + gnum(value) + '"></div>' +
+        '" max="' + arg.max + '" value="' + gnum(value) + '"' + (from ? " disabled" : "") +
+        "></div>" +
       '<input class="g-rng" type="range" min="' + arg.min + '" max="' + arg.max +
-      '" step="' + arg.step + '" value="' + value + '">';
+      '" step="' + arg.step + '" value="' + value + '"' + (from ? " disabled" : "") + ">";
+
+    if (ports) {
+      const port = doc.createElement("div");
+      port.className = "g-port in" + (from ? " wired" : " slack");
+      port.dataset.in = entry.id;
+      port.dataset.key = key;
+      port.dataset.kind = "number";
+      port.title = (arg.label || key) + " — takes a number";
+      port.style.top = "11px";
+      port.style.marginTop = "0";
+      port.addEventListener("pointerdown", event => this.startLink(event, from || null, {
+        id: entry.id, key, had: from || null,
+      }));
+      row.appendChild(port);
+      ports.set(key, port);
+    }
     const slider = row.querySelector(".g-rng"), number = row.querySelector(".g-num");
     slider.dataset.key = number.dataset.key = key;
     const send = raw => {
@@ -947,6 +1033,19 @@ export class GraphEditor {
     row.style.display = "block";
     row.innerHTML = '<span class="g-lab" style="display:block;margin-bottom:2px">' +
       gesc(arg.label || arg.key) + "</span>";
+    // A node is 216 px wide; eight alternatives do not fit across it.
+    if (arg.options.length > 3) {
+      const pick = doc.createElement("select");
+      pick.className = "g-pick";
+      pick.dataset.key = arg.key;
+      pick.innerHTML = arg.options.map((option, index) =>
+        '<option value="' + index + '"' + (index === value ? " selected" : "") + ">" +
+        gesc(option) + "</option>").join("");
+      pick.addEventListener("pointerdown", event => event.stopPropagation());
+      pick.addEventListener("change", () => this.push(entry.id, arg.key, Number(pick.value)));
+      row.appendChild(pick);
+      return row;
+    }
     const group = doc.createElement("div");
     group.className = "g-seg";
     group.dataset.key = arg.key;
@@ -963,26 +1062,41 @@ export class GraphEditor {
     return row;
   }
 
+  //! One wire, or several in order. A multi-wire input draws a row per wire and
+  //! one empty row under them, which is where the next one lands.
   refRow(entry, arg, ports) {
     const doc = this.doc;
-    const row = doc.createElement("div");
-    row.className = "g-row wired-row";
-    const target = entry.refs[arg.key];
-    row.innerHTML = '<span class="g-lab">' + gesc(arg.label) + "</span>" +
-      '<span class="g-sub" style="font-size:9.5px">' +
-      gesc(target || arg.accepts.split(",").join("/")) + "</span>";
-    const port = doc.createElement("div");
-    port.className = "g-port in" + (target ? " wired" : "");
-    port.dataset.in = entry.id;
-    port.dataset.key = arg.key;
-    port.title = arg.label + " — takes " + arg.accepts.split(",").join(" or ") +
-      (arg.consumes ? ", and consumes it" : "");
-    port.addEventListener("pointerdown", event => this.startLink(event, target || null, {
-      id: entry.id, key: arg.key, had: target || null,
-    }));
-    row.appendChild(port);
-    ports.set(arg.key, port);
-    return row;
+    const many = arg.kind === "refs";
+    const wired = many ? (entry.lists[arg.key] || []) : [entry.refs[arg.key]].filter(Boolean);
+    const accepts = arg.accepts.split(",");
+    const box = doc.createElement("div");
+
+    const draw = (target, index) => {
+      const row = doc.createElement("div");
+      row.className = "g-row wired-row";
+      row.innerHTML = '<span class="g-lab">' +
+        gesc(many ? (index === wired.length ? "add a " + accepts[0] : arg.label + " " + (index + 1))
+                  : arg.label) + "</span>" +
+        '<span class="g-sub" style="font-size:9.5px">' +
+        gesc(target || accepts.join("/")) + "</span>";
+      const port = doc.createElement("div");
+      port.className = "g-port in" + (target ? " wired" : " slack");
+      port.dataset.in = entry.id;
+      port.dataset.key = arg.key;
+      port.dataset.kind = accepts.length === 1 ? accepts[0] : "";
+      port.title = arg.label + " — takes " + accepts.join(" or ") +
+        (arg.consumes ? ", and consumes it" : "") + (many ? "; drag another in to add it" : "");
+      port.addEventListener("pointerdown", event => this.startLink(event, target || null, {
+        id: entry.id, key: arg.key, had: target || null, many,
+      }));
+      row.appendChild(port);
+      ports.set(arg.key + (many ? "#" + index : ""), port);
+      box.appendChild(row);
+    };
+
+    wired.forEach(draw);
+    if (many || !wired.length) draw(null, wired.length);
+    return box;
   }
 
   //! Values, names and failures, without rebuilding anything - the graph must
@@ -1006,7 +1120,9 @@ export class GraphEditor {
       for (const input of node.el.querySelectorAll("[data-key]")) {
         const key = input.dataset.key;
         if (!(key in values)) continue;
-        if (input.classList.contains("g-seg")) {
+        if (input.classList.contains("g-pick")) {
+          if (input !== this.holding) input.value = String(Math.round(values[key]));
+        } else if (input.classList.contains("g-seg")) {
           const at = Math.round(values[key]);
           [...input.children].forEach((button, index) =>
             button.setAttribute("aria-pressed", index === at ? "true" : "false"));
@@ -1014,8 +1130,19 @@ export class GraphEditor {
           input.value = input.classList.contains("g-num") ? gnum(values[key]) : values[key];
         }
       }
-      for (const [key, port] of node.ports)
-        port.classList.toggle("wired", !!entry.refs[key]);
+      for (const [slot, port] of node.ports) {
+        const key = slot.split("#")[0];
+        const list = entry.lists && Array.isArray(entry.lists[key]) ? entry.lists[key] : null;
+        const target = list ? list[Number(slot.split("#")[1])] : entry.refs[key];
+        port.classList.toggle("wired", !!target);
+        port.classList.toggle("slack", !target);
+      }
+      if (node.readout) {
+        node.readout.hidden = !entry.data;
+        if (entry.data) node.readout.innerHTML = '<span class="g-count">' + entry.data.count +
+          " " + gesc(entry.data.kind) + (entry.data.count === 1 ? "" : "s") + " · </span>" +
+          gesc(entry.data.preview);
+      }
     }
     this.drawWires();
   }
@@ -1023,7 +1150,9 @@ export class GraphEditor {
   /* ------------------------------------------------------------------- wires */
 
   drawWires() {
-    if (!this.showing) return;
+    // The window can go while a redraw is in flight - a popup closed, a panel
+    // taken out of the page - and a detached node has no geometry to measure.
+    if (!this.showing || !this.root || !this.root.isConnected) return;
     const { tree } = this.read();
     if (!tree) return;
     const { x, y, z } = this.view;
@@ -1032,12 +1161,15 @@ export class GraphEditor {
     for (const entry of tree.features) {
       const node = this.nodes.get(entry.id);
       if (!node) continue;
-      for (const [key, port] of node.ports) {
-        const from = entry.refs[key];
+      for (const [slot, port] of node.ports) {
+        const key = slot.split("#")[0];
+        const list = entry.lists && Array.isArray(entry.lists[key]) ? entry.lists[key] : null;
+        const from = list ? list[Number(slot.split("#")[1])] : entry.refs[key];
         const source = from ? this.nodes.get(from) : null;
         if (!source) continue;
         const a = this.portAt(source, source.out), b = this.portAt(node, port);
-        parts.push('<path class="' + (entry.error ? "dashed" : "") + '" d="' + this.curve(a, b) + '"/>');
+        parts.push('<path class="' + (source.entry.produces || "") +
+          (entry.error ? " dashed" : "") + '" d="' + this.curve(a, b) + '"/>');
       }
     }
     if (this.linking && this.linking.to) {
@@ -1047,13 +1179,20 @@ export class GraphEditor {
     this.el.wires.innerHTML = parts.join("");
   }
 
+  //! Where a port sits in graph coordinates. Ports live at three depths - on the
+  //! header, on a row, on a row inside a group of them - so the offsets are
+  //! walked up to the node rather than assumed.
   portAt(node, port) {
     const at = this.layout.get(node.entry.id) || { x: 0, y: 0 };
-    return {
-      x: at.x + port.offsetLeft + port.offsetWidth / 2,
-      y: at.y + (port.offsetParent === node.el ? 0 : port.offsetParent.offsetTop)
-             + port.offsetTop + port.offsetHeight / 2,
-    };
+    let x = port.offsetLeft + port.offsetWidth / 2;
+    let y = port.offsetTop + port.offsetHeight / 2;
+    let parent = port.offsetParent;
+    while (parent && parent !== node.el) {
+      x += parent.offsetLeft;
+      y += parent.offsetTop;
+      parent = parent.offsetParent;
+    }
+    return { x: at.x + x, y: at.y + y };
   }
 
   curve(a, b) {
@@ -1091,10 +1230,15 @@ export class GraphEditor {
       this.linking = null;
       this.drawWires();
       try {
-        if (input && !landed && input.had)
-          await this.mdl.run({ op: "disconnect", id: input.id, key: input.key });
-        else if (landed)
+        if (input && !landed && input.had) {
+          // Dropped in empty space: the wire comes off. An input holding several
+          // loses only the one that was picked up.
+          await this.mdl.run(input.many
+            ? { op: "disconnect", id: input.id, key: input.key, from: input.had }
+            : { op: "disconnect", id: input.id, key: input.key });
+        } else if (landed) {
           await this.mdl.run({ op: "connect", id: landed.id, key: landed.key, from: sourceId });
+        }
       } catch (err) { /* the console has it */ }
     };
     doc.addEventListener("pointermove", move);

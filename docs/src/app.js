@@ -2,6 +2,7 @@ import { createWasmKernel } from "./wasm-kernel.js";
 import { createHttpKernel } from "./http-kernel.js";
 import { ENVIRONMENTS, FINISHES, Showroom, findFinish } from "./showroom.js";
 import { Mdl } from "./mdl.js";
+import { acceptsFrom, dataLines } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
 
 "use strict";
@@ -106,7 +107,7 @@ let grid = null, axes = null;
 
 function readTheme() {
   const style = getComputedStyle(document.documentElement);
-  for (const name of ["shape", "shape-edge", "accent", "datum", "grid", "grid-axis", "bad"])
+  for (const name of ["shape", "shape-edge", "curve", "accent", "datum", "grid", "grid-axis", "bad"])
     THEME[name] = new THREE.Color(style.getPropertyValue("--" + name).trim() || "#888888");
   viewportEl.style.background =
     `linear-gradient(${style.getPropertyValue("--view-top")}, ${style.getPropertyValue("--view-bottom")})`;
@@ -215,10 +216,16 @@ function disposeGroup(group) {
 }
 
 //! Turns one shape's triangle stream into scene objects.
+//! A datum is drawn faintly because it is scaffolding. A curve a loft is built
+//! on is not scaffolding until something consumes it, so it is drawn as
+//! geometry - which is also how you find it to wire it up.
+const drawsFaint = entry => !!entry && entry.category === "datum" && entry.type !== "Line";
+
 function groupFromStream(mesh, entry) {
   const group = new THREE.Group();
-  const datum = entry && entry.category === "datum";
+  const datum = drawsFaint(entry);
   group.userData.solid = !datum;
+  group.userData.curve = !!entry && entry.produces === "curve";
 
   if (mesh.positions && mesh.index) {
     const geometry = new THREE.BufferGeometry();
@@ -241,19 +248,26 @@ function groupFromStream(mesh, entry) {
   if (mesh.edges && mesh.edges.length) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(mesh.edges, 3));
+    // A curve is the feature, not the outline of one, so it is drawn in its own
+    // colour at full strength rather than as a solid's tangent edge.
+    const curve = !!entry && entry.produces === "curve";
     const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({
-      color: datum ? THEME.datum : THEME["shape-edge"],
-      transparent: true, opacity: datum ? 0.42 : 0.4 }));
+      color: datum ? THEME.datum : curve ? THEME.curve : THEME["shape-edge"],
+      transparent: true, opacity: datum ? 0.42 : curve ? 1 : 0.4 }));
     group.add(lines);
   }
 
-  // A vertex carries no triangles, so it is drawn as a marker at its location.
-  if (mesh.point) {
-    const dot = new THREE.Mesh(new THREE.SphereGeometry(2.2, 16, 12),
-                               new THREE.MeshBasicMaterial({ color: THEME.datum,
-                                                             transparent: true, opacity: 0.75 }));
-    dot.position.set(mesh.point[0], mesh.point[1], mesh.point[2]);
-    group.add(dot);
+  // A vertex carries no triangles, so every one is drawn as a marker. A
+  // DivideCurve can send two hundred, so they share one geometry between them.
+  const marks = mesh.points && mesh.points.length ? mesh.points
+              : mesh.point ? mesh.point : null;
+  if (marks) {
+    const dots = new THREE.Points(
+      new THREE.BufferGeometry().setAttribute("position",
+        new THREE.Float32BufferAttribute(marks, 3)),
+      new THREE.PointsMaterial({ color: THEME.datum, size: 6, sizeAttenuation: false,
+                                 transparent: true, opacity: 0.9 }));
+    group.add(dots);
   }
   return group;
 }
@@ -322,8 +336,11 @@ function paintSelection() {
       }
       if (object.isLineSegments && object.material.isLineBasicMaterial &&
           object.parent && object.parent.userData.solid) {
-        object.material.color.copy(selected ? THEME.accent : THEME["shape-edge"]);
-        object.material.opacity = selected ? 0.8 : 0.4;
+        // A curve keeps its own colour: the line is the feature, not the
+        // silhouette of one, and dimming it to a tangent edge loses it.
+        const own = object.parent.userData.curve ? THEME.curve : THEME["shape-edge"];
+        object.material.color.copy(selected ? THEME.accent : own);
+        object.material.opacity = selected ? 0.9 : object.parent.userData.curve ? 1 : 0.4;
       }
     });
   }
@@ -380,9 +397,68 @@ const ICONS = {
         + '<path d="M6.3 10.6c1-3.6 2.2-5 3.4-5s1.5 1.1 0 1.1" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>'
         + '<path d="M6.3 8.6c1.1-2.6 2-3.6 3-3.6" fill="none" stroke="currentColor" stroke-width=".9" stroke-linecap="round" opacity=".6"/>',
   Fillet: '<path d="M2.5 13.5V8a5.5 5.5 0 015.5-5.5h5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 2.5h5.5M2.5 2.5v5.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2"/>',
+
+  /* ------------------------------------------------------------ numbers */
+  Number: '<path d="M2.5 11.5h11" stroke="currentColor" stroke-width="1.2"/>'
+        + '<circle cx="10" cy="11.5" r="2.4" fill="currentColor"/>'
+        + '<path d="M4 6.6V3.4M2.6 4.6L4 3.2l1.4 1.4M8.4 3.2h3.2M8.4 6.4h3.2" stroke="currentColor" stroke-width="1.1" fill="none" stroke-linecap="round"/>',
+  Series: '<circle cx="2.6" cy="8" r="1.3" fill="currentColor"/><circle cx="6.4" cy="8" r="1.3" fill="currentColor"/>'
+        + '<circle cx="10.2" cy="8" r="1.3" fill="currentColor"/><circle cx="14" cy="8" r="1.3" fill="currentColor" opacity=".45"/>'
+        + '<path d="M2.6 12.6h11.4" stroke="currentColor" stroke-width=".9" opacity=".4"/>',
+  Range: '<path d="M2.5 8h11" stroke="currentColor" stroke-width="1.2"/>'
+       + '<path d="M2.5 5v6M13.5 5v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'
+       + '<path d="M6.2 6.4v3.2M9.8 6.4v3.2" stroke="currentColor" stroke-width="1" opacity=".55"/>',
+  Math: '<path d="M2.6 5.4h4M4.6 3.4v4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+      + '<path d="M9.4 3.8l3.6 3.6M13 3.8L9.4 7.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+      + '<path d="M2.6 11.4h4M9.4 10.2h3.6M9.4 12.6h3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+      + '<circle cx="4.6" cy="13.4" r=".9" fill="currentColor"/>',
+  Expression: '<path d="M4.6 2.8C2.9 2.8 2.9 8 2.9 8s0 5.2 1.7 5.2M11.4 2.8c1.7 0 1.7 5.2 1.7 5.2s0 5.2-1.7 5.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
+            + '<path d="M6 6l4 4M10 6l-4 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>',
+  Panel: '<rect x="1.8" y="3.2" width="12.4" height="9.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+       + '<path d="M4 6.2h6M4 8.4h8M4 10.6h4.5" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity=".8"/>',
+
+  /* ------------------------------------------------------------- curves */
+  Circle: '<circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+        + '<circle cx="8" cy="8" r="1.1" fill="currentColor"/>',
+  Polyline: '<path d="M2.2 12.4l3.4-6.2 3.2 3.6 4.9-6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>'
+          + '<circle cx="2.2" cy="12.4" r="1.2" fill="currentColor"/><circle cx="5.6" cy="6.2" r="1.2" fill="currentColor"/>'
+          + '<circle cx="8.8" cy="9.8" r="1.2" fill="currentColor"/><circle cx="13.7" cy="3.8" r="1.2" fill="currentColor"/>',
+  Interpolate: '<path d="M2.2 12.4C4.2 12.4 3.6 5.4 6.4 5.4s2 5.6 4.2 5.6 1.6-7.2 3.2-7.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+             + '<circle cx="2.2" cy="12.4" r="1.2" fill="currentColor"/><circle cx="6.4" cy="5.4" r="1.2" fill="currentColor"/>'
+             + '<circle cx="10.6" cy="11" r="1.2" fill="currentColor"/><circle cx="13.8" cy="3.8" r="1.2" fill="currentColor"/>',
+
+  /* ----------------------------------------------------------- analysis */
+  EvaluateCurve: '<path d="M1.8 12.6C4.6 12.6 4.2 3.4 8 3.4s3.4 9.2 6.2 9.2" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+               + '<circle cx="8" cy="3.4" r="2" fill="currentColor"/>'
+               + '<path d="M4.4 3.4h7.2" stroke="currentColor" stroke-width="1" stroke-dasharray="1.6 1.6"/>',
+  DivideCurve: '<path d="M1.8 12.6C4.6 12.6 4.2 3.4 8 3.4s3.4 9.2 6.2 9.2" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+             + '<circle cx="2.6" cy="11.4" r="1.15" fill="currentColor"/><circle cx="5.2" cy="6.1" r="1.15" fill="currentColor"/>'
+             + '<circle cx="8" cy="3.4" r="1.15" fill="currentColor"/><circle cx="10.8" cy="6.1" r="1.15" fill="currentColor"/>'
+             + '<circle cx="13.4" cy="11.4" r="1.15" fill="currentColor"/>',
+  EvaluateSurface: '<path d="M1.6 10.2L6 5.2h8.4L10 10.2z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>'
+                 + '<circle cx="8" cy="7.7" r="1.9" fill="currentColor"/>'
+                 + '<path d="M8 7.7V2.6" stroke="currentColor" stroke-width="1.1" stroke-dasharray="1.6 1.6"/>',
+  Measure: '<path d="M1.6 6.2h12.8v3.6H1.6z" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+         + '<path d="M4.4 6.2v2M7 6.2v2.9M9.6 6.2v2M12.2 6.2v2.9" stroke="currentColor" stroke-width="1"/>',
+
+  /* --------------------------------------------------------- operations */
+  Extrude: '<path d="M2.6 12.6h6.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'
+         + '<path d="M2.6 12.6V6.4h6.8v6.2M2.6 6.4L5.6 3.4h6.8L9.4 6.4M12.4 3.4v6.2L9.4 12.6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>',
+  Loft: '<path d="M2.4 12.4c2.6 0 3-1.6 5.6-1.6s3 1.6 5.6 1.6" fill="none" stroke="currentColor" stroke-width="1.25"/>'
+      + '<path d="M3.6 8c2.2 0 2.4-1.3 4.4-1.3S10.2 8 12.4 8" fill="none" stroke="currentColor" stroke-width="1.1" opacity=".75"/>'
+      + '<path d="M4.8 3.8c1.7 0 1.9-1 3.2-1s1.5 1 3.2 1" fill="none" stroke="currentColor" stroke-width="1" opacity=".5"/>',
+  Boolean: '<circle cx="6" cy="8" r="4.4" fill="none" stroke="currentColor" stroke-width="1.25"/>'
+         + '<circle cx="10" cy="8" r="4.4" fill="none" stroke="currentColor" stroke-width="1.25"/>'
+         + '<path d="M8 4.1a4.4 4.4 0 000 7.8 4.4 4.4 0 000-7.8z" fill="currentColor" opacity=".35"/>',
+  Project: '<path d="M3 4.4C5 4.4 5 1.8 8 1.8s3 2.6 5 2.6" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+         + '<path d="M1.6 12.4h12.8" stroke="currentColor" stroke-width="1.2"/>'
+         + '<path d="M3 6v4.6M8 3.4v7M13 6v4.6" stroke="currentColor" stroke-width="1" stroke-dasharray="1.6 1.8" opacity=".7"/>',
   part: '<path d="M2.5 4.2L8 1.5l5.5 2.7v7.6L8 14.5l-5.5-2.7z" fill="none" stroke="currentColor" stroke-width="1.2"/>',
   eye: '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/>',
   close: '<path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  // A slider that could be taken from somewhere else wears this.
+  wire: '<path d="M6.6 9.4L9.4 6.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+      + '<path d="M8.6 4.4l1.1-1.1a2.6 2.6 0 013.6 3.6l-1.1 1.1M7.4 11.6l-1.1 1.1a2.6 2.6 0 01-3.6-3.6l1.1-1.1" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>',
   eyeOff: '<path d="M1.5 8S4 3.5 8 3.5s6.5 4.5 6.5 4.5-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/><path d="M2.5 2.5l11 11" stroke="currentColor" stroke-width="1.3"/>',
 };
 const svg = body => '<svg viewBox="0 0 16 16" aria-hidden="true">' + body + "</svg>";
@@ -391,8 +467,19 @@ const escapeAttr = s => escapeHtml(s).replace(/"/g, "&quot;");
 
 /* ------------------------------------------------------------------ toolbar */
 function buildToolbar() {
-  const targets = { datum: "tools-datum", body: "tools-body", operation: "tools-op" };
-  for (const host of Object.values(targets)) document.getElementById(host).textContent = "";
+  const rail = document.getElementById("rail");
+  rail.textContent = "";
+  const targets = {};
+  const groups = state.schema.categories
+    || [{ key: "datum" }, { key: "data" }, { key: "curve" },
+        { key: "body" }, { key: "analysis" }, { key: "operation" }];
+  groups.forEach((group, index) => {
+    if (index) rail.appendChild(document.createElement("hr"));
+    const box = document.createElement("div");
+    box.dataset.group = group.key;
+    rail.appendChild(box);
+    targets[group.key] = box;
+  });
 
   for (const spec of state.schema.types) {
     const button = document.createElement("button");
@@ -402,7 +489,7 @@ function buildToolbar() {
     button.dataset.label = spec.type;
     button.setAttribute("aria-label", spec.type);
     button.addEventListener("click", () => addFeature(spec.type));
-    document.getElementById(targets[spec.category]).appendChild(button);
+    (targets[spec.category] || targets.operation || rail).appendChild(button);
   }
   document.getElementById("btn-def-close").innerHTML = svg(ICONS.close);
 }
@@ -414,15 +501,16 @@ function refreshToolbar() {
     const spec = schemaType(button.dataset.type);
     if (!spec) continue;
     if (spec.category === "operation") {
-      const arg = spec.args.find(a => a.kind === "ref" && a.consumes);
-      const accepts = arg ? arg.accepts.split(",") : [];
-      const eligible = selected && accepts.includes(selected.type) && !selected.consumedBy;
+      const arg = spec.args.find(a => (a.kind === "ref" || a.kind === "refs") && a.consumes);
+      const eligible = selected && arg && acceptsFrom(arg.accepts, selected)
+        && !selected.consumedBy;
       button.disabled = !(ready && eligible);
       button.dataset.label = !ready ? "starting…"
         : eligible ? spec.type + " " + selected.name
         : selected && selected.consumedBy
           ? selected.name + " already has a " + (feature(selected.consumedBy) || {}).type
-          : "Select a body first";
+        : arg ? "Select " + arg.accepts.split(",").join(" or ") + " first"
+        : spec.type;
     } else {
       button.disabled = !ready;
       button.dataset.label = spec.type;
@@ -436,9 +524,13 @@ function buildTree() {
   list.textContent = "";
   if (!state.tree) return;
 
+  // The tree keeps CATIA's two sets and adds one: the features that compute
+  // rather than build have no place in a part body.
   const sets = [
     { name: "Datums", features: state.tree.features.filter(f => f.category === "datum") },
-    { name: "PartBody", features: state.tree.features.filter(f => f.category !== "datum") },
+    { name: "Parameters", features: state.tree.features.filter(f => f.category === "data") },
+    { name: "PartBody", features: state.tree.features.filter(f =>
+        f.category !== "datum" && f.category !== "data") },
   ];
 
   for (const set of sets) {
@@ -483,11 +575,16 @@ function treeNode(entry) {
 
   const kind = document.createElement("span");
   kind.className = "kind";
-  kind.textContent = entry.error ? "error" : consumed ? "hidden" : entry.type.toLowerCase();
+  // A feature that computes says what it computed, where a solid says its type.
+  kind.textContent = entry.error ? "error"
+    : consumed ? "hidden"
+    : entry.data && !entry.built
+      ? entry.data.count + " " + entry.data.kind + (entry.data.count === 1 ? "" : "s")
+      : entry.type.toLowerCase();
 
   li.append(glyph, label, kind);
 
-  if (!consumed) {
+  if (!consumed && entry.built) {
     const eye = document.createElement("button");
     eye.className = "eye" + (hidden ? " off" : "");
     eye.innerHTML = svg(hidden ? ICONS.eyeOff : ICONS.eye);
@@ -552,6 +649,10 @@ function buildPanel() {
                    : refField(entry, arg));
   }
 
+  // What the feature computed, as opposed to what it built. A Panel is nothing
+  // but this; a DivideCurve has it as well as geometry.
+  if (entry.data) host.appendChild(dataField(entry));
+
   // Whatever the script declared for itself, as sliders.
   if (entry.params && entry.params.length) {
     const head = document.createElement("div");
@@ -598,6 +699,8 @@ function refreshPanelValues() {
     if (group)
       [...group.children].forEach((button, index) =>
         button.setAttribute("aria-pressed", index === Math.round(value) ? "true" : "false"));
+    const pick = host.querySelector('select.many[data-key="' + key + '"]');
+    if (pick && pick !== document.activeElement) pick.value = String(Math.round(value));
   }
 }
 
@@ -628,25 +731,61 @@ function choiceField(entry, arg) {
   const current = entry.values[arg.key];
 
   field.innerHTML = '<div class="field-head"><label>' + arg.label + "</label></div>";
-  const group = document.createElement("div");
-  group.className = "segmented";
-  group.dataset.key = arg.key;
-  group.setAttribute("role", "group");
-  arg.options.forEach((option, index) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = option;
-    button.setAttribute("aria-pressed", index === current ? "true" : "false");
+  // Two or three alternatives read as a switch. Eight do not fit in a panel this
+  // wide, and squeezing them to four letters each helps nobody.
+  if (arg.options.length > 3) {
+    const pick = document.createElement("select");
+    pick.className = "many";
+    pick.dataset.key = arg.key;
+    pick.innerHTML = arg.options.map((option, index) =>
+      '<option value="' + index + '"' + (index === current ? " selected" : "") + ">" +
+      escapeHtml(option) + "</option>").join("");
     // Switching the pattern changes which arguments apply, so the panel is
     // rebuilt rather than refreshed in place.
-    button.addEventListener("click", () => pushParameter(entry.id, arg.key, index, true));
-    group.appendChild(button);
-  });
-  field.appendChild(group);
+    pick.addEventListener("change", () =>
+      pushParameter(entry.id, arg.key, Number(pick.value), true));
+    field.appendChild(pick);
+  } else {
+    const group = document.createElement("div");
+    group.className = "segmented";
+    group.dataset.key = arg.key;
+    group.setAttribute("role", "group");
+    arg.options.forEach((option, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = option;
+      button.setAttribute("aria-pressed", index === current ? "true" : "false");
+      button.addEventListener("click", () => pushParameter(entry.id, arg.key, index, true));
+      group.appendChild(button);
+    });
+    field.appendChild(group);
+  }
 
   const path = document.createElement("div");
   path.className = "attr-path";
   path.innerHTML = (entry.labels[arg.key] || entry.entry) + " · <b>TDataStd_Integer</b>";
+  field.appendChild(path);
+  return field;
+}
+
+//! The readout. Long lists are shown to a limit with a count, because the
+//! point is to see the shape of the data, not to scroll through it.
+function dataField(entry) {
+  const field = document.createElement("div");
+  field.className = "field";
+  const data = entry.data;
+  field.innerHTML = '<div class="field-head"><label>' +
+    (entry.type === "Panel" ? "Watching" : "Computed") + "</label>" +
+    '<span class="kind">' + data.count + " " + data.kind + (data.count === 1 ? "" : "s") +
+    "</span></div>";
+  const box = document.createElement("div");
+  box.className = "readout";
+  box.textContent = data.preview || "—";
+  field.appendChild(box);
+  const path = document.createElement("div");
+  path.className = "attr-path";
+  path.innerHTML = entry.entry + ":103 · <b>" +
+    (data.kind === "text" ? "TDataStd_ExtStringArray" : "TDataStd_RealArray") + "</b>";
   field.appendChild(path);
   return field;
 }
@@ -666,20 +805,73 @@ function showError(message) {
   host.prepend(div);
 }
 
+//! A number, and the wire that may be driving it. Driven, the slider shows what
+//! is arriving and stops taking input - the value is somewhere else now, and
+//! the way to change it is to go there or pull the wire off.
 function realField(entry, arg) {
   const field = document.createElement("div");
   field.className = "field";
   const value = entry.values[arg.key];
   const path = entry.labels[arg.key] || entry.entry;
+  const from = entry.driven ? entry.driven[arg.key] : null;
+  const count = entry.lists ? entry.lists[arg.key] : null;
 
   field.innerHTML =
     '<div class="field-head"><label for="p-' + arg.key + '">' + arg.label + "</label>" +
     '<span class="value-box"><input type="number" id="n-' + arg.key + '" value="' + round(value) +
     '" step="' + arg.step + '" min="' + arg.min + '" max="' + arg.max + '"' +
-    "><span class=\"unit\">" + (arg.unit || "") + "</span></span></div>" +
+    (from ? " disabled" : "") + "><span class=\"unit\">" + (arg.unit || "") + "</span></span></div>" +
     '<input type="range" id="p-' + arg.key + '" min="' + arg.min + '" max="' + arg.max +
-    '" step="' + arg.step + '" value="' + value + '"' + "" + ">" +
-    '<div class="attr-path">' + path + " · <b>TDataStd_Real</b></div>";
+    '" step="' + arg.step + '" value="' + value + '"' + (from ? " disabled" : "") + ">";
+
+  if (from) {
+    const wire = document.createElement("div");
+    wire.className = "wired";
+    const source = (feature(from) || {}).name || from;
+    wire.innerHTML = '<span title="' + escapeAttr(source +
+      (count > 1 ? " sends " + count + " values; this input reads the first" : "")) +
+      '">driven by <b>' + escapeHtml(source) + "</b>" +
+      (count > 1 ? " · " + count + " values" : "") + "</span>";
+    const off = document.createElement("button");
+    off.type = "button";
+    off.textContent = "Unwire";
+    off.addEventListener("click", () => edit({ op: "disconnect", id: entry.id, key: arg.key }));
+    wire.appendChild(off);
+    field.appendChild(wire);
+  }
+
+  const drivers = state.tree.features.filter(other =>
+    other.id !== entry.id && other.produces === "number" && !dependsOn(other.id, entry.id));
+  if (!from && drivers.length) {
+    const pick = document.createElement("select");
+    pick.className = "drive";
+    pick.hidden = true;
+    pick.innerHTML = '<option value="">— take this from a number —</option>' +
+      drivers.map(d => '<option value="' + escapeAttr(d.id) + '">' + escapeHtml(d.name) +
+        "</option>").join("");
+    pick.addEventListener("change", () => pick.value &&
+      edit({ op: "connect", id: entry.id, key: arg.key, from: pick.value }));
+    field.appendChild(pick);
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "drive-toggle";
+    toggle.title = "Drive this from a number";
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.innerHTML = svg(ICONS.wire);
+    toggle.addEventListener("click", () => {
+      pick.hidden = !pick.hidden;
+      toggle.setAttribute("aria-expanded", pick.hidden ? "false" : "true");
+      if (!pick.hidden) pick.focus();
+    });
+    field.querySelector(".field-head").appendChild(toggle);
+  }
+
+  const trail = document.createElement("div");
+  trail.className = "attr-path";
+  trail.innerHTML = path + " · <b>TDataStd_Real</b>" +
+    (from ? " · <b>TDF_Reference</b> → " + escapeHtml((feature(from) || {}).entry || from) : "");
+  field.appendChild(trail);
 
   const slider = field.querySelector('input[type="range"]');
   const number = field.querySelector('input[type="number"]');
@@ -812,18 +1004,37 @@ function codeEditor(entry) {
 function refField(entry, arg) {
   const field = document.createElement("div");
   field.className = "field";
-  const current = entry.refs[arg.key] || "";
+  const many = arg.kind === "refs";
+  const wired = many ? (entry.lists[arg.key] || []) : [entry.refs[arg.key] || ""].filter(Boolean);
   const accepts = arg.accepts.split(",");
   const options = state.tree.features.filter(other =>
-    other.id !== entry.id && accepts.includes(other.type) && !dependsOn(other.id, entry.id));
+    other.id !== entry.id && acceptsFrom(accepts, other) && !dependsOn(other.id, entry.id));
 
   field.innerHTML = '<div class="field-head"><label>' + arg.label + "</label>" +
-    '<span class="kind">' + accepts.join(" / ") + "</span></div>";
+    '<span class="kind">' + accepts.join(" / ") + (many ? " · in order" : "") + "</span></div>";
+
+  // One wire is a dropdown. Several are a list, each with the way to remove it,
+  // and a dropdown at the end that adds the next one.
+  for (const id of many ? wired : []) {
+    const row = document.createElement("div");
+    row.className = "wired";
+    row.innerHTML = "<span>" + escapeHtml((feature(id) || {}).name || id) + "</span>";
+    const off = document.createElement("button");
+    off.type = "button";
+    off.textContent = "Remove";
+    off.addEventListener("click", () =>
+      edit({ op: "disconnect", id: entry.id, key: arg.key, from: id }));
+    row.appendChild(off);
+    field.appendChild(row);
+  }
 
   const select = document.createElement("select");
-  select.innerHTML = '<option value="">— not set —</option>' + options.map(option =>
-    '<option value="' + escapeAttr(option.id) + '"' + (option.id === current ? " selected" : "") +
-    ">" + escapeHtml(option.name) + "</option>").join("");
+  const current = many ? "" : wired[0] || "";
+  const free = many ? options.filter(o => !wired.includes(o.id)) : options;
+  select.innerHTML = '<option value="">' + (many ? "— add a section —" : "— not set —") +
+    "</option>" + free.map(option =>
+      '<option value="' + escapeAttr(option.id) + '"' + (option.id === current ? " selected" : "") +
+      ">" + escapeHtml(option.name) + "</option>").join("");
   select.addEventListener("change", () => edit(select.value
     ? { op: "connect", id: entry.id, key: arg.key, from: select.value }
     : { op: "disconnect", id: entry.id, key: arg.key }));
@@ -832,7 +1043,8 @@ function refField(entry, arg) {
   const path = document.createElement("div");
   path.className = "attr-path";
   path.innerHTML = (entry.labels[arg.key] || entry.entry) + " · <b>TDF_Reference</b>" +
-    (current ? " → " + (feature(current) || {}).entry : "") +
+    (wired.length && !many ? " → " + (feature(wired[0]) || {}).entry : "") +
+    (many ? " × " + wired.length : "") +
     (arg.consumes ? " · consumes the body" : "");
   field.appendChild(path);
   return field;
@@ -846,10 +1058,20 @@ function dependsOn(id, onId) {
     if (current === onId) return true;
     if (seen.has(current)) return false;
     seen.add(current);
-    const entry = feature(current);
-    return entry ? Object.values(entry.refs).some(target => target && walk(target)) : false;
+    return wiresOf(current).some(target => walk(target));
   };
   return walk(id);
+}
+
+//! Everything a feature reads from: reference arguments, sliders being driven,
+//! and every wire into an input that takes several.
+function wiresOf(id) {
+  const entry = feature(id);
+  if (!entry) return [];
+  const out = Object.values(entry.refs || {}).filter(Boolean);
+  for (const value of Object.values(entry.lists || {}))
+    if (Array.isArray(value)) out.push(...value.filter(Boolean));
+  return out;
 }
 
 /* ---------------------------------------------------------------------- log */

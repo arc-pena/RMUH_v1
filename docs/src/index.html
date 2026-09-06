@@ -27,6 +27,7 @@
   --view-bottom: #bcc7d1;
   --shape:       #93a2ad;
   --shape-edge:  #3d4c58;
+  --curve:       #12775b;
   --grid:        #c3ccd4;
   --grid-axis:   #a2aeb9;
   --shadow:      0 1px 2px rgba(16, 28, 38, .08), 0 10px 34px rgba(16, 28, 38, .12);
@@ -57,6 +58,7 @@
     --view-bottom: #0a0f14;
     --shape:       #7d8d99;
     --shape-edge:  #cfdbe4;
+    --curve:       #59d0a2;
     --grid:        #263440;
     --grid-axis:   #3a4c58;
     --shadow:      0 1px 2px rgba(0, 0, 0, .5), 0 12px 34px rgba(0, 0, 0, .42);
@@ -84,6 +86,7 @@
   --view-bottom: #0a0f14;
   --shape:       #7d8d99;
   --shape-edge:  #cfdbe4;
+  --curve:       #59d0a2;
   --grid:        #1d2831;
   --grid-axis:   #2c3b46;
   --shadow:      0 1px 2px rgba(0, 0, 0, .5), 0 12px 34px rgba(0, 0, 0, .42);
@@ -120,20 +123,25 @@ button, input, select { font: inherit; color: inherit; }
 }
 
 /* --------------------------------------------------------- the tool rail */
+/* Twenty-eight tools do not fit in one column on a laptop, so the rail runs
+   two wide and scrolls if it still has to. */
 #rail {
   left: var(--edge); top: 50%; transform: translateY(-50%);
   padding: 6px; display: flex; flex-direction: column; gap: 2px;
-  z-index: 3;
+  z-index: 3; max-height: calc(100vh - 120px); overflow-y: auto; scrollbar-width: thin;
 }
-#rail hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 6px; }
+#rail::-webkit-scrollbar { width: 5px; }
+#rail::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+#rail [data-group] { display: grid; grid-template-columns: repeat(2, 34px); gap: 2px; }
+#rail hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 4px; }
 .tool {
   position: relative;
-  width: 38px; height: 38px; padding: 0;
+  width: 34px; height: 34px; padding: 0;
   display: grid; place-items: center;
   border: 0; border-radius: 7px; background: none; color: var(--ink-2);
   cursor: pointer; transition: background .12s, color .12s;
 }
-.tool svg { width: 19px; height: 19px; }
+.tool svg { width: 18px; height: 18px; }
 .tool:hover:not(:disabled) { background: var(--panel-2); color: var(--ink); }
 .tool[data-armed="true"] { background: var(--accent); color: var(--accent-ink); }
 .tool:disabled { opacity: .3; cursor: default; }
@@ -168,8 +176,10 @@ button, input, select { font: inherit; color: inherit; }
 #link-label { font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); }
 
 /* ------------------------------------------------------------ the tree */
+/* The rail runs down the left edge, so the tree stands beside it rather than
+   under it. */
 #tree-panel {
-  left: var(--edge); top: calc(var(--edge) + 46px);
+  left: calc(var(--edge) + 90px); top: calc(var(--edge) + 46px);
   width: 232px; max-height: min(46vh, 460px);
   display: flex; flex-direction: column; z-index: 3;
 }
@@ -289,6 +299,45 @@ select {
   padding: 10px 12px 0; font-size: 9.5px; font-weight: 600;
   letter-spacing: .11em; text-transform: uppercase; color: var(--ink-3);
 }
+/* A slider being driven from somewhere else, and the way back off it. */
+.wired {
+  display: flex; align-items: center; gap: 8px; margin-top: 7px; padding: 5px 8px;
+  border-radius: 6px; background: var(--accent-soft); font-size: 11px; color: var(--ink-2);
+}
+.wired span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wired b { color: var(--ink); font-weight: 600; }
+.wired button {
+  flex: none; height: 20px; padding: 0 8px; border: 1px solid var(--line);
+  border-radius: 5px; background: var(--panel-solid); color: var(--ink-2);
+  font-size: 10.5px; cursor: pointer;
+}
+.wired button:hover { color: var(--bad); border-color: var(--bad); }
+select.drive { margin-top: 7px; }
+select.drive[hidden] { display: none; }
+/* A slider can be driven from a number, but most never are, so the way to do it
+   is one small button rather than a dropdown under every parameter. */
+.drive-toggle {
+  flex: none; width: 19px; height: 19px; margin-left: 2px; padding: 0;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 5px; background: none;
+  color: var(--ink-3); cursor: pointer;
+}
+.drive-toggle:hover, .drive-toggle[aria-expanded="true"] {
+  color: var(--accent); border-color: var(--accent); background: var(--accent-soft);
+}
+.drive-toggle svg { width: 12px; height: 12px; }
+input[type="range"]:disabled { opacity: .55; }
+input[type="number"]:disabled { opacity: .7; }
+
+/* What a feature computed, as opposed to what it built. */
+.readout {
+  margin-top: 6px; padding: 7px 9px; border-radius: 6px; max-height: 132px; overflow: auto;
+  background: var(--panel-2); border: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.55; color: var(--ink-2);
+  word-break: break-word;
+}
+
+select.many { margin-top: 4px; }
 .attr-path { margin-top: 6px; font-family: var(--mono); font-size: 9px; color: var(--ink-3); }
 .attr-path b { color: var(--ink-2); font-weight: 500; }
 .notice {
@@ -447,9 +496,9 @@ dialog .cli {
 dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: flex-end; }
 
 @media (max-width: 720px) {
-  #tree-panel { max-height: 34vh; width: 200px; }
+  #tree-panel { max-height: 34vh; width: 200px; left: calc(var(--edge) + 84px); }
   #def-panel { width: calc(100vw - var(--edge) * 2 - 62px); max-width: 288px; }
-  #rail { top: auto; bottom: 56px; transform: none; }
+  #rail { top: auto; bottom: 56px; transform: none; max-height: 52vh; }
 }
 @media (prefers-reduced-motion: reduce) { *, ::after { transition: none !important; animation: none !important; } }
 </style>
@@ -489,13 +538,7 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
   <ul id="tree"></ul>
 </aside>
 
-<nav class="float fades" id="rail">
-  <div id="tools-datum"></div>
-  <hr>
-  <div id="tools-body"></div>
-  <hr>
-  <div id="tools-op"></div>
-</nav>
+<nav class="float fades" id="rail"></nav>
 
 <aside class="float fades" id="def-panel" hidden>
   <div class="panel-head">
