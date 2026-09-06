@@ -1,0 +1,29 @@
+{
+  "format": "ocaf-parametric-model",
+  "version": 1,
+  "name": "Datums and Solids",
+  "units": "mm",
+  "features": [
+    { "id": "PT1", "type": "Point",  "name": "Origin",
+      "args": { "x": 0, "y": 0, "z": 0 } },
+    { "id": "PT2", "type": "Point",  "name": "Sphere Centre",
+      "args": { "x": 150, "y": 40, "z": 40 } },
+    { "id": "VZ",  "type": "Vector", "name": "Z Direction",
+      "args": { "dx": 0, "dy": 0, "dz": 1 } },
+    { "id": "VT",  "type": "Vector", "name": "Tilted Normal",
+      "args": { "dx": 0.35, "dy": 0, "dz": 1 } },
+    { "id": "PL1", "type": "Plane",  "name": "XY Plane",
+      "args": { "origin": { "ref": "PT1" }, "normal": { "ref": "VZ" }, "size": 240 } },
+    { "id": "PL2", "type": "Plane",  "name": "Tilted Plane",
+      "args": { "origin": { "ref": "PT1" }, "normal": { "ref": "VT" }, "size": 200 } },
+    { "id": "LN1", "type": "Line",   "name": "Axis",
+      "args": { "origin": { "ref": "PT1" }, "direction": { "ref": "VZ" }, "length": 180 } },
+    { "id": "CB1", "type": "Cube",   "name": "Tilted Block",
+      "args": { "origin": { "ref": "PT1" }, "plane": { "ref": "PL2" },
+                "dx": 90, "dy": 70, "dz": 50 } },
+    { "id": "FL1", "type": "Fillet", "name": "Rounded Block",
+      "args": { "body": { "ref": "CB1" }, "radius": 8 } },
+    { "id": "SP1", "type": "Sphere", "name": "Ball",
+      "args": { "center": { "ref": "PT2" }, "radius": 45 } }
+  ]
+}
