@@ -652,6 +652,23 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     for (const raw of module.params || []) {
       if (!raw || typeof raw.key !== "string" || !raw.key)
         throw new Error("every parameter needs a key");
+
+      // A parameter that names its alternatives is a switch, not a slider. The
+      // value stored is still a number - the index - so nothing below here
+      // needs to know the difference.
+      if (Array.isArray(raw.options)) {
+        if (raw.options.length < 2)
+          throw new Error("'" + raw.key + "' needs at least two options");
+        params.push({
+          key: raw.key,
+          label: typeof raw.label === "string" ? raw.label : raw.key,
+          options: raw.options.map(String),
+          def: Number.isFinite(raw.def) ? Math.round(raw.def) : 0,
+          min: 0, max: raw.options.length - 1, step: 1, unit: "",
+        });
+        continue;
+      }
+
       params.push({
         key: raw.key,
         label: typeof raw.label === "string" ? raw.label : raw.key,

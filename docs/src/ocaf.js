@@ -20,12 +20,13 @@
 //! driver surface itself never built, only the bands.
 export const HEYDAR = `({
   params: [
+    { key: "direction",  label: "Ribbon direction", options: ["U", "V"], def: 0 },
+    { key: "ribbons",    label: "Ribbons",         def: 22,   min: 3,   max: 60,   step: 1, unit: "" },
     { key: "length",     label: "Length",          def: 3600, min: 800, max: 9000, step: 100 },
     { key: "width",      label: "Width",           def: 1500, min: 400, max: 4000, step: 50 },
     { key: "height",     label: "Peak height",     def: 1000, min: 200, max: 3000, step: 25 },
-    { key: "bands",      label: "Bands",           def: 22,   min: 4,   max: 44,   step: 1, unit: "" },
-    { key: "solidRatio", label: "Band / gap",      def: 0.62, min: 0.15,max: 0.95, step: 0.01, unit: "" },
-    { key: "thickness",  label: "Band thickness",  def: 26,   min: 4,   max: 120,  step: 2 },
+    { key: "solidRatio", label: "Ribbon / gap",    def: 0.62, min: 0.15,max: 0.95, step: 0.01, unit: "" },
+    { key: "thickness",  label: "Ribbon thickness",def: 26,   min: 4,   max: 120,  step: 2 },
     { key: "stations",   label: "Loft stations",   def: 26,   min: 8,   max: 60,   step: 1, unit: "" },
     { key: "meander",    label: "Meander",         def: 240,  min: 0,   max: 1200, step: 20 },
     { key: "crownShift", label: "Crown shift",     def: 0.16, min: -0.6,max: 0.6,  step: 0.02, unit: "" },
@@ -114,38 +115,45 @@ export const HEYDAR = `({
       return unit(cross(du, dv));
     };
 
-    const bands = Math.max(2, Math.round(p.bands));
+    /* A ribbon is a strip of the surface: constant in one parameter, running
+       the length of the other. Which is which is the only thing the direction
+       switch changes - U lays them along the building, V wraps them over it. */
+    const acrossV = Math.round(p.direction) === 0;
+    const at = (run, band) => acrossV ? surface(run, band) : surface(band, run);
+    const normalOn = (run, band) => acrossV ? normalAt(run, band) : normalAt(band, run);
+
+    const count = Math.max(2, Math.round(p.ribbons));
     const stations = Math.max(4, Math.round(p.stations));
-    const pitch = 1 / bands;
+    const pitch = 1 / count;
     const solid = pitch * Math.max(0.05, Math.min(0.98, p.solidRatio));
     const half = p.thickness / 2;
 
-    const ribbons = [];
-    for (let band = 0; band < bands; band++) {
-      const v0 = band * pitch;
-      const v1 = v0 + solid;
+    const strips = [];
+    for (let i = 0; i < count; i++) {
+      const b0 = i * pitch;
+      const b1 = b0 + solid;
 
       // One closed section per station: the strip's width across the surface,
-      // given thickness along the normal. Lofting these down the length is the
-      // band.
+      // given thickness along the normal. Lofting these along the run is the
+      // ribbon.
       const profiles = [];
       for (let s = 0; s <= stations; s++) {
-        const u = s / stations;
-        const a = surface(u, v0);
-        const b = surface(u, v1);
-        const n = normalAt(u, (v0 + v1) / 2);
+        const run = s / stations;
+        const a = at(run, b0);
+        const c = at(run, b1);
+        const n = normalOn(run, (b0 + b1) / 2);
         const out = [n[0] * half, n[1] * half, n[2] * half];
         profiles.push(k.polyline([
           [a[0] + out[0], a[1] + out[1], a[2] + out[2]],
-          [b[0] + out[0], b[1] + out[1], b[2] + out[2]],
-          [b[0] - out[0], b[1] - out[1], b[2] - out[2]],
+          [c[0] + out[0], c[1] + out[1], c[2] + out[2]],
+          [c[0] - out[0], c[1] - out[1], c[2] - out[2]],
           [a[0] - out[0], a[1] - out[1], a[2] - out[2]],
         ], { closed: true }));
       }
-      ribbons.push(k.loft(profiles, { solid: true, ruled: true }));
+      strips.push(k.loft(profiles, { solid: true, ruled: true }));
     }
 
-    return k.compound(ribbons);
+    return k.compound(strips);
   }
 })`;
 

@@ -646,6 +646,31 @@ function realField(entry, arg) {
 function scriptField(entry, param) {
   const field = document.createElement("div");
   field.className = "field";
+
+  // A declared parameter that names its alternatives gets a switch, the same
+  // one a catalogue choice gets.
+  if (param.options) {
+    field.innerHTML = '<div class="field-head"><label>' + escapeHtml(param.label) + "</label></div>";
+    const group = document.createElement("div");
+    group.className = "segmented";
+    group.setAttribute("role", "group");
+    param.options.forEach((option, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = option;
+      button.setAttribute("aria-pressed", index === Math.round(param.value) ? "true" : "false");
+      button.addEventListener("click", () => pushParameter(entry.id, param.key, index, true));
+      group.appendChild(button);
+    });
+    field.appendChild(group);
+
+    const path = document.createElement("div");
+    path.className = "attr-path";
+    path.innerHTML = escapeHtml(param.key) + " · <b>TDataStd_Real</b> · declared by the script";
+    field.appendChild(path);
+    return field;
+  }
+
   field.innerHTML =
     '<div class="field-head"><label for="s-' + param.key + '">' + escapeHtml(param.label) + "</label>" +
     '<span class="value-box"><input type="number" id="sn-' + param.key + '" value="' +

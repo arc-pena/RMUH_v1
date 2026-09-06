@@ -17,8 +17,14 @@ check("it built", out.report.failed.length === 0, JSON.stringify(out.report.fail
 
 const entry = out.tree.features.find(f => f.id === id);
 check("it is its own feature type", entry.type === "Ribbon");
-check("nine parameters", entry.params.length === 9, String(entry.params.length));
-check("the bands are a parameter", entry.params.some(p => p.key === "bands"));
+check("ten parameters", entry.params.length === 10, String(entry.params.length));
+check("the ribbon count is a parameter", entry.params.some(p => p.key === "ribbons"));
+check("the direction is a switch, not a slider",
+  (entry.params.find(p => p.key === "direction") || {}).options?.join("/") === "U/V",
+  JSON.stringify((entry.params.find(p => p.key === "direction") || {}).options));
+check("the switch sits beside the count",
+  entry.params[0].key === "direction" && entry.params[1].key === "ribbons",
+  entry.params.slice(0, 2).map(p => p.key).join(","));
 
 const t1 = Date.now();
 let mesh = (await kernel.mesh([id])).features[0];
@@ -28,12 +34,26 @@ const at22 = mesh.triangles;
 
 console.log("changing the band count");
 const t2 = Date.now();
-out = await kernel.setParameter(id, "bands", 12);
+out = await kernel.setParameter(id, "ribbons", 12);
 console.log("  rebuilt in", Date.now() - t2, "ms");
 check("fewer bands rebuilds cleanly", out.report.failed.length === 0,
   JSON.stringify(out.report.failed.map(f => f.message)));
 mesh = (await kernel.mesh([id])).features[0];
 check("and makes less geometry", mesh.triangles < at22, at22 + " -> " + mesh.triangles);
+
+console.log("flipping the ribbons from U to V");
+const t3 = Date.now();
+out = await kernel.setParameter(id, "direction", 1);
+console.log("  flipped in", Date.now() - t3, "ms");
+check("V runs cleanly too", out.report.failed.length === 0,
+  JSON.stringify(out.report.failed.map(f => f.message)));
+const flipped = (await kernel.mesh([id])).features[0];
+check("and gives different geometry", flipped.triangles !== mesh.triangles,
+  mesh.triangles + " -> " + flipped.triangles);
+check("the switch remembers where it is",
+  out.tree.features.find(f => f.id === id).params.find(p => p.key === "direction").value === 1);
+out = await kernel.setParameter(id, "direction", 0);
+check("and flips back", out.report.failed.length === 0);
 
 out = await kernel.setParameter(id, "solidRatio", 0.9);
 check("a wider band still builds", out.report.failed.length === 0);
