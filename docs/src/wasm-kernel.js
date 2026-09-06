@@ -364,6 +364,17 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     return value;
   };
 
+  //! Moving a wire hands back a TopoDS_Shape, and the sweep builders want a
+  //! TopoDS_Wire, so the type has to be put back on.
+  function asWire(shape, what) {
+    if (!shape || typeof shape.ShapeType !== "function")
+      throw new Error("the " + what + " is not a shape");
+    if (shape.ShapeType() === oc.TopAbs_ShapeEnum.TopAbs_WIRE) return oc.TopoDS.Wire(shape);
+    if (shape.ShapeType() === oc.TopAbs_ShapeEnum.TopAbs_EDGE)
+      return new oc.BRepBuilderAPI_MakeWire(oc.TopoDS.Edge(shape)).Wire();
+    throw new Error("the " + what + " must be a wire");
+  }
+
   function shapeApi() {
     const api = {
       box(dx, dy, dz, opts) {
@@ -424,8 +435,134 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
           new oc.gp_Ax2(pnt(origin), dir(along), dir(across)), w, d, span).Shape();
       },
 
+      /* --------------------------------------------------------- curves
+
+         A profile is a closed wire; a spine is an open one. Sweeping one along
+         the other is how anything with a constant section gets made - a
+         handrail, a stringer, a thread.                                    */
+
+      //! A helix, built the way OpenCascade builds one: a straight line in the
+      //! (u,v) parameter space of a cylinder, which maps to a helix in space.
+      //! It starts at angle zero - at [radius, 0, 0] from the origin given -
+      //! and rises by `pitch` every turn.
+      helix(radius, pitch, turns, opts = {}) {
+        const r = positive(radius, "helix radius");
+        const p = asNumber(pitch, "helix pitch");
+        const n = positive(turns, "helix turns");
+
+        const surface = new oc.Geom_CylindricalSurface(
+          new oc.gp_Ax3(pnt(opts.at || [0, 0, 0]), dir(opts.axis || [0, 0, 1])), r);
+        // Advancing 2*pi in u while advancing `pitch` in v is one turn.
+        const line = new oc.Geom2d_Line(
+          new oc.gp_Ax2d(new oc.gp_Pnt2d(0, 0), new oc.gp_Dir2d(2 * Math.PI, p)));
+        const segment = new oc.Geom2d_TrimmedCurve(
+          line, 0, n * Math.hypot(2 * Math.PI, p), true, true);
+
+        const edge = new oc.BRepBuilderAPI_MakeEdge(segment, surface).Edge();
+        // The edge so far exists only on the surface; give it a 3D curve.
+        oc.BRepLib.BuildCurve3d(edge, 1e-5, oc.GeomAbs_Shape.GeomAbs_C1, 14, 0);
+        return new oc.BRepBuilderAPI_MakeWire(edge).Wire();
+      },
+
+      //! The tangent of that helix where it starts, which is where a profile
+      //! has to face to be swept along it.
+      helixTangent(radius, pitch) {
+        return V.norm([0, radius, pitch / (2 * Math.PI)]) || [0, 1, 0];
+      },
+
+      ellipse(major, minor, opts = {}) {
+        const a = positive(major, "ellipse major radius");
+        const b = positive(minor, "ellipse minor radius");
+        if (b > a) throw new Error("an ellipse's minor radius cannot exceed its major radius");
+        const edge = new oc.BRepBuilderAPI_MakeEdge(
+          new oc.gp_Elips(axisSystem(opts), a, b)).Edge();
+        return new oc.BRepBuilderAPI_MakeWire(edge).Wire();
+      },
+
+      circle(radius, opts = {}) {
+        const edge = new oc.BRepBuilderAPI_MakeEdge(
+          new oc.gp_Circ(axisSystem(opts), positive(radius, "circle radius"))).Edge();
+        return new oc.BRepBuilderAPI_MakeWire(edge).Wire();
+      },
+
+      //! A wire through a run of points, closed or not.
+      polyline(points, opts = {}) {
+        if (!Array.isArray(points) || points.length < 2)
+          throw new Error("a polyline needs at least two points");
+        const maker = new oc.BRepBuilderAPI_MakeWire();
+        const run = opts.closed ? points.concat([points[0]]) : points;
+        for (let i = 0; i < run.length - 1; i++) {
+          if (length([run[i + 1][0] - run[i][0], run[i + 1][1] - run[i][1],
+                      run[i + 1][2] - run[i][2]]) < CONFUSION) continue;
+          maker.Add(new oc.BRepBuilderAPI_MakeEdge(pnt(run[i]), pnt(run[i + 1])).Edge());
+        }
+        if (!maker.IsDone()) throw new Error("those points do not make a wire");
+        return maker.Wire();
+      },
+
+      //! A rectangle centred on `at`, lying in the plane normal to `axis`. Its
+      //! width runs along `xdir` and its height across it, so a stringer's
+      //! thickness and depth land on the axes you meant.
+      rectangle(width, height, opts = {}) {
+        const w = positive(width, "rectangle width") / 2;
+        const h = positive(height, "rectangle height") / 2;
+        const at = opts.at || [0, 0, 0];
+        const normal = V.norm(opts.axis || [0, 0, 1]) || [0, 0, 1];
+
+        const seed = opts.xdir || (Math.abs(normal[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1]);
+        // Only the part of xdir that lies in the plane can be the width axis.
+        const projected = V.add(seed, V.scale(normal, -(seed[0] * normal[0]
+          + seed[1] * normal[1] + seed[2] * normal[2])));
+        const x = V.norm(projected)
+          || V.norm(V.cross(normal, [1, 0, 0])) || V.norm(V.cross(normal, [0, 1, 0]));
+        const y = V.norm(V.cross(normal, x));
+
+        const corner = (sx, sy) => V.add(at, V.add(V.scale(x, sx * w), V.scale(y, sy * h)));
+        return api.polyline([corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)],
+                            { closed: true });
+      },
+
+      face(wire) { return new oc.BRepBuilderAPI_MakeFace(wire, true).Face(); },
+
+      //! Sweeps a profile along a spine. The default keeps the profile upright
+      //! the whole way - a handrail does not roll over as it turns - which is
+      //! what a constant binormal means; pass frenet: true to let it follow the
+      //! curve's own frame instead.
+      sweep(profile, spine, opts = {}) {
+        const shell = new oc.BRepOffsetAPI_MakePipeShell(asWire(spine, "spine"));
+        if (opts.frenet) shell.SetMode(true);
+        else shell.SetMode(dir(opts.up || [0, 0, 1]));
+        // Correction turns the profile to face along the spine; contact would
+        // also slide it onto the spine, which moves the section off centre.
+        shell.Add(asWire(profile, "profile"), opts.contact === true, opts.correct !== false);
+        shell.Build(new oc.Message_ProgressRange());
+        if (!shell.IsDone()) throw new Error("the sweep did not succeed");
+        if (opts.solid !== false && !shell.MakeSolid())
+          throw new Error("the sweep did not close into a solid");
+        return shell.Shape();
+      },
+
+      //! Lofts through a run of profiles - the way the neck thread of the
+      //! OpenCascade bottle is made.
+      loft(profiles, opts = {}) {
+        const list = [].concat(profiles).filter(Boolean);
+        if (list.length < 2) throw new Error("a loft needs at least two profiles");
+        const maker = new oc.BRepOffsetAPI_ThruSections(
+          opts.solid !== false, opts.ruled === true, 1e-6);
+        for (const wire of list) maker.AddWire(asWire(wire, "loft profile"));
+        maker.Build(new oc.Message_ProgressRange());
+        if (!maker.IsDone()) throw new Error("the loft did not succeed");
+        return maker.Shape();
+      },
+
+      prism(face, along) {
+        return new oc.BRepPrimAPI_MakePrism(face,
+          new oc.gp_Vec(along[0], along[1], along[2]), false, true).Shape();
+      },
+
       //! A round tube through a run of points: a cylinder per segment, a sphere
-      //! at every joint so the corners close.
+      //! at every joint so the corners close. For anything smooth, sweep a
+      //! circle along a proper spine instead.
       tube(points, radius) {
         const r = positive(radius, "tube radius");
         if (!Array.isArray(points) || points.length < 2)
@@ -574,10 +711,15 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     size ? Array.from(new Uint32Array(oc.wasmMemory.buffer, ptr, size)) : [];
 
   //! B-Rep in, vertex stream out - the whole contract with the viewer.
+  //! The enum arrives as "TopAbs_SOLID" and the native kernel reports "solid",
+  //! so a client reads one vocabulary whichever kernel answered.
+  const shapeKind = shape => String(shape.ShapeType()).replace(/^TopAbs_/, "").toLowerCase();
+
   function tessellate(shape, deflection) {
     const out = {};
     if (!shape || shape.IsNull()) return out;
 
+    out.shape = shapeKind(shape);
     const tolerance = deflection > 0 ? deflection : deflectionFor(shape);
     out.deflection = tolerance;
 

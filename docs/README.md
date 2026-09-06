@@ -41,11 +41,32 @@ the solver re-runs the feature when one moves.
 })
 ```
 
-`k` is a small surface over the kernel: `box`, `cylinder` (a pie slice when
-given an angle), `sphere`, `sector`, `beam`, `tube`, `move`, `rotate`, `cut`,
-`fuse`, `common`, `fillet`, `compound`. `move` and `rotate` go through
-`TopoDS_Shape::Moved`, so repeating a shape costs a location rather than a
-rebuild.
+`k` is a small surface over the kernel.
+
+| | |
+|---|---|
+| solids | `box`, `cylinder` (a pie slice when given an angle), `sphere`, `sector` |
+| curves | `helix`, `ellipse`, `circle`, `rectangle`, `polyline`, `face` |
+| sweeping | `sweep`, `loft`, `prism` |
+| placing | `move`, `rotate` |
+| combining | `cut`, `fuse`, `common`, `fillet`, `compound` |
+| chained | `beam`, `tube` |
+
+`move` and `rotate` go through `TopoDS_Shape::Moved`, so repeating a shape costs
+a location rather than a rebuild.
+
+`helix` builds its spine the way OpenCascade does: a straight line in the *(u,v)*
+parameter space of a `Geom_CylindricalSurface`, which maps to a helix in space,
+then `BRepLib::BuildCurve3d` to give the edge a 3D curve. `sweep` runs
+`BRepOffsetAPI_MakePipeShell` with a **constant binormal** rather than a Frenet
+frame — a handrail does not roll over as it turns — and `loft` is
+`BRepOffsetAPI_ThruSections`, the operation behind the neck thread of the
+OpenCascade bottle.
+
+Anything with a constant section is swept, not chained: the stair's handrail is
+one elliptical solid and its stringer one rectangular solid, each swept along
+its own helix. That is 13,836 triangles for the whole stair against 54,104 when
+the same two runs were built from segments.
 
 A new Script feature starts as a **spiral stair** — centre pole, treads,
 risers, stringer and handrail as separate solids, thirteen parameters on

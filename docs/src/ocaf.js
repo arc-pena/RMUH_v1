@@ -27,18 +27,21 @@ export const SPIRAL_STAIR = `({
     { key: "riserThickness",   label: "Riser thickness",   def: 18,  min: 0,   max: 40,   step: 1 },
     { key: "poleRadius",       label: "Centre pole radius",def: 75,  min: 30,  max: 250,  step: 5 },
     { key: "stringerDepth",    label: "Stringer depth",    def: 180, min: 0,   max: 400,  step: 5 },
-    { key: "stringerThickness",label: "Stringer thickness",def: 12,  min: 4,   max: 40,   step: 1 },
+    { key: "stringerThickness",label: "Stringer thickness",def: 14,  min: 4,   max: 40,   step: 1 },
     { key: "railHeight",       label: "Handrail height",   def: 900, min: 700, max: 1200, step: 10 },
-    { key: "railRadius",       label: "Handrail radius",   def: 22,  min: 8,   max: 45,   step: 1 },
+    { key: "railWidth",        label: "Handrail width",    def: 58,  min: 20,  max: 110,  step: 2 },
+    { key: "railThickness",    label: "Handrail thickness",def: 34,  min: 12,  max: 90,   step: 2 },
   ],
 
   build(p, k) {
     const parts = [];
-    const step = p.sweep / p.steps;          // degrees of turn per tread
-    const top  = (p.steps + 1) * p.rise;
+    const step  = p.sweep / p.steps;        // degrees of turn per tread
+    const turns = p.sweep / 360;
+    const climb = p.steps * p.rise;         // height gained over the whole run
+    const pitch = climb / turns;            // rise per full turn, for the helices
 
     // Centre pole.
-    parts.push(k.cylinder(p.poleRadius, top));
+    parts.push(k.cylinder(p.poleRadius, climb + p.rise));
 
     // Tread and riser are modelled once. Every step is that same shape at a
     // different location, so the kernel builds and meshes them only once.
@@ -54,31 +57,31 @@ export const SPIRAL_STAIR = `({
       if (riser) parts.push(k.move(k.rotate(riser, angle), [0, 0, i * p.rise]));
     }
 
-    // A helix, sampled finely enough that straight segments read as a curve.
-    const helix = (radius, zAt, perStep) => {
-      const points = [];
-      const n = p.steps * perStep;
-      for (let i = 0; i <= n; i++) {
-        const t = i / perStep;
-        const a = t * step * Math.PI / 180;
-        points.push([radius * Math.cos(a), radius * Math.sin(a), zAt(t)]);
-      }
-      return points;
+    // A section swept along a helix: one continuous solid, not a chain of
+    // segments. The helix starts at [radius, 0, 0], so that is where the
+    // profile is placed, facing along the tangent there; [1, 0, 0] is the
+    // radial direction at that point, which is what puts a rail's width across
+    // the stair rather than up it.
+    const swept = (radius, z, profileAt) => {
+      const spine = k.move(k.helix(radius, pitch, turns), [0, 0, z]);
+      const tangent = k.helixTangent(radius, pitch);
+      return k.sweep(profileAt([radius, 0, z], tangent), spine);
     };
 
-    // Stringer: a rectangular band under the outer edge of the treads.
-    if (p.stringerDepth > 0) {
-      const line = helix(p.outerRadius - p.stringerThickness / 2,
-                         t => (t + 1) * p.rise - p.treadThickness - p.stringerDepth / 2, 4);
-      for (let i = 0; i < line.length - 1; i++)
-        parts.push(k.beam(line[i], line[i + 1], p.stringerThickness, p.stringerDepth));
-    }
+    // Stringer: a rectangular section under the outer edge of the treads.
+    if (p.stringerDepth > 0)
+      parts.push(swept(p.outerRadius - p.stringerThickness / 2,
+        p.rise - p.treadThickness - p.stringerDepth / 2,
+        (at, tangent) => k.rectangle(p.stringerThickness, p.stringerDepth,
+                                     { at, axis: tangent, xdir: [1, 0, 0] })));
 
-    // Handrail: a round tube following the same helix, a rail height above the
+    // Handrail: an elliptical section - wider than it is deep, the way a rail
+    // sits in the hand - swept along the same helix a rail height above the
     // tread noses.
-    parts.push(k.tube(
-      helix(p.outerRadius - p.railRadius - 40, t => (t + 1) * p.rise + p.railHeight, 4),
-      p.railRadius));
+    parts.push(swept(p.outerRadius - p.railWidth / 2 - 30,
+      p.rise + p.railHeight,
+      (at, tangent) => k.ellipse(p.railWidth / 2, p.railThickness / 2,
+                                 { at, axis: tangent, xdir: [1, 0, 0] })));
 
     return k.compound(parts);
   }

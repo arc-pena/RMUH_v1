@@ -15,10 +15,11 @@ out = await kernel.addFeature("Script", {});
 const id = out.id;
 check("it built", out.report.failed.length === 0, JSON.stringify(out.report.failed.map(f => f.message)));
 const entry = out.tree.features.find(f => f.id === id);
-check("the script declared its parameters", entry.params.length === 13, String(entry.params.length));
+check("the script declared its parameters", entry.params.length === 14, String(entry.params.length));
 check("every part is a slider",
   ["steps","rise","sweep","innerRadius","outerRadius","treadThickness","riserThickness",
-   "poleRadius","stringerDepth","railHeight","railRadius"].every(k => entry.params.some(p => p.key === k)));
+   "poleRadius","stringerDepth","stringerThickness","railHeight","railWidth","railThickness"]
+    .every(k => entry.params.some(p => p.key === k)));
 check("the source is on the feature", entry.code.includes("build(p, k)"));
 
 let mesh = (await kernel.mesh([id])).features[0];
@@ -40,6 +41,30 @@ check("and back on", (await kernel.mesh([id])).features[0].triangles > noRisers)
 out = await kernel.setParameter(id, "sweep", 540);
 check("a longer sweep still builds", out.report.failed.length === 0,
   JSON.stringify(out.report.failed.map(f => f.message)));
+
+console.log("2b. the rail and the stringer are swept, not chained");
+{
+  // A sweep is one solid per run. A chain of segments would be many, and its
+  // triangle count would climb with the number of joints rather than the length.
+  out = await kernel.setCode(id, "code", `({
+    params: [{ key: "turns", label: "Turns", def: 2, min: 1, max: 6, step: 1 }],
+    build(p, k) {
+      const spine = k.helix(300, 400, p.turns);
+      const t = k.helixTangent(300, 400);
+      return k.sweep(k.ellipse(30, 15, { at: [300, 0, 0], axis: t, xdir: [0, 0, 1] }), spine);
+    }
+  })`);
+  check("a swept ellipse builds", out.report.failed.length === 0,
+    JSON.stringify(out.report.failed.map(f => f.message)));
+  const one = (await kernel.mesh([id])).features[0];
+  check("it is a single solid", one.shape === "solid", String(one.shape));
+  await kernel.setParameter(id, "turns", 4);
+  const two = (await kernel.mesh([id])).features[0];
+  check("twice the run is about twice the mesh, not twice the joints",
+    two.triangles > one.triangles * 1.6 && two.triangles < one.triangles * 2.4,
+    one.triangles + " -> " + two.triangles);
+}
+await kernel.setCode(id, "code", (await import("../src/ocaf.js")).SPIRAL_STAIR);
 
 console.log("3. a stair is a body like any other");
 out = await kernel.addFeature("Array", { source: id });
