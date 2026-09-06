@@ -21,8 +21,9 @@ inline constexpr int RESULT_TAG = 100;
 
 enum class ArgKind
 {
-  Real, //!< a TDataStd_Real - the thing a slider drives
-  Ref   //!< a TDF_Reference to another feature label
+  Real,  //!< a TDataStd_Real - the thing a slider drives
+  Ref,   //!< a TDF_Reference to another feature label
+  Choice //!< a TDataStd_Integer indexing a fixed set of alternatives
 };
 
 //! What a feature contributes to the model, which decides how the tree draws it
@@ -46,6 +47,15 @@ struct ArgSpec
   std::string unit;         //!< "mm", "" for pure numbers
   std::string accepts;      //!< Ref only: comma separated feature types
   bool        consumes = false; //!< Ref only: taking this argument hides the source body
+
+  std::vector<std::string> options; //!< Choice only, in index order
+
+  //! Set when this argument belongs to one alternative of a Choice: it is shown,
+  //! and read, only while that choice holds. It is how one feature carries two
+  //! patterns without becoming two features.
+  std::string whenKey;
+  int         whenEquals = 0;
+  bool        HasCondition() const { return !whenKey.empty(); }
 };
 
 struct TypeSpec

@@ -44,6 +44,13 @@ TDF_Label ArgLabel(const TDF_Label& feature, const std::string& key, bool create
 
 double    Real(const TDF_Label& feature, const std::string& key, double fallback = 0.0);
 void      SetReal(const TDF_Label& feature, const std::string& key, double value);
+int       Choice(const TDF_Label& feature, const std::string& key, int fallback = 0);
+void      SetChoice(const TDF_Label& feature, const std::string& key, int index);
+
+//! True when an argument's condition holds. Arguments belonging to the other
+//! alternative of a choice are kept but not read, so switching back restores
+//! the values that were there.
+bool Applies(const TDF_Label& feature, const ArgSpec& arg);
 TDF_Label Reference(const TDF_Label& feature, const std::string& key);
 void      SetReference(const TDF_Label& feature, const std::string& key, const TDF_Label& target);
 

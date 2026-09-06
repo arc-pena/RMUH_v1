@@ -4,6 +4,16 @@
 #include <ocafcad/Schema.hxx>
 
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
+#include <BRep_Builder.hxx>
+#include <TopLoc_Location.hxx>
+#include <TopoDS_Compound.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Trsf.hxx>
+#include <cmath>
+#include <algorithm>
+#include <vector>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
@@ -258,6 +268,24 @@ protected:
   }
 };
 
+//! The smallest extent of any single solid in a shape. A fillet radius has to
+//! fit the body it rounds, not the bounding box of an array of them.
+double SmallestSolidExtent(const TopoDS_Shape& shape)
+{
+  double smallest = RealLast();
+  for (TopExp_Explorer exp(shape, TopAbs_SOLID); exp.More(); exp.Next())
+  {
+    Bnd_Box box;
+    BRepBndLib::Add(exp.Current(), box);
+    if (box.IsVoid()) continue;
+    double xmin, ymin, zmin, xmax, ymax, zmax;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    smallest = (std::min)(smallest,
+      (std::min)(xmax - xmin, (std::min)(ymax - ymin, zmax - zmin)));
+  }
+  return smallest;
+}
+
 class FilletDriver : public FeatureDriver
 {
 protected:
@@ -275,6 +303,19 @@ protected:
     if (radius <= Precision::Confusion())
     {
       error = "radius must be positive";
+      return 2;
+    }
+
+    // OpenCascade cannot be trusted to reject an over-sized radius: on an 80 mm
+    // cube it accepts 39.9, rejects 40, then accepts 40.6 and 60 again. So the
+    // radius is judged against the geometry before the kernel is asked.
+    const double smallest = SmallestSolidExtent(body);
+    if (smallest < RealLast() && radius >= smallest / 2.0)
+    {
+      TCollection_AsciiString limit(smallest / 2.0);
+      TCollection_AsciiString across(smallest);
+      error = TCollection_AsciiString("radius does not fit: the body is only ") + across
+            + " mm across, so the limit is " + limit + " mm";
       return 2;
     }
 
@@ -315,6 +356,94 @@ protected:
   }
 };
 
+//! Beyond this the kernel is asked to mesh more than a viewer can carry.
+constexpr int INSTANCE_LIMIT = 1000;
+
+class ArrayDriver : public FeatureDriver
+{
+protected:
+  //! Every placement of the arrayed feature. The first is the identity, so the
+  //! source stays exactly where it was drawn.
+  static std::vector<gp_Trsf> Placements(const TDF_Label& f)
+  {
+    std::vector<gp_Trsf> placements;
+
+    if (Feature::Choice(f, "mode") == 0)
+    {
+      const int nx = (std::max)(1, (int)std::lround(Feature::Real(f, "countX", 3)));
+      const int ny = (std::max)(1, (int)std::lround(Feature::Real(f, "countY", 1)));
+      const int nz = (std::max)(1, (int)std::lround(Feature::Real(f, "countZ", 1)));
+      const double sx = Feature::Real(f, "spacingX", 120);
+      const double sy = Feature::Real(f, "spacingY", 120);
+      const double sz = Feature::Real(f, "spacingZ", 120);
+
+      for (int i = 0; i < nx; ++i)
+        for (int j = 0; j < ny; ++j)
+          for (int k = 0; k < nz; ++k)
+          {
+            gp_Trsf trsf;
+            if (i || j || k) trsf.SetTranslation(gp_Vec(i * sx, j * sy, k * sz));
+            placements.push_back(trsf);
+          }
+      return placements;
+    }
+
+    const int    count = (std::max)(1, (int)std::lround(Feature::Real(f, "count", 6)));
+    const double sweep = Feature::Real(f, "angle", 360);
+
+    gp_Pnt centre(0, 0, 0);
+    Feature::PointOf(Feature::Reference(f, "center"), centre);
+    gp_Dir direction(0, 0, 1);
+    Feature::DirOf(Feature::Reference(f, "axis"), direction);
+    const gp_Ax1 axis(centre, direction);
+
+    // A full turn closes on itself, so the last copy would land on the first.
+    const bool   closed = std::abs(std::abs(sweep) - 360.0) < 1e-6;
+    const double stride = count < 2 ? 0.0 : (closed ? sweep / count : sweep / (count - 1));
+    for (int i = 0; i < count; ++i)
+    {
+      gp_Trsf trsf;
+      if (i) trsf.SetRotation(axis, stride * i * M_PI / 180.0);
+      placements.push_back(trsf);
+    }
+    return placements;
+  }
+
+  Standard_Integer Build(const TDF_Label& f, TopoDS_Shape& shape, TCollection_AsciiString& error) const override
+  {
+    const TDF_Label    sourceFeature = Feature::Reference(f, "source");
+    const TopoDS_Shape source        = Feature::Shape(sourceFeature);
+    if (source.IsNull())
+    {
+      error = "the feature to array has not been built";
+      return 2;
+    }
+
+    const std::vector<gp_Trsf> placements = Placements(f);
+    if ((int)placements.size() > INSTANCE_LIMIT)
+    {
+      error = TCollection_AsciiString((int)placements.size())
+            + " copies is more than this kernel will build at once (limit "
+            + TCollection_AsciiString(INSTANCE_LIMIT) + ")";
+      return 2;
+    }
+
+    BRep_Builder    builder;
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+
+    // An instance is the same shape at a different location, not a copy of it:
+    // TopoDS_Shape::Moved swaps the TopLoc_Location and leaves the underlying
+    // TShape shared, so the B-Rep is built once and triangulated once however
+    // many instances there are.
+    for (const gp_Trsf& trsf : placements)
+      builder.Add(compound, source.Moved(TopLoc_Location(trsf)));
+
+    shape = compound;
+    return 0;
+  }
+};
+
 Handle(FeatureDriver) MakeDriver(const std::string& type)
 {
   if (type == "Point")  return new PointDriver();
@@ -324,6 +453,7 @@ Handle(FeatureDriver) MakeDriver(const std::string& type)
   if (type == "Cube")   return new CubeDriver();
   if (type == "Sphere") return new SphereDriver();
   if (type == "Fillet") return new FilletDriver();
+  if (type == "Array")  return new ArrayDriver();
   return Handle(FeatureDriver)();
 }
 

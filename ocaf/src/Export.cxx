@@ -254,6 +254,10 @@ Json TreeToJson(const Document& doc)
       {
         values.Set(arg.key, Json::Num(Feature::Real(f, arg.key, arg.def)));
       }
+      else if (arg.kind == ArgKind::Choice)
+      {
+        values.Set(arg.key, Json::Num(Feature::Choice(f, arg.key, (int)arg.def)));
+      }
       else
       {
         const TDF_Label source = Feature::Reference(f, arg.key);
@@ -483,6 +487,13 @@ Json SchemaToJson()
       a.Set("key", Json::Str(arg.key));
       a.Set("label", Json::Str(arg.label));
       a.Set("tag", Json::Num(tag++));
+      if (arg.HasCondition())
+      {
+        Json condition = Json::MakeObject();
+        condition.Set("key", Json::Str(arg.whenKey));
+        condition.Set("equals", Json::Num(arg.whenEquals));
+        a.Set("showWhen", condition);
+      }
       if (arg.kind == ArgKind::Real)
       {
         a.Set("kind", Json::Str("real"));
@@ -491,6 +502,14 @@ Json SchemaToJson()
         a.Set("max", Json::Num(arg.max));
         a.Set("step", Json::Num(arg.step));
         a.Set("unit", Json::Str(arg.unit));
+      }
+      else if (arg.kind == ArgKind::Choice)
+      {
+        a.Set("kind", Json::Str("choice"));
+        a.Set("default", Json::Num(arg.def));
+        Json options = Json::MakeArray();
+        for (const std::string& option : arg.options) options.Push(Json::Str(option));
+        a.Set("options", options);
       }
       else
       {

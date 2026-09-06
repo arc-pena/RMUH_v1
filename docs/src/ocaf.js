@@ -16,6 +16,12 @@ const real = (key, label, def, min, max, step, unit = "mm") =>
   ({ key, label, kind: "real", def, min, max, step, unit });
 const ref = (key, label, accepts, consumes = false) =>
   ({ key, label, kind: "ref", accepts, consumes });
+//! A fixed set of alternatives, held as a TDataStd_Integer index.
+const choice = (key, label, options, def = 0) =>
+  ({ key, label, kind: "choice", options, def });
+//! Only shown, and only read, when another argument has this value. It is how
+//! one feature carries two patterns without two features in the tree.
+const when = (arg, key, equals) => ({ ...arg, showWhen: { key, equals } });
 
 //! One table drives the toolbar, the label layout (an argument's index here is
 //! its OCAF child tag), the sliders and the neutral file format. It mirrors
@@ -45,9 +51,24 @@ export const CATALOGUE = [
   { type: "Sphere", guid: "9a1b2c30-0011-4c00-9e00-caf000000011", category: "body",
     summary: "A sphere centred on a point.",
     args: [ref("center", "Centre point", ["Point"]), real("radius", "Radius", 50, 1, 400, 1)] },
+  { type: "Array", guid: "9a1b2c30-0021-4c00-9e00-caf000000021", category: "operation",
+    summary: "Repeats a body in a grid or around an axis. One feature in the tree, "
+           + "however many copies it makes.",
+    args: [ref("source", "Feature", ["Cube", "Sphere", "Fillet", "Array"], true),
+           choice("mode", "Pattern", ["Rectangular", "Polar"], 0),
+           when(real("countX", "Count X", 3, 1, 40, 1, ""), "mode", 0),
+           when(real("spacingX", "Spacing X", 120, -600, 600, 1), "mode", 0),
+           when(real("countY", "Count Y", 1, 1, 40, 1, ""), "mode", 0),
+           when(real("spacingY", "Spacing Y", 120, -600, 600, 1), "mode", 0),
+           when(real("countZ", "Count Z", 1, 1, 20, 1, ""), "mode", 0),
+           when(real("spacingZ", "Spacing Z", 120, -600, 600, 1), "mode", 0),
+           when(ref("center", "Centre", ["Point"]), "mode", 1),
+           when(ref("axis", "Axis", ["Vector"]), "mode", 1),
+           when(real("count", "Count", 6, 1, 120, 1, ""), "mode", 1),
+           when(real("angle", "Sweep", 360, -360, 360, 5, "°"), "mode", 1)] },
   { type: "Fillet", guid: "9a1b2c30-0020-4c00-9e00-caf000000020", category: "operation",
     summary: "Rounds every edge of a body. The body stays in the tree but leaves the 3D view.",
-    args: [ref("body", "Body", ["Cube", "Sphere", "Fillet"], true),
+    args: [ref("body", "Body", ["Cube", "Sphere", "Fillet", "Array"], true),
            real("radius", "Radius", 10, 0.1, 200, 0.5)] },
 ];
 
@@ -113,6 +134,19 @@ export const F = {
     return label && typeof label.attr.TDataStd_Real === "number" ? label.attr.TDataStd_Real : fallback;
   },
   setReal(f, key, value) { F.argLabel(f, key, true).attr.TDataStd_Real = value; },
+  choice(f, key, fallback = 0) {
+    const label = F.argLabel(f, key);
+    return label && typeof label.attr.TDataStd_Integer === "number"
+      ? label.attr.TDataStd_Integer : fallback;
+  },
+  setChoice(f, key, index) { F.argLabel(f, key, true).attr.TDataStd_Integer = index; },
+
+  //! An argument is live only when its condition holds; the rest are carried
+  //! but not read, so switching a pattern back keeps the values you had.
+  applies(f, arg) {
+    if (!arg.showWhen) return true;
+    return F.choice(f, arg.showWhen.key, 0) === arg.showWhen.equals;
+  },
   reference(f, key) {
     const label = F.argLabel(f, key);
     return label ? label.attr.TDF_Reference || null : null;
@@ -254,6 +288,7 @@ export class Doc {
     for (const arg of spec.args) {
       const label = F.argLabel(f, arg.key, true);
       if (arg.kind === "real") label.attr.TDataStd_Real = arg.def;
+      else if (arg.kind === "choice") label.attr.TDataStd_Integer = arg.def;
     }
     F.resultLabel(f, true);
     this.log.touch(f);
@@ -276,15 +311,22 @@ export class Doc {
 
   setParameter(f, key, value) {
     const spec = F.spec(f);
-    const arg = spec && spec.args.find(a => a.key === key && a.kind === "real");
-    if (!arg) throw new Error(F.name(f) + " has no numeric parameter '" + key + "'");
+    const arg = spec && spec.args.find(a => a.key === key && a.kind !== "ref");
+    if (!arg) throw new Error(F.name(f) + " has no parameter '" + key + "'");
     if (!Number.isFinite(value)) throw new Error("'" + key + "' must be a number");
-    // Out-of-range values reach the kernel as nonsense; stop them at the door.
-    const clamped = Math.min(arg.max, Math.max(arg.min, value));
+
     const label = F.argLabel(f, key, true);
-    label.attr.TDataStd_Real = clamped;
+    let stored;
+    if (arg.kind === "choice") {
+      stored = Math.min(arg.options.length - 1, Math.max(0, Math.round(value)));
+      label.attr.TDataStd_Integer = stored;
+    } else {
+      // Out-of-range values reach the kernel as nonsense; stop them at the door.
+      stored = Math.min(arg.max, Math.max(arg.min, value));
+      label.attr.TDataStd_Real = stored;
+    }
     this.log.touch(label);
-    return clamped;
+    return stored;
   }
 
   setReference(f, key, target) {
@@ -393,6 +435,7 @@ export class Doc {
           const label = F.argLabel(f, arg.key, true);
           labels[arg.key] = label.entry;
           if (arg.kind === "real") values[arg.key] = F.real(f, arg.key, arg.def);
+          else if (arg.kind === "choice") values[arg.key] = F.choice(f, arg.key, arg.def);
           else {
             const target = F.reference(f, arg.key);
             refs[arg.key] = target ? F.id(target) : null;
@@ -419,6 +462,7 @@ export class Doc {
         const args = {};
         for (const arg of spec.args) {
           if (arg.kind === "real") args[arg.key] = round(F.real(f, arg.key, arg.def));
+          else if (arg.kind === "choice") args[arg.key] = arg.options[F.choice(f, arg.key, arg.def)];
           else {
             const target = F.reference(f, arg.key);
             if (target) args[arg.key] = { ref: F.id(target) };
@@ -442,6 +486,12 @@ export class Doc {
         if (arg.kind === "real") {
           if (typeof value !== "number") throw new Error(key + " of " + entry.id + " must be a number");
           F.setReal(f, key, value);
+        } else if (arg.kind === "choice") {
+          // Written as the option's name, read back as either name or index.
+          const index = typeof value === "number" ? value : arg.options.indexOf(value);
+          if (index < 0 || index >= arg.options.length)
+            throw new Error(key + " of " + entry.id + " must be one of " + arg.options.join(", "));
+          F.setChoice(f, key, index);
         } else {
           const target = doc.find(typeof value === "string" ? value : value.ref);
           if (!target) throw new Error(entry.id + "." + key + " references an unknown feature");
@@ -462,11 +512,16 @@ export function schemaJson() {
     format: "ocaf-feature-catalogue", version: 1,
     types: CATALOGUE.map(spec => ({
       type: spec.type, guid: spec.guid, category: spec.category, summary: spec.summary,
-      args: spec.args.map((arg, index) => arg.kind === "real"
-        ? { key: arg.key, label: arg.label, tag: FIRST_ARG_TAG + index, kind: "real",
-            default: arg.def, min: arg.min, max: arg.max, step: arg.step, unit: arg.unit }
-        : { key: arg.key, label: arg.label, tag: FIRST_ARG_TAG + index, kind: "ref",
-            accepts: arg.accepts.join(","), consumes: arg.consumes }),
+      args: spec.args.map((arg, index) => {
+        const base = { key: arg.key, label: arg.label, tag: FIRST_ARG_TAG + index, kind: arg.kind };
+        if (arg.showWhen) base.showWhen = arg.showWhen;
+        if (arg.kind === "real")
+          return { ...base, default: arg.def, min: arg.min, max: arg.max,
+                   step: arg.step, unit: arg.unit };
+        if (arg.kind === "choice")
+          return { ...base, default: arg.def, options: arg.options };
+        return { ...base, accepts: arg.accepts.join(","), consumes: arg.consumes };
+      }),
     })),
   };
 }

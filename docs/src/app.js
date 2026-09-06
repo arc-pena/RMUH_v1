@@ -334,6 +334,7 @@ const ICONS = {
   Plane: '<path d="M1.5 10.5L6 4.5h8.5L10 10.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
   Cube: '<path d="M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M2.4 4.6L8 7.6l5.6-3M8 7.6v6.8" stroke="currentColor" stroke-width="1.1"/>',
   Sphere: '<circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.3"/><ellipse cx="8" cy="8" rx="2.7" ry="6.3" fill="none" stroke="currentColor" stroke-width="1"/>',
+  Array: '<rect x="1.6" y="1.6" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9.4" y="1.6" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="1.6" y="9.4" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9.4" y="9.4" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".45"/>',
   Fillet: '<path d="M2.5 13.5V8a5.5 5.5 0 015.5-5.5h5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 2.5h5.5M2.5 2.5v5.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2"/>',
   part: '<path d="M2.5 4.2L8 1.5l5.5 2.7v7.6L8 14.5l-5.5-2.7z" fill="none" stroke="currentColor" stroke-width="1.2"/>',
   eye: '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/>',
@@ -499,8 +500,12 @@ function buildPanel() {
   host.appendChild(slot);
   refreshPanelNotice();
 
-  for (const arg of spec.args)
-    host.appendChild(arg.kind === "real" ? realField(entry, arg) : refField(entry, arg));
+  for (const arg of spec.args) {
+    if (!argApplies(entry, arg)) continue;
+    host.appendChild(arg.kind === "real" ? realField(entry, arg)
+                   : arg.kind === "choice" ? choiceField(entry, arg)
+                   : refField(entry, arg));
+  }
 
   const actions = document.createElement("div");
   actions.className = "actions";
@@ -532,6 +537,40 @@ function refreshPanelNotice() {
   else if (entry.consumedBy)
     slot.appendChild(notice("Consumed by " + (feature(entry.consumedBy) || {}).name +
       ". It stays in the tree; its result is replaced in the 3D view.", "info"));
+}
+
+//! An argument governed by a choice is shown only for the alternative it
+//! belongs to, so one feature can carry two patterns without two dialogs.
+function argApplies(entry, arg) {
+  return !arg.showWhen || entry.values[arg.showWhen.key] === arg.showWhen.equals;
+}
+
+function choiceField(entry, arg) {
+  const field = document.createElement("div");
+  field.className = "field";
+  const current = entry.values[arg.key];
+
+  field.innerHTML = '<div class="field-head"><label>' + arg.label + "</label></div>";
+  const group = document.createElement("div");
+  group.className = "segmented";
+  group.setAttribute("role", "group");
+  arg.options.forEach((option, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = option;
+    button.setAttribute("aria-pressed", index === current ? "true" : "false");
+    // Switching the pattern changes which arguments apply, so the panel is
+    // rebuilt rather than refreshed in place.
+    button.addEventListener("click", () => pushParameter(entry.id, arg.key, index, true));
+    group.appendChild(button);
+  });
+  field.appendChild(group);
+
+  const path = document.createElement("div");
+  path.className = "attr-path";
+  path.innerHTML = (entry.labels[arg.key] || entry.entry) + " · <b>TDataStd_Integer</b>";
+  field.appendChild(path);
+  return field;
 }
 
 function notice(text, kind) {
@@ -658,15 +697,16 @@ let inFlight = false, pendingParam = null;
 
 //! A slider fires far faster than the kernel can rebuild, so the newest value
 //! wins and everything in between is dropped.
-async function pushParameter(id, key, value) {
-  pendingParam = { id, key, value };
+async function pushParameter(id, key, value, rebuildPanel = false) {
+  pendingParam = { id, key, value, rebuildPanel };
   if (inFlight || !ready) return;
   inFlight = true;
   try {
     while (pendingParam) {
       const next = pendingParam;
       pendingParam = null;
-      applyState(await kernel.setParameter(next.id, next.key, next.value), { keepPanel: true });
+      applyState(await kernel.setParameter(next.id, next.key, next.value),
+                 { keepPanel: !next.rebuildPanel });
     }
   } catch (err) { showError(err.message); }
   finally { inFlight = false; }

@@ -77,6 +77,26 @@ void SetReal(const TDF_Label& feature, const std::string& key, double value)
   if (!arg.IsNull()) TDataStd_Real::Set(arg, value);
 }
 
+int Choice(const TDF_Label& feature, const std::string& key, int fallback)
+{
+  TDF_Label                arg = ArgLabel(feature, key);
+  Handle(TDataStd_Integer) value;
+  if (!arg.IsNull() && arg.FindAttribute(TDataStd_Integer::GetID(), value)) return value->Get();
+  return fallback;
+}
+
+void SetChoice(const TDF_Label& feature, const std::string& key, int index)
+{
+  TDF_Label arg = ArgLabel(feature, key, /*create*/ true);
+  if (!arg.IsNull()) TDataStd_Integer::Set(arg, index);
+}
+
+bool Applies(const TDF_Label& feature, const ArgSpec& arg)
+{
+  if (!arg.HasCondition()) return true;
+  return Choice(feature, arg.whenKey, 0) == arg.whenEquals;
+}
+
 TDF_Label Reference(const TDF_Label& feature, const std::string& key)
 {
   TDF_Label arg = ArgLabel(feature, key);

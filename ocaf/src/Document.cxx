@@ -22,6 +22,7 @@
 #include <XmlDrivers.hxx>
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 #include <fstream>
 #include <sstream>
@@ -187,6 +188,7 @@ TDF_Label Document::AddFeature(const std::string& type,
   {
     TDF_Label argLabel = Feature::ArgLabel(feature, arg.key, /*create*/ true);
     if (arg.kind == ArgKind::Real) TDataStd_Real::Set(argLabel, arg.def);
+    else if (arg.kind == ArgKind::Choice) TDataStd_Integer::Set(argLabel, (int)arg.def);
   }
   Feature::ResultLabel(feature, /*create*/ true);
 
@@ -207,15 +209,26 @@ bool Document::SetParameter(const std::string& featureRef,
   }
   const TypeSpec* spec = Feature::Type(feature);
   const ArgSpec*  arg  = spec ? spec->Arg(key) : nullptr;
-  if (!arg || arg->kind != ArgKind::Real)
+  if (!arg || arg->kind == ArgKind::Ref)
   {
-    error = "'" + featureRef + "' has no numeric parameter '" + key + "'";
+    error = "'" + featureRef + "' has no parameter '" + key + "'";
     return false;
   }
 
   myDoc->NewCommand(); // one undoable step per edit
   TDF_Label argLabel = Feature::ArgLabel(feature, key, /*create*/ true);
-  TDataStd_Real::Set(argLabel, value);
+  if (arg->kind == ArgKind::Choice)
+  {
+    const int last  = (int)arg->options.size() - 1;
+    const int index = (int)std::lround(value);
+    TDataStd_Integer::Set(argLabel, index < 0 ? 0 : (index > last ? last : index));
+  }
+  else
+  {
+    // Out-of-range values reach the kernel as nonsense; stop them at the door.
+    const double clamped = value < arg->min ? arg->min : (value > arg->max ? arg->max : value);
+    TDataStd_Real::Set(argLabel, clamped);
+  }
   Touch(argLabel);
   return true;
 }
@@ -453,6 +466,22 @@ bool Document::LoadJsonText(const std::string& text, std::string& error)
         }
         Feature::SetReal(feature, member.first, member.second.number);
       }
+      else if (arg->kind == ArgKind::Choice)
+      {
+        int index = -1;
+        if (member.second.type == Json::Number) index = (int)member.second.number;
+        else
+          for (size_t i = 0; i < arg->options.size(); ++i)
+            if (arg->options[i] == member.second.text) index = (int)i;
+        if (index < 0 || index >= (int)arg->options.size())
+        {
+          error = "argument '" + member.first + "' of " + id + " must be one of ";
+          for (size_t i = 0; i < arg->options.size(); ++i)
+            error += (i ? ", " : "") + arg->options[i];
+          return false;
+        }
+        Feature::SetChoice(feature, member.first, index);
+      }
       else
       {
         const std::string target = member.second.type == Json::String
@@ -506,6 +535,13 @@ Json Document::ToJson(bool withState) const
       if (arg.kind == ArgKind::Real)
       {
         args.Set(arg.key, Json::Num(Feature::Real(f, arg.key, arg.def)));
+      }
+      else if (arg.kind == ArgKind::Choice)
+      {
+        // Written as the option's name so the file reads as a model, not indices.
+        const int index = Feature::Choice(f, arg.key, (int)arg.def);
+        args.Set(arg.key, Json::Str(index >= 0 && index < (int)arg.options.size()
+                                      ? arg.options[index] : arg.options.front()));
       }
       else
       {
@@ -611,11 +647,17 @@ std::string Document::DumpTree() const
 
     for (const ArgSpec& arg : spec->args)
     {
+      if (!Feature::Applies(f, arg)) continue;
       os << "      " << arg.key << " = ";
       if (arg.kind == ArgKind::Real)
       {
         os << Feature::Real(f, arg.key, arg.def);
         if (!arg.unit.empty()) os << " " << arg.unit;
+      }
+      else if (arg.kind == ArgKind::Choice)
+      {
+        const int index = Feature::Choice(f, arg.key, (int)arg.def);
+        os << (index >= 0 && index < (int)arg.options.size() ? arg.options[index] : "?");
       }
       else
       {

@@ -39,12 +39,31 @@ echo "5. an over-sized fillet reports instead of corrupting the model"
 if "$BIN" set "$WORK/part3.cbf" Fillet.1.radius=400 > "$WORK/set3.log" 2>&1; then
   fail "an impossible fillet should exit non-zero"
 fi
-grep -q "radius is too large" "$WORK/set3.log" || fail "expected a fillet failure message"
+grep -q "the limit is" "$WORK/set3.log" || fail "expected a fillet failure message"
 
 echo "6. XmlOcaf persistence round-trips"
 "$BIN" build examples/datums_and_solids.ocaf.json -o "$WORK/part.xml" > /dev/null 2>&1 \
   || fail "xml build"
 "$BIN" set "$WORK/part.xml" Ball.radius=60 --tree > "$WORK/xml.log" 2>&1 || fail "xml set"
 grep -q "radius = 60 mm" "$WORK/xml.log" || fail "xml round-trip lost the edit"
+
+echo "7. an array repeats a body without rebuilding it"
+"$BIN" build examples/array.ocaf.json -o "$WORK/arr.cbf" > "$WORK/arr.log" 2>&1 || fail "array build"
+grep -q "regenerated 6 of 6 functions" "$WORK/arr.log" || fail "expected 6 functions"
+"$BIN" set "$WORK/arr.cbf" Array.1.countX=6 -o "$WORK/arr2.cbf" > "$WORK/arr2.log" 2>&1 || fail "array count"
+grep -q "regenerated 1 of 6 functions" "$WORK/arr2.log" || fail "only the array should rebuild"
+grep -q "= Fillet.1 (unchanged)" "$WORK/arr2.log" || fail "the fillet must not be rebuilt per instance"
+
+echo "8. the same feature switches from rectangular to polar"
+"$BIN" set "$WORK/arr2.cbf" Array.1.mode=1 Array.1.count=8 --tree > "$WORK/polar.log" 2>&1 || fail "polar"
+grep -q "mode = Polar" "$WORK/polar.log" || fail "the pattern should read Polar"
+grep -q "count = 8" "$WORK/polar.log" || fail "the polar count should be 8"
+grep -q "countX" "$WORK/polar.log" && fail "rectangular arguments should not be listed in polar mode"
+
+echo "9. a fillet radius is judged per body, not per array"
+if "$BIN" set "$WORK/arr.cbf" Fillet.1.radius=45 > "$WORK/fillet.log" 2>&1; then
+  fail "a 45 mm fillet on an 80 mm cube should be refused"
+fi
+grep -q "the limit is 40" "$WORK/fillet.log" || fail "expected the per-body limit"
 
 echo "all tests passed"

@@ -109,5 +109,92 @@ check("it still builds", out.report.failed.length === 0);
 mesh = (await kernel.mesh(["CB1"])).features[0];
 check("and still meshes", mesh.triangles === 12, String(mesh.triangles));
 
+console.log("10. arraying a feature");
+await kernel.loadModel(MODEL);
+out = await kernel.addFeature("Array", { source: "FL1" });
+const arrayId = out.id;
+check("the array built", out.report.failed.length === 0,
+  JSON.stringify(out.report.failed.map(f => f.message)));
+check("one feature in the tree, not many",
+  out.tree.features.filter(f => f.type === "Array").length === 1);
+check("the source leaves the 3D view but stays in the tree",
+  byId2(out.tree, "FL1").visible === false && byId2(out.tree, "FL1").consumedBy === arrayId);
+
+let arrayMesh = (await kernel.mesh([arrayId])).features[0];
+const oneBody = 1380;
+check("three copies by default", arrayMesh.triangles === oneBody * 3,
+  arrayMesh.triangles + " triangles");
+
+console.log("11. an instance is a relocation, not a rebuild");
+out = await kernel.setParameter(arrayId, "countX", 8);
+check("only the array re-ran - the fillet was not rebuilt",
+  ids(out.report.executed).join(",") === arrayId, ids(out.report.executed).join(","));
+check("the fillet is reported unchanged",
+  out.report.skipped.some(e => e.id === "FL1"));
+const filletRevision = byId2(out.tree, "FL1").revision;
+arrayMesh = (await kernel.mesh([arrayId])).features[0];
+check("eight copies now", arrayMesh.triangles === oneBody * 8, arrayMesh.triangles + " triangles");
+
+out = await kernel.setParameter(arrayId, "countY", 3);
+check("a grid multiplies both ways", (await kernel.mesh([arrayId])).features[0].triangles
+  === oneBody * 24);
+check("the fillet still has not been touched",
+  byId2(out.tree, "FL1").revision === filletRevision);
+
+console.log("12. the same feature switches to polar");
+out = await kernel.setParameter(arrayId, "mode", 1);
+check("the mode is stored as a choice", byId2(out.tree, arrayId).values.mode === 1);
+check("it rebuilt without complaint", out.report.failed.length === 0,
+  JSON.stringify(out.report.failed.map(f => f.message)));
+check("six copies around the axis",
+  (await kernel.mesh([arrayId])).features[0].triangles === oneBody * 6);
+
+out = await kernel.setParameter(arrayId, "count", 12);
+check("twelve now", (await kernel.mesh([arrayId])).features[0].triangles === oneBody * 12);
+out = await kernel.setParameter(arrayId, "angle", 180);
+check("a half sweep still builds", out.report.failed.length === 0);
+check("the rectangular counts survived the switch",
+  byId2(out.tree, arrayId).values.countY === 3);
+
+out = await kernel.setParameter(arrayId, "mode", 0);
+check("switching back restores the grid",
+  (await kernel.mesh([arrayId])).features[0].triangles === oneBody * 24);
+
+console.log("13. an array is a body like any other");
+{
+  // A box that is already fully rounded has no sharp edges left, so the array
+  // to fillet here is an array of plain cubes.
+  const plain = { ...MODEL, features: MODEL.features.filter(f => f.id !== "FL1") };
+  const built = await kernel.loadModel(plain);
+  check("the plain model built", built.report.failed.length === 0);
+  const grid = await kernel.addFeature("Array", { source: "CB1" });
+  const rounded = await kernel.addFeature("Fillet", { body: grid.id });
+  check("an array can be filleted", rounded.report.failed.length === 0,
+    JSON.stringify(rounded.report.failed.map(f => f.message)));
+  check("the fillet radius is judged per body, not per array",
+    /limit is 40/.test(((await kernel.setParameter(rounded.id, "radius", 50))
+      .report.failed[0] || {}).message || ""));
+}
+
+await kernel.loadModel(MODEL);
+out = await kernel.addFeature("Array", { source: "FL1" });
+const bigId = out.id;
+out = await kernel.setParameter(bigId, "countX", 40);
+out = await kernel.setParameter(bigId, "countY", 40);
+check("an unreasonable pattern is refused, not attempted",
+  out.report.failed.length === 1 && /more than this kernel will build/.test(out.report.failed[0].message),
+  JSON.stringify(out.report.failed.map(f => f.message)));
+
+console.log("14. the model file carries the pattern by name");
+const arrayModel = await kernel.model();
+const arrayEntry = arrayModel.features.find(f => f.id === bigId);
+check("the mode reads as a word, not an index", arrayEntry.args.mode === "Rectangular",
+  JSON.stringify(arrayEntry.args.mode));
+await kernel.setParameter(bigId, "countX", 3);
+await kernel.setParameter(bigId, "countY", 2);
+const roundTrip = await kernel.loadModel(await kernel.model());
+check("and rebuilds from the file", roundTrip.report.failed.length === 0,
+  JSON.stringify(roundTrip.report.failed.map(f => f.message)));
+
 console.log(failures ? "\n" + failures + " check(s) failed" : "\nall checks passed");
 process.exit(failures ? 1 : 0);

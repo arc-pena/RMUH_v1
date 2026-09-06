@@ -35,6 +35,21 @@ ArgSpec Ref(const char* key, const char* label, const char* accepts, bool consum
   return a;
 }
 
+ArgSpec Choice(const char* key, const char* label, std::vector<std::string> options, int def = 0)
+{
+  ArgSpec a;
+  a.key = key; a.label = label; a.kind = ArgKind::Choice;
+  a.options = std::move(options); a.def = def;
+  return a;
+}
+
+//! Marks an argument as belonging to one alternative of a choice.
+ArgSpec When(ArgSpec a, const char* key, int equals)
+{
+  a.whenKey = key; a.whenEquals = equals;
+  return a;
+}
+
 std::vector<TypeSpec> BuildCatalogue()
 {
   std::vector<TypeSpec> c;
@@ -79,8 +94,24 @@ std::vector<TypeSpec> BuildCatalogue()
   TypeSpec fillet{"Fillet", "9a1b2c30-0020-4c00-9e00-caf000000020", Category::Operation,
                   "Rounds every edge of a body. The body stays in the tree but "
                   "leaves the 3D view - the fillet result replaces it.",
-                  {Ref("body", "Body", "Cube,Sphere,Fillet", /*consumes*/ true),
+                  {Ref("body", "Body", "Cube,Sphere,Fillet,Array", /*consumes*/ true),
                    Real("radius", "Radius", 10, 0.1, 200, 0.5)}};
+
+  TypeSpec array{"Array", "9a1b2c30-0021-4c00-9e00-caf000000021", Category::Operation,
+                 "Repeats a body in a grid or around an axis. One feature in the "
+                 "tree, however many copies it makes.",
+                 {Ref("source", "Feature", "Cube,Sphere,Fillet,Array", /*consumes*/ true),
+                  Choice("mode", "Pattern", {"Rectangular", "Polar"}, 0),
+                  When(Real("countX", "Count X", 3, 1, 40, 1, ""), "mode", 0),
+                  When(Real("spacingX", "Spacing X", 120, -600, 600, 1), "mode", 0),
+                  When(Real("countY", "Count Y", 1, 1, 40, 1, ""), "mode", 0),
+                  When(Real("spacingY", "Spacing Y", 120, -600, 600, 1), "mode", 0),
+                  When(Real("countZ", "Count Z", 1, 1, 20, 1, ""), "mode", 0),
+                  When(Real("spacingZ", "Spacing Z", 120, -600, 600, 1), "mode", 0),
+                  When(Ref("center", "Centre", "Point"), "mode", 1),
+                  When(Ref("axis", "Axis", "Vector"), "mode", 1),
+                  When(Real("count", "Count", 6, 1, 120, 1, ""), "mode", 1),
+                  When(Real("angle", "Sweep", 360, -360, 360, 5, "\u00b0"), "mode", 1)}};
 
   c.push_back(point);
   c.push_back(vector);
@@ -88,6 +119,7 @@ std::vector<TypeSpec> BuildCatalogue()
   c.push_back(plane);
   c.push_back(cube);
   c.push_back(sphere);
+  c.push_back(array);
   c.push_back(fillet);
   return c;
 }
