@@ -907,11 +907,13 @@ function refreshToolbar() {
     if (spec.category === "operation") {
       const arg = spec.args.find(a => a.kind === "ref" && a.consumes);
       const accepts = arg ? arg.accepts.split(",") : [];
-      const ok = api.live && selected && accepts.includes(selected.type);
-      button.disabled = !ok;
+      const eligible = selected && accepts.includes(selected.type) && !selected.consumedBy;
+      button.disabled = !(api.live && eligible);
       button.title = !api.live ? "Connect the kernel to edit the model"
-        : ok ? "Apply " + spec.type + " to " + selected.name
-             : "Select a body in the tree or the 3D view first";
+        : eligible ? "Apply " + spec.type + " to " + selected.name
+        : selected && selected.consumedBy
+          ? selected.name + " is already consumed by " + (feature(selected.consumedBy) || {}).name
+          : "Select a body in the tree or the 3D view first";
     } else {
       button.disabled = !api.live;
       button.title = api.live ? spec.summary : "Connect the kernel to edit the model";
@@ -1216,8 +1218,12 @@ async function addFeature(type) {
   for (const arg of spec.args) {
     if (arg.kind !== "ref") continue;
     const accepts = arg.accepts.split(",");
-    let target = (arg.consumes && selected && accepts.includes(selected.type)) ? selected : null;
-    if (!target) target = state.tree.features.find(f => accepts.includes(f.type)) || null;
+    let target = (arg.consumes && selected && accepts.includes(selected.type) && !selected.consumedBy)
+      ? selected : null;
+    // Never pick a body another operation has already swallowed.
+    if (!target)
+      target = state.tree.features.find(f =>
+        accepts.includes(f.type) && !(arg.consumes && f.consumedBy)) || null;
     if (target) refs[arg.key] = target.id;
   }
 
