@@ -1,95 +1,96 @@
 <title>OCAF Feature Modeller</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
 <style>
+/* The model is the interface. Everything else floats over it, stays quiet
+   until it is wanted, and can be put away. */
 :root {
-  /* Cool slate neutrals, biased toward the engineering blue accent. */
-  --ground:      #e7ecf0;
-  --panel:       #f7f9fb;
-  --panel-2:     #eef2f6;
-  --line:        #cdd7df;
-  --line-soft:   #dde4ea;
-  --ink:         #16222c;
-  --ink-2:       #4d5f6d;
-  --ink-3:       #7b8b98;
+  --ground:      #e9edf1;
+  --panel:       rgba(250, 252, 253, .82);
+  --panel-solid: #f6f8fa;
+  --panel-2:     rgba(0, 20, 40, .05);
+  --line:        rgba(20, 40, 60, .13);
+  --line-soft:   rgba(20, 40, 60, .07);
+  --ink:         #15212b;
+  --ink-2:       #4a5b69;
+  --ink-3:       #7d8d99;
   --accent:      #0a6cb0;
   --accent-ink:  #ffffff;
-  --accent-soft: #dceaf5;
+  --accent-soft: rgba(10, 108, 176, .12);
   --datum:       #b07408;
-  --datum-soft:  #f6ead3;
   --good:        #1c7a52;
   --bad:         #bb3a2c;
-  --bad-soft:    #f8e2df;
-  --view-top:    #dfe6ec;
-  --view-bottom: #bcc8d2;
+  --bad-soft:    rgba(187, 58, 44, .12);
+  --view-top:    #e4e9ee;
+  --view-bottom: #bcc7d1;
   --shape:       #93a2ad;
   --shape-edge:  #3d4c58;
-  --grid:        #a9b7c2;
-  --grid-axis:   #8494a1;
-  --shadow:      0 1px 2px rgba(22, 34, 44, .07), 0 6px 18px rgba(22, 34, 44, .06);
+  --grid:        #c3ccd4;
+  --grid-axis:   #a2aeb9;
+  --shadow:      0 1px 2px rgba(16, 28, 38, .08), 0 10px 34px rgba(16, 28, 38, .12);
   --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
-  --rail: 272px;
-  --panel-w: 320px;
+  --edge: 12px;
+  --radius: 9px;
 }
-:root:not([data-theme="light"]) { color-scheme: light dark; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ground:      #10171d;
-    --panel:       #161f27;
-    --panel-2:     #1c2731;
-    --line:        #2a3844;
-    --line-soft:   #223039;
-    --ink:         #e5edf3;
-    --ink-2:       #a3b3c0;
-    --ink-3:       #748693;
+    --ground:      #0d1319;
+    --panel:       rgba(23, 32, 40, .82);
+    --panel-solid: #19222b;
+    --panel-2:     rgba(255, 255, 255, .06);
+    --line:        rgba(255, 255, 255, .11);
+    --line-soft:   rgba(255, 255, 255, .06);
+    --ink:         #e6eef4;
+    --ink-2:       #a6b6c2;
+    --ink-3:       #74858f;
     --accent:      #4aa8ea;
     --accent-ink:  #06131d;
-    --accent-soft: #17303f;
+    --accent-soft: rgba(74, 168, 234, .18);
     --datum:       #e0a33c;
-    --datum-soft:  #33280f;
     --good:        #4fb98a;
     --bad:         #e2705f;
-    --bad-soft:    #3a1e1a;
-    --view-top:    #17212a;
-    --view-bottom: #0b1115;
+    --bad-soft:    rgba(226, 112, 95, .16);
+    --view-top:    #18232c;
+    --view-bottom: #0a0f14;
     --shape:       #7d8d99;
-    --shape-edge:  #cbd8e2;
-    --grid:        #2c3a45;
-    --grid-axis:   #3d4f5c;
-    --shadow:      0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .3);
+    --shape-edge:  #cfdbe4;
+    --grid:        #263440;
+    --grid-axis:   #3a4c58;
+    --shadow:      0 1px 2px rgba(0, 0, 0, .5), 0 12px 34px rgba(0, 0, 0, .42);
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --ground:      #10171d;
-  --panel:       #161f27;
-  --panel-2:     #1c2731;
-  --line:        #2a3844;
-  --line-soft:   #223039;
-  --ink:         #e5edf3;
-  --ink-2:       #a3b3c0;
-  --ink-3:       #748693;
+  --ground:      #0d1319;
+  --panel:       rgba(23, 32, 40, .82);
+  --panel-solid: #19222b;
+  --panel-2:     rgba(255, 255, 255, .06);
+  --line:        rgba(255, 255, 255, .11);
+  --line-soft:   rgba(255, 255, 255, .06);
+  --ink:         #e6eef4;
+  --ink-2:       #a6b6c2;
+  --ink-3:       #74858f;
   --accent:      #4aa8ea;
   --accent-ink:  #06131d;
-  --accent-soft: #17303f;
+  --accent-soft: rgba(74, 168, 234, .18);
   --datum:       #e0a33c;
-  --datum-soft:  #33280f;
   --good:        #4fb98a;
   --bad:         #e2705f;
-  --bad-soft:    #3a1e1a;
-  --view-top:    #17212a;
-  --view-bottom: #0b1115;
+  --bad-soft:    rgba(226, 112, 95, .16);
+  --view-top:    #18232c;
+  --view-bottom: #0a0f14;
   --shape:       #7d8d99;
-  --shape-edge:  #cbd8e2;
-  --grid:        #2c3a45;
-  --grid-axis:   #3d4f5c;
-  --shadow:      0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .3);
+  --shape-edge:  #cfdbe4;
+  --grid:        #1d2831;
+  --grid-axis:   #2c3b46;
+  --shadow:      0 1px 2px rgba(0, 0, 0, .5), 0 12px 34px rgba(0, 0, 0, .42);
 }
 
 * { box-sizing: border-box; }
+html, body { height: 100%; }
 body {
   margin: 0;
   background: var(--ground);
@@ -97,272 +98,267 @@ body {
   font-family: var(--sans);
   font-size: 13px;
   line-height: 1.45;
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
 button, input, select { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* ------------------------------------------------------------------ chrome */
-.chrome {
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-  padding: 7px 10px;
+/* ------------------------------------------------------------- viewport */
+#viewport { position: fixed; inset: 0; }
+#viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+/* The shared look of everything that floats over the model. */
+.float {
+  position: fixed;
   background: var(--panel);
-  border-bottom: 1px solid var(--line);
-  flex: none;
-  flex-wrap: wrap;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
 }
-.brand {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding-right: 14px;
-  margin-right: 6px;
-  border-right: 1px solid var(--line);
+
+/* --------------------------------------------------------- the tool rail */
+#rail {
+  left: var(--edge); top: 50%; transform: translateY(-50%);
+  padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  z-index: 3;
 }
-.brand b { font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
-.brand span {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--ink-3);
-  letter-spacing: .02em;
-}
-.group { display: flex; flex-direction: column; gap: 3px; padding: 0 8px; border-right: 1px solid var(--line-soft); }
-.group:last-of-type { border-right: 0; }
-.group > .row { display: flex; gap: 3px; }
-.group > .cap {
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .09em;
-  color: var(--ink-3);
-  padding-left: 2px;
-}
+#rail hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 6px; }
 .tool {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 9px 5px 7px;
-  background: var(--panel-2);
-  border: 1px solid var(--line-soft);
-  border-radius: 3px;
-  cursor: pointer;
-  color: var(--ink);
-  white-space: nowrap;
-  transition: background .12s, border-color .12s;
+  position: relative;
+  width: 38px; height: 38px; padding: 0;
+  display: grid; place-items: center;
+  border: 0; border-radius: 7px; background: none; color: var(--ink-2);
+  cursor: pointer; transition: background .12s, color .12s;
 }
-.tool:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
-.tool:disabled { opacity: .38; cursor: not-allowed; }
-.tool svg { width: 15px; height: 15px; flex: none; }
-.tool.icon-only { padding: 5px 6px; }
-.tool.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.tool.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
-.spacer { flex: 1; }
+.tool svg { width: 19px; height: 19px; }
+.tool:hover:not(:disabled) { background: var(--panel-2); color: var(--ink); }
+.tool[data-armed="true"] { background: var(--accent); color: var(--accent-ink); }
+.tool:disabled { opacity: .3; cursor: default; }
+/* The label appears beside the rail rather than as a browser tooltip, so it
+   arrives instantly and matches the rest of the interface. */
+.tool[data-label]::after {
+  content: attr(data-label);
+  position: absolute; left: calc(100% + 9px); top: 50%; transform: translateY(-50%);
+  padding: 4px 9px; border-radius: 5px; white-space: nowrap;
+  background: var(--panel-solid); color: var(--ink);
+  border: 1px solid var(--line); box-shadow: var(--shadow);
+  font-size: 11.5px; opacity: 0; pointer-events: none; transition: opacity .1s;
+}
+.tool:hover[data-label]::after { opacity: 1; }
+.tool:disabled[data-label]::after { color: var(--ink-3); }
 
-/* -------------------------------------------------------------------- body */
-main {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: var(--rail) minmax(0, 1fr) var(--panel-w);
+/* ------------------------------------------------------- the corner chip */
+#chip {
+  left: var(--edge); top: var(--edge); z-index: 3;
+  display: flex; align-items: stretch; overflow: hidden;
 }
-.rail {
-  background: var(--panel);
-  border-right: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+#chip button {
+  border: 0; background: none; cursor: pointer; padding: 8px 11px;
+  display: flex; align-items: center; gap: 8px; color: inherit;
 }
-.rail.right { border-right: 0; border-left: 1px solid var(--line); }
-.rail-head {
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  flex: none;
-}
-.rail-head h2 {
-  margin: 0;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .1em;
-  color: var(--ink-3);
-}
-.rail-head .entry { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
-.rail-body { overflow: auto; padding: 8px 0 16px; flex: 1; }
+#chip button:hover { background: var(--panel-2); }
+#chip .name { font-weight: 600; letter-spacing: -.01em; }
+#chip .count { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+#chip .sep { width: 1px; background: var(--line-soft); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
+#btn-link.live .dot { background: var(--good); box-shadow: 0 0 0 3px rgba(28, 122, 82, .18); }
+#link-label { font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); }
 
-/* ---------------------------------------------------------- specification tree */
-.tree { list-style: none; margin: 0; padding: 0; }
-.tree .branch { list-style: none; margin: 0; padding: 0 0 0 15px; }
+/* ------------------------------------------------------------ the tree */
+#tree-panel {
+  left: var(--edge); top: calc(var(--edge) + 46px);
+  width: 232px; max-height: min(46vh, 460px);
+  display: flex; flex-direction: column; z-index: 3;
+}
+#tree-panel[hidden] { display: none; }
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--line-soft);
+}
+.panel-head h2 {
+  margin: 0; font-size: 9.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .11em; color: var(--ink-3);
+}
+.icon-btn {
+  border: 0; background: none; cursor: pointer; color: var(--ink-3);
+  width: 24px; height: 24px; border-radius: 5px; display: grid; place-items: center;
+}
+.icon-btn:hover { background: var(--panel-2); color: var(--ink); }
+.icon-btn svg { width: 14px; height: 14px; }
+#tree { list-style: none; margin: 0; padding: 6px 0 8px; overflow: auto; }
+.tree .branch { list-style: none; margin: 0; padding: 0; }
+.set-label {
+  padding: 6px 12px 3px; font-size: 9.5px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
+}
 .node {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 3px 12px 3px 10px;
-  cursor: default;
-  user-select: none;
+  display: flex; align-items: center; gap: 7px;
+  padding: 3px 8px 3px 12px; cursor: pointer; user-select: none;
   border-left: 2px solid transparent;
 }
-.node.pick { cursor: pointer; }
-.node.pick:hover { background: var(--panel-2); }
+.node:hover { background: var(--panel-2); }
 .node.selected { background: var(--accent-soft); border-left-color: var(--accent); }
-.node .glyph { width: 15px; height: 15px; flex: none; color: var(--ink-2); }
+.node .glyph { width: 14px; height: 14px; flex: none; color: var(--ink-2); }
 .node.datum .glyph { color: var(--datum); }
 .node .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.node .kind { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
-.node.consumed .label, .node.consumed .glyph { opacity: .45; }
+.node.consumed .label, .node.consumed .glyph { opacity: .42; }
 .node.consumed .label { text-decoration: line-through; text-decoration-thickness: 1px; }
 .node.failed .label { color: var(--bad); }
+.node .kind { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
 .eye {
   border: 0; background: none; padding: 0; cursor: pointer;
-  width: 15px; height: 15px; color: var(--ink-3); opacity: .55;
+  width: 14px; height: 14px; color: var(--ink-3); opacity: 0;
 }
+.node:hover .eye, .eye.off { opacity: .7; }
 .eye:hover { opacity: 1; color: var(--accent); }
-.eye.off { color: var(--ink-3); }
-.tree-root {
-  display: flex; align-items: center; gap: 7px;
-  padding: 3px 12px 3px 10px; font-weight: 600;
-}
-.tree-root .glyph { width: 15px; height: 15px; color: var(--ink-2); }
-.set-label {
-  display: flex; align-items: center; gap: 7px;
-  padding: 6px 12px 3px 10px;
-  font-size: 10px; font-weight: 600; letter-spacing: .09em;
-  text-transform: uppercase; color: var(--ink-3);
-}
-.branch { position: relative; }
-.branch::before {
-  content: ""; position: absolute; left: 6px; top: 2px; bottom: 6px;
-  border-left: 1px solid var(--line);
-}
 
-/* ---------------------------------------------------------------- viewport */
-.viewport { position: relative; min-width: 0; background: var(--view-bottom); }
-.viewport canvas { display: block; width: 100%; height: 100%; }
-.view-tools {
-  position: absolute; top: 10px; right: 10px;
-  display: flex; gap: 3px;
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
-  border: 1px solid var(--line); border-radius: 4px; padding: 3px;
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(6px);
+/* ------------------------------------------------------ the definition */
+#def-panel {
+  right: var(--edge); top: var(--edge);
+  width: 288px; max-height: calc(100vh - var(--edge) * 2 - 40px);
+  display: flex; flex-direction: column; z-index: 3;
 }
-.view-tools button {
-  border: 0; background: none; padding: 4px 8px; border-radius: 3px; cursor: pointer;
-  font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); letter-spacing: .03em;
+#def-panel[hidden] { display: none; }
+#def { overflow: auto; }
+.def-head { padding: 11px 12px 10px; border-bottom: 1px solid var(--line-soft); }
+.name-row { display: flex; gap: 8px; align-items: center; }
+input.name {
+  flex: 1; min-width: 0; background: none; border: 1px solid transparent;
+  border-radius: 5px; padding: 3px 6px; font-weight: 600; margin-left: -6px;
 }
-.view-tools button:hover { background: var(--accent-soft); color: var(--accent); }
-.hint {
-  position: absolute; left: 12px; bottom: 10px;
-  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
-  pointer-events: none;
-}
-.stamp {
-  position: absolute; left: 12px; top: 10px;
-  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
-  pointer-events: none; line-height: 1.6;
-}
-.stamp b { color: var(--ink-2); font-weight: 500; }
-
-/* ------------------------------------------------------- definition panel */
-.def { padding: 0 0 20px; }
-.def-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--line-soft); }
-.def-head .name-row { display: flex; gap: 8px; align-items: center; }
-.def-head input.name {
-  flex: 1; min-width: 0;
-  background: var(--panel-2); border: 1px solid var(--line);
-  border-radius: 3px; padding: 5px 8px; font-weight: 600;
-}
+input.name:hover { border-color: var(--line); }
+input.name:focus { background: var(--panel-2); border-color: var(--accent); outline: none; }
 .badge {
-  font-family: var(--mono); font-size: 10px; letter-spacing: .04em;
-  padding: 2px 7px; border-radius: 999px;
-  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-2);
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .03em;
+  padding: 2px 7px; border-radius: 999px; background: var(--panel-2); color: var(--ink-2);
 }
-.badge.datum { background: var(--datum-soft); border-color: transparent; color: var(--datum); }
-.badge.body { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
-.badge.operation { background: var(--panel-2); border-color: var(--accent); color: var(--accent); }
+.badge.datum { color: var(--datum); }
+.badge.body, .badge.operation { color: var(--accent); background: var(--accent-soft); }
 .def-head .meta {
-  margin-top: 8px; font-family: var(--mono); font-size: 10px;
-  color: var(--ink-3); line-height: 1.7; word-break: break-all;
+  margin-top: 6px; font-family: var(--mono); font-size: 9.5px;
+  color: var(--ink-3); line-height: 1.65; word-break: break-all;
 }
-.summary { padding: 10px 14px 0; color: var(--ink-2); max-width: 46ch; }
-.field { padding: 11px 14px 12px; border-bottom: 1px solid var(--line-soft); }
+.summary { padding: 10px 12px 0; color: var(--ink-2); font-size: 12px; max-width: 40ch; }
+.field { padding: 10px 12px 11px; border-top: 1px solid var(--line-soft); }
+.field:first-of-type { border-top: 0; }
 .field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .field-head label { font-weight: 500; }
 .value-box { display: flex; align-items: baseline; gap: 3px; }
 .value-box input[type="number"] {
-  width: 74px; text-align: right;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px;
-  padding: 3px 6px; font-family: var(--mono); font-variant-numeric: tabular-nums;
+  width: 66px; text-align: right; background: var(--panel-2);
+  border: 1px solid transparent; border-radius: 5px; padding: 2px 6px;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
 }
-.value-box .unit { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); width: 18px; }
-input[type="range"] { width: 100%; margin: 9px 0 0; accent-color: var(--accent); }
+.value-box input:focus { border-color: var(--accent); outline: none; }
+.value-box .unit { font-family: var(--mono); font-size: 10px; color: var(--ink-3); width: 17px; }
+input[type="range"] { width: 100%; margin: 8px 0 0; accent-color: var(--accent); }
 select {
-  width: 100%; margin-top: 6px;
-  background: var(--panel-2); border: 1px solid var(--line);
-  border-radius: 3px; padding: 5px 7px;
+  width: 100%; margin-top: 6px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px;
 }
-.attr-path {
-  margin-top: 7px; font-family: var(--mono); font-size: 9.5px;
-  color: var(--ink-3); letter-spacing: .01em;
-}
+.attr-path { margin-top: 6px; font-family: var(--mono); font-size: 9px; color: var(--ink-3); }
 .attr-path b { color: var(--ink-2); font-weight: 500; }
 .notice {
-  margin: 12px 14px; padding: 9px 11px; border-radius: 3px;
-  background: var(--bad-soft); color: var(--bad);
-  border-left: 3px solid var(--bad);
+  margin: 10px 12px; padding: 8px 10px; border-radius: 6px;
+  background: var(--bad-soft); color: var(--bad); font-size: 12px;
 }
-.notice.info { background: var(--panel-2); color: var(--ink-2); border-left-color: var(--accent); }
-.actions { display: flex; gap: 6px; padding: 12px 14px; flex-wrap: wrap; }
-.empty { padding: 26px 16px; color: var(--ink-3); max-width: 42ch; }
-.empty h3 { margin: 0 0 8px; font-size: 13px; color: var(--ink-2); }
-.empty ol { margin: 10px 0 0; padding-left: 18px; line-height: 1.75; }
-.empty kbd {
-  font-family: var(--mono); font-size: 10.5px; background: var(--panel-2);
-  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px;
+.notice.info { background: var(--panel-2); color: var(--ink-2); }
+.actions { display: flex; gap: 6px; padding: 11px 12px; border-top: 1px solid var(--line-soft); }
+.btn {
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+  border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
 }
+.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); color: var(--accent-ink); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn svg { width: 14px; height: 14px; }
 
-/* ------------------------------------------------------------------ log */
-.log-panel { border-top: 1px solid var(--line); flex: none; max-height: 40%; display: flex; flex-direction: column; }
-.log-list {
-  overflow: auto; padding: 6px 0 10px;
-  font-family: var(--mono); font-size: 10.5px; line-height: 1.7;
+/* -------------------------------------------------------- bottom status */
+#status {
+  left: var(--edge); bottom: var(--edge); z-index: 3;
+  display: flex; align-items: stretch; overflow: hidden;
+  font-family: var(--mono); font-size: 10.5px;
 }
-.log-list div { padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.log-list .ran { color: var(--good); }
-.log-list .same { color: var(--ink-3); }
-.log-list .err { color: var(--bad); }
-.log-list .head { color: var(--ink-2); padding-top: 4px; }
+#status > * { padding: 6px 11px; display: flex; align-items: center; gap: 7px; }
+#status .sep { width: 1px; padding: 0; background: var(--line-soft); }
+#status-sel { color: var(--ink-2); }
+#status-sel b { color: var(--ink); font-weight: 500; }
+#btn-log { border: 0; background: none; cursor: pointer; color: var(--ink-3); }
+#btn-log:hover { background: var(--panel-2); color: var(--ink); }
+#btn-log .ran { color: var(--good); }
+#btn-log .err { color: var(--bad); }
 
-/* --------------------------------------------------------------- status */
-.status {
-  flex: none; display: flex; align-items: center; gap: 16px;
-  padding: 5px 12px; background: var(--panel); border-top: 1px solid var(--line);
-  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+#log-pop {
+  left: var(--edge); bottom: calc(var(--edge) + 38px);
+  width: 300px; max-height: 40vh; overflow: auto; z-index: 4;
+  padding: 8px 0; font-family: var(--mono); font-size: 10.5px; line-height: 1.75;
 }
-.status b { color: var(--ink-2); font-weight: 500; }
+#log-pop[hidden] { display: none; }
+#log-pop div { padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#log-pop .head { color: var(--ink-2); }
+#log-pop .ran { color: var(--good); }
+#log-pop .same { color: var(--ink-3); }
+#log-pop .err { color: var(--bad); white-space: normal; }
+#log-pop .stream { color: var(--accent); }
 
-/* ---------------------------------------------------------------- modal */
+/* ------------------------------------------------------- view controls */
+#view-tools {
+  right: var(--edge); bottom: var(--edge); z-index: 3;
+  display: flex; padding: 3px; gap: 2px;
+}
+#view-tools button {
+  border: 0; background: none; cursor: pointer; color: var(--ink-3);
+  padding: 5px 9px; border-radius: 6px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .06em;
+}
+#view-tools button:hover { background: var(--panel-2); color: var(--ink); }
+
+/* ------------------------------------------------------------ boot state */
+#boot {
+  position: fixed; inset: 0; z-index: 10;
+  display: grid; place-content: center; justify-items: center; gap: 13px;
+  text-align: center; background: var(--ground);
+}
+#boot[hidden] { display: none; }
+#boot .ring {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--accent);
+  animation: spin 900ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#boot b { font-size: 13px; font-weight: 600; }
+#boot-message { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+#boot .note { font-size: 11.5px; color: var(--ink-3); max-width: 38ch; margin: 0; }
+#boot.failed .ring { animation: none; border-color: var(--bad); }
+
+/* ----------------------------------------------------------------- modals */
 dialog {
-  border: 1px solid var(--line); border-radius: 5px; padding: 0;
-  background: var(--panel); color: var(--ink);
-  max-width: 640px; width: calc(100% - 40px); box-shadow: var(--shadow);
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 0;
+  background: var(--panel-solid); color: var(--ink);
+  max-width: 600px; width: calc(100% - 40px); box-shadow: var(--shadow);
 }
-dialog::backdrop { background: rgba(8, 14, 19, .55); }
-dialog .dhead { padding: 13px 16px; border-bottom: 1px solid var(--line); }
+dialog::backdrop { background: rgba(8, 14, 19, .5); }
+dialog .dhead { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); }
 dialog h3 { margin: 0; font-size: 13px; }
-dialog p { margin: 5px 0 0; color: var(--ink-2); max-width: 62ch; }
+dialog p { margin: 6px 0 0; color: var(--ink-2); max-width: 62ch; font-size: 12.5px; }
+dialog ol { margin: 10px 0 0; padding-left: 20px; color: var(--ink-2); line-height: 1.85; font-size: 12.5px; }
+dialog code {
+  font-family: var(--mono); font-size: 10.5px; background: var(--panel-2);
+  border-radius: 4px; padding: 1px 5px; color: var(--accent);
+}
+dialog label.row { display: block; padding: 13px 16px 0; font-size: 12.5px; }
+dialog input.url {
+  width: 100%; margin-top: 6px; padding: 6px 9px; font-family: var(--mono);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+}
 dialog textarea {
-  width: 100%; height: 300px; border: 0; border-top: 1px solid var(--line-soft);
-  border-bottom: 1px solid var(--line-soft);
+  width: 100%; height: 290px; border: 0;
+  border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft);
   background: var(--panel-2); color: var(--ink);
   font-family: var(--mono); font-size: 11px; padding: 12px 16px; resize: vertical;
 }
@@ -372,155 +368,75 @@ dialog .cli {
 }
 dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: flex-end; }
 
-@media (max-width: 1080px) {
-  body { height: auto; overflow: auto; }
-  main { grid-template-columns: 1fr; }
-  .viewport { height: 62vh; order: -1; }
-  .rail.right { border-left: 0; border-top: 1px solid var(--line); }
-  .rail { border-right: 0; border-top: 1px solid var(--line); }
-  .rail-body { max-height: none; }
+@media (max-width: 720px) {
+  #tree-panel { max-height: 34vh; width: 200px; }
+  #def-panel { width: calc(100vw - var(--edge) * 2 - 62px); max-width: 288px; }
+  #rail { top: auto; bottom: 56px; transform: none; }
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { *, ::after { transition: none !important; animation: none !important; } }
 </style>
 
-<style>
-/* --------------------------------------------- connection state additions */
-.link {
-  display: flex; align-items: center; gap: 7px;
-  padding: 5px 10px; border-radius: 3px; cursor: pointer;
-  background: var(--panel-2); border: 1px solid var(--line-soft); color: var(--ink);
-  font-family: var(--mono); font-size: 11px;
-}
-.link:hover { border-color: var(--accent); }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
-.link.live .dot { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent); }
-.link.live { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
-.banner {
-  display: flex; gap: 10px; align-items: flex-start;
-  padding: 11px 14px; border-bottom: 1px solid var(--line);
-  background: var(--panel-2); color: var(--ink-2);
-}
-.banner .dot { margin-top: 6px; }
-.banner b { color: var(--ink); font-weight: 600; }
-.banner code {
-  display: block; margin-top: 6px; font-family: var(--mono); font-size: 10.5px;
-  color: var(--accent); overflow-x: auto; white-space: nowrap;
-}
-.field.locked { opacity: .55; }
-.field.locked input { pointer-events: none; }
-dialog label.row { display: block; padding: 12px 16px 0; }
-dialog input.url {
-  width: 100%; margin-top: 6px; padding: 6px 9px;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px;
-  font-family: var(--mono);
-}
-dialog ol { margin: 10px 0 0; padding-left: 20px; color: var(--ink-2); line-height: 1.8; }
-dialog ol code {
-  font-family: var(--mono); font-size: 10.5px; background: var(--panel-2);
-  border: 1px solid var(--line-soft); border-radius: 3px; padding: 1px 5px; color: var(--accent);
-}
-.stream { color: var(--accent); }
+<div id="viewport"></div>
 
-/* ------------------------------------------------------------ boot state */
-#boot {
-  position: absolute; inset: 0; display: grid; place-content: center; justify-items: center;
-  gap: 14px; text-align: center; z-index: 5;
-  background: color-mix(in srgb, var(--ground) 92%, transparent);
-}
-#boot .ring {
-  width: 30px; height: 30px; border-radius: 50%;
-  border: 2px solid var(--line); border-top-color: var(--accent);
-  animation: spin 900ms linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-#boot b { font-size: 13px; }
-#boot-message { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
-#boot .note { font-size: 11.5px; color: var(--ink-3); max-width: 40ch; }
-#boot.failed .ring { animation: none; border-top-color: var(--bad); border-color: var(--bad); }
-@media (prefers-reduced-motion: reduce) { #boot .ring { animation: none; } }
-</style>
+<div id="boot">
+  <div class="ring"></div>
+  <b>OCAF Feature Modeller</b>
+  <div id="boot-message">loading</div>
+  <p class="note">OpenCascade is compiled into this page. The first load unpacks the
+     kernel; after that it is instant.</p>
+</div>
 
-<header class="chrome">
-  <div class="brand">
-    <b>OCAF Feature Modeller</b>
-    <span id="brand-sub">TDocStd_Document</span>
+<div class="float" id="chip">
+  <button id="btn-tree" title="Specification tree (T)">
+    <span class="name" id="doc-title">Part1</span>
+    <span class="count" id="doc-count"></span>
+  </button>
+  <div class="sep"></div>
+  <button id="btn-link" title="Which kernel is building this"><span class="dot"></span><span id="link-label">starting…</span></button>
+  <div class="sep"></div>
+  <button id="btn-model" title="The parametric model file">Model</button>
+</div>
+
+<aside class="float" id="tree-panel">
+  <div class="panel-head">
+    <h2>Specification tree</h2>
+    <span class="count" id="tree-entry" style="font-family:var(--mono);font-size:9.5px;color:var(--ink-3)">0:1:1</span>
   </div>
+  <ul id="tree"></ul>
+</aside>
 
-  <div class="group">
-    <div class="cap">Datums</div>
-    <div class="row" id="tools-datum"></div>
+<nav class="float" id="rail">
+  <div id="tools-datum"></div>
+  <hr>
+  <div id="tools-body"></div>
+  <hr>
+  <div id="tools-op"></div>
+</nav>
+
+<aside class="float" id="def-panel" hidden>
+  <div class="panel-head">
+    <h2>Definition</h2>
+    <button class="icon-btn" id="btn-def-close" title="Close (Esc)" aria-label="Close"></button>
   </div>
-  <div class="group">
-    <div class="cap">Solids</div>
-    <div class="row" id="tools-body"></div>
-  </div>
-  <div class="group">
-    <div class="cap">Operations</div>
-    <div class="row" id="tools-op"></div>
-  </div>
-  <div class="group">
-    <div class="cap">Kernel</div>
-    <div class="row">
-      <button class="link" id="btn-link"><span class="dot"></span><span id="link-label">offline</span></button>
-      <button class="tool" id="btn-model">Model file…</button>
-    </div>
-  </div>
-</header>
+  <div id="def"></div>
+</aside>
 
-<main>
-  <aside class="rail">
-    <div class="rail-head">
-      <h2>Specification tree</h2>
-      <span class="entry" id="tree-entry">0:1:1</span>
-    </div>
-    <div class="rail-body">
-      <div class="tree-root">
-        <span class="glyph" id="root-glyph"></span>
-        <span id="doc-title">Part1</span>
-      </div>
-      <ul class="tree branch" id="tree"></ul>
-    </div>
-    <div class="log-panel">
-      <div class="rail-head"><h2>Regeneration</h2><span class="entry" id="log-count"></span></div>
-      <div class="log-list" id="log"></div>
-    </div>
-  </aside>
-
-  <section class="viewport" id="viewport">
-    <div id="boot">
-      <div class="ring"></div>
-      <b>OCAF Feature Modeller</b>
-      <div id="boot-message">loading</div>
-      <p class="note">OpenCascade is compiled into this page. The first load unpacks
-         the kernel; after that it is instant.</p>
-    </div>
-    <div class="stamp" id="stamp"></div>
-    <div class="view-tools">
-      <button data-view="iso">ISO</button>
-      <button data-view="top">TOP</button>
-      <button data-view="front">FRONT</button>
-      <button data-view="right">RIGHT</button>
-      <button data-view="fit">FIT</button>
-    </div>
-    <div class="hint">drag orbit · shift-drag pan · wheel zoom · click a body to select</div>
-  </section>
-
-  <aside class="rail right">
-    <div class="rail-head">
-      <h2>Definition</h2>
-      <span class="entry" id="def-entry"></span>
-    </div>
-    <div id="banner"></div>
-    <div class="rail-body"><div class="def" id="def"></div></div>
-  </aside>
-</main>
-
-<footer class="status">
+<div class="float" id="status">
   <span id="status-sel">nothing selected</span>
-  <span id="status-regen"></span>
-  <span class="spacer"></span>
+  <div class="sep"></div>
+  <button id="btn-log" title="What the last regeneration did"><span id="status-regen">ready</span></button>
+  <div class="sep"></div>
   <span id="status-kernel"></span>
-</footer>
+</div>
+<div class="float" id="log-pop" hidden></div>
+
+<div class="float" id="view-tools">
+  <button data-view="iso">ISO</button>
+  <button data-view="top">TOP</button>
+  <button data-view="front">FRONT</button>
+  <button data-view="right">RIGHT</button>
+  <button data-view="fit">FIT</button>
+</div>
 
 <dialog id="modal-link">
   <div class="dhead">
@@ -531,7 +447,6 @@ dialog ol code {
        <code>.cbf</code>, STEP and OBJ to disk.</p>
     <ol>
       <li>Build it once: <code>cmake -S ocaf -B ocaf/build &amp;&amp; cmake --build ocaf/build -j</code></li>
-      <li>Or in Python: <code>pip install cadquery-ocp &amp;&amp; python -m ocafpy serve</code></li>
       <li>Serve a model: <code>ocaf/build/ocafcad serve ocaf/examples/cube_fillet.ocaf.json</code></li>
     </ol>
   </div>
@@ -539,8 +454,8 @@ dialog ol code {
     <input class="url" id="link-url" value="http://127.0.0.1:8787" spellcheck="false">
   </label>
   <div class="dfoot">
-    <button class="tool" id="btn-disconnect">Use the kernel in this page</button>
-    <button class="tool primary" id="btn-connect">Connect</button>
+    <button class="btn" id="btn-disconnect">Use the kernel in this page</button>
+    <button class="btn primary" id="btn-connect">Connect</button>
   </div>
 </dialog>
 
@@ -553,8 +468,8 @@ dialog ol code {
   <div class="cli">$ ocafcad build model.ocaf.json -o part.cbf --step part.step</div>
   <textarea id="model-text" spellcheck="false"></textarea>
   <div class="dfoot">
-    <button class="tool" id="btn-copy">Copy</button>
-    <button class="tool" id="btn-load">Rebuild</button>
-    <button class="tool primary" id="btn-close">Done</button>
+    <button class="btn" id="btn-copy">Copy</button>
+    <button class="btn" id="btn-load">Rebuild</button>
+    <button class="btn primary" id="btn-close">Done</button>
   </div>
 </dialog>

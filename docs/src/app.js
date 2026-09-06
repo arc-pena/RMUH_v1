@@ -189,6 +189,7 @@ function disposeGroup(group) {
 function groupFromStream(mesh, entry) {
   const group = new THREE.Group();
   const datum = entry && entry.category === "datum";
+  group.userData.solid = !datum;
 
   if (mesh.positions && mesh.index) {
     const geometry = new THREE.BufferGeometry();
@@ -198,9 +199,9 @@ function groupFromStream(mesh, entry) {
     geometry.setIndex(mesh.index);
 
     const material = datum
-      ? new THREE.MeshBasicMaterial({ color: THEME.datum, transparent: true, opacity: 0.1,
+      ? new THREE.MeshBasicMaterial({ color: THEME.datum, transparent: true, opacity: 0.05,
                                       side: THREE.DoubleSide, depthWrite: false })
-      : new THREE.MeshStandardMaterial({ color: THEME.shape, metalness: 0.18, roughness: 0.5 });
+      : new THREE.MeshStandardMaterial({ color: THEME.shape, metalness: 0.15, roughness: 0.55 });
 
     const solid = new THREE.Mesh(geometry, material);
     solid.userData.id = mesh.id;
@@ -213,14 +214,15 @@ function groupFromStream(mesh, entry) {
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(mesh.edges, 3));
     const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({
       color: datum ? THEME.datum : THEME["shape-edge"],
-      transparent: true, opacity: datum ? 0.85 : 0.45 }));
+      transparent: true, opacity: datum ? 0.42 : 0.4 }));
     group.add(lines);
   }
 
   // A vertex carries no triangles, so it is drawn as a marker at its location.
   if (mesh.point) {
-    const dot = new THREE.Mesh(new THREE.SphereGeometry(3.2, 16, 12),
-                               new THREE.MeshBasicMaterial({ color: THEME.datum }));
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(2.2, 16, 12),
+                               new THREE.MeshBasicMaterial({ color: THEME.datum,
+                                                             transparent: true, opacity: 0.75 }));
     dot.position.set(mesh.point[0], mesh.point[1], mesh.point[2]);
     group.add(dot);
   }
@@ -274,14 +276,21 @@ function applyVisibility() {
   }
 }
 
+const SELECTED_TINT = 0.42;
 function paintSelection() {
   for (const [id, { group }] of shapes) {
     const selected = id === state.selected;
     group.traverse(object => {
       if (object.isMesh && object.material.isMeshStandardMaterial) {
-        object.material.color.copy(selected ? THEME.accent : THEME.shape);
-        object.material.emissive.copy(selected ? THEME.accent : new THREE.Color(0x000000));
-        object.material.emissiveIntensity = selected ? 0.18 : 0;
+        object.material.color.copy(THEME.shape);
+        if (selected) object.material.color.lerp(THEME.accent, SELECTED_TINT);
+        object.material.emissive.copy(THEME.accent);
+        object.material.emissiveIntensity = selected ? 0.06 : 0;
+      }
+      if (object.isLineSegments && object.material.isLineBasicMaterial &&
+          object.parent && object.parent.userData.solid) {
+        object.material.color.copy(selected ? THEME.accent : THEME["shape-edge"]);
+        object.material.opacity = selected ? 0.8 : 0.4;
       }
     });
   }
@@ -328,6 +337,7 @@ const ICONS = {
   Fillet: '<path d="M2.5 13.5V8a5.5 5.5 0 015.5-5.5h5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 2.5h5.5M2.5 2.5v5.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2"/>',
   part: '<path d="M2.5 4.2L8 1.5l5.5 2.7v7.6L8 14.5l-5.5-2.7z" fill="none" stroke="currentColor" stroke-width="1.2"/>',
   eye: '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/>',
+  close: '<path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
   eyeOff: '<path d="M1.5 8S4 3.5 8 3.5s6.5 4.5 6.5 4.5-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/><path d="M2.5 2.5l11 11" stroke="currentColor" stroke-width="1.3"/>',
 };
 const svg = body => '<svg viewBox="0 0 16 16" aria-hidden="true">' + body + "</svg>";
@@ -341,13 +351,15 @@ function buildToolbar() {
 
   for (const spec of state.schema.types) {
     const button = document.createElement("button");
-    button.className = "tool" + (spec.category === "operation" ? " primary" : "");
-    button.innerHTML = svg(ICONS[spec.type] || ICONS.part) + "<span>" + spec.type + "</span>";
+    button.className = "tool";
+    button.innerHTML = svg(ICONS[spec.type] || ICONS.part);
     button.dataset.type = spec.type;
+    button.dataset.label = spec.type;
+    button.setAttribute("aria-label", spec.type);
     button.addEventListener("click", () => addFeature(spec.type));
     document.getElementById(targets[spec.category]).appendChild(button);
   }
-  document.getElementById("root-glyph").innerHTML = svg(ICONS.part);
+  document.getElementById("btn-def-close").innerHTML = svg(ICONS.close);
 }
 
 //! Fillet waits for its input, the way a CAD operation does.
@@ -361,14 +373,14 @@ function refreshToolbar() {
       const accepts = arg ? arg.accepts.split(",") : [];
       const eligible = selected && accepts.includes(selected.type) && !selected.consumedBy;
       button.disabled = !(ready && eligible);
-      button.title = !ready ? "The kernel is still starting"
-        : eligible ? "Apply " + spec.type + " to " + selected.name
+      button.dataset.label = !ready ? "starting…"
+        : eligible ? spec.type + " " + selected.name
         : selected && selected.consumedBy
-          ? selected.name + " is already consumed by " + (feature(selected.consumedBy) || {}).name
-          : "Select a body in the tree or the 3D view first";
+          ? selected.name + " already has a " + (feature(selected.consumedBy) || {}).type
+          : "Select a body first";
     } else {
       button.disabled = !ready;
-      button.title = ready ? spec.summary : "The kernel is still starting";
+      button.dataset.label = spec.type;
     }
   }
 }
@@ -378,7 +390,6 @@ function buildTree() {
   const list = document.getElementById("tree");
   list.textContent = "";
   if (!state.tree) return;
-  document.getElementById("doc-title").textContent = state.tree.name;
 
   const sets = [
     { name: "Datums", features: state.tree.features.filter(f => f.category === "datum") },
@@ -455,22 +466,11 @@ function treeNode(entry) {
 /* -------------------------------------------------------- definition panel */
 function buildPanel() {
   const host = document.getElementById("def");
+  const panel = document.getElementById("def-panel");
   host.textContent = "";
   const entry = feature(state.edited);
-  document.getElementById("def-entry").textContent = entry ? entry.entry : "";
-
-  if (!entry) {
-    host.innerHTML =
-      '<div class="empty"><h3>No feature open</h3>' +
-      "<p>This panel is where a feature is defined — the OCAF arguments behind it, on sliders.</p><ol>" +
-      "<li>Click a feature in the tree, or a body in the 3D view.</li>" +
-      "<li><b>Double-click</b> it to open its definition here.</li>" +
-      "<li>Drag a slider: OpenCascade re-runs only the functions downstream of the edit " +
-      "and streams back the triangles for the shapes that changed.</li></ol>" +
-      "<p style=\"margin-top:14px\">With a body selected, <b>Fillet</b> in the toolbar consumes it: " +
-      "the fillet joins the tree and the body leaves the 3D view.</p></div>";
-    return;
-  }
+  panel.hidden = !entry;
+  if (!entry) return;
 
   const spec = schemaType(entry.type);
   const head = document.createElement("div");
@@ -506,13 +506,13 @@ function buildPanel() {
   actions.className = "actions";
   if (entry.category !== "datum" && !entry.consumedBy) {
     const fillet = document.createElement("button");
-    fillet.className = "tool primary";
+    fillet.className = "btn primary";
     fillet.innerHTML = svg(ICONS.Fillet) + "<span>Apply fillet</span>";
     fillet.addEventListener("click", () => { state.selected = entry.id; addFeature("Fillet"); });
     actions.appendChild(fillet);
   }
   const remove = document.createElement("button");
-  remove.className = "tool";
+  remove.className = "btn";
   remove.textContent = "Delete feature";
   remove.addEventListener("click", () => deleteFeature(entry.id));
   actions.appendChild(remove);
@@ -624,12 +624,18 @@ function dependsOn(id, onId) {
 
 /* ---------------------------------------------------------------------- log */
 function buildLog() {
-  const host = document.getElementById("log");
+  const host = document.getElementById("log-pop");
+  const summary = document.getElementById("status-regen");
   host.textContent = "";
-  const count = document.getElementById("log-count");
   const report = state.report;
-  if (!report) { count.textContent = ""; return; }
-  count.textContent = report.executed.length + "/" + report.functions;
+  if (!report) { summary.textContent = "ready"; return; }
+
+  // The status bar carries the shape of the last regeneration; the detail is
+  // one click away rather than permanently on screen.
+  summary.innerHTML = report.failed.length
+    ? '<span class="err">' + escapeHtml(report.failed[0].name) + " failed</span>"
+    : '<span class="ran">' + report.executed.length + "</span> of " + report.functions +
+      " rebuilt" + (state.stream ? " · " + state.stream.triangles.toLocaleString() + " tris" : "");
 
   const line = (text, className) => {
     const div = document.createElement("div");
@@ -645,10 +651,6 @@ function buildLog() {
     line("streamed " + state.stream.shapes + " shape" + (state.stream.shapes === 1 ? "" : "s") +
          " · " + state.stream.triangles.toLocaleString() + " triangles · " + state.stream.ms + " ms",
          "stream");
-
-  document.getElementById("status-regen").innerHTML =
-    "<b>" + report.executed.length + "</b> executed · <b>" + report.skipped.length + "</b> up to date" +
-    (report.failed.length ? " · <b>" + report.failed.length + "</b> failed" : "");
 }
 
 /* -------------------------------------------------------------- operations */
@@ -716,7 +718,7 @@ function select(id, openDefinition) {
   const entry = feature(id);
   document.getElementById("status-sel").innerHTML = entry
     ? "<b>" + escapeHtml(entry.name) + "</b> · " + entry.entry + " · " + entry.type
-    : "nothing selected";
+    : "click a body · double-click to edit it";
   buildTree(); buildPanel(); refreshToolbar(); paintSelection();
 }
 
@@ -736,14 +738,11 @@ function applyState(payload, options = {}) {
 
 function updateStamp() {
   if (!state.tree) return;
-  const shown = state.tree.features.filter(f => f.category !== "datum" && f.visible).length;
-  document.getElementById("stamp").innerHTML =
-    "<b>" + escapeHtml(state.tree.name) + "</b><br>" +
-    state.tree.features.length + " features · " + shown + " shown · " + state.tree.units;
-  document.getElementById("brand-sub").textContent =
-    "TDocStd_Document · " + state.tree.features.length + " functions";
+  document.getElementById("doc-title").textContent = state.tree.name;
+  document.getElementById("doc-count").textContent =
+    state.tree.features.length + " features · " + state.tree.units;
   document.getElementById("status-kernel").textContent =
-    kernel ? kernel.description : "starting OpenCascade…";
+    kernel ? (kernel.kind === "wasm" ? "OpenCascade · in page" : kernel.description) : "starting…";
 }
 
 /* ----------------------------------------------------------- which kernel */
@@ -752,16 +751,8 @@ function setLink(active) {
   const chip = document.getElementById("btn-link");
   chip.classList.toggle("live", !!active);
   document.getElementById("link-label").textContent = !active ? "starting…"
-    : active.kind === "wasm" ? "in this page"
+    : active.kind === "wasm" ? "wasm"
     : (active.base ? active.base.replace(/^https?:\/\//, "") : "same origin");
-
-  const banner = document.getElementById("banner");
-  banner.innerHTML = (!active || active.kind !== "wasm") ? "" :
-    '<div class="banner"><span class="dot"></span><div><b>Running in this page.</b> ' +
-    "OpenCascade is compiled to WebAssembly and building the geometry here — the " +
-    "same kernel, the same B-Rep. Start a native kernel for OCAF persistence, " +
-    "STEP and OBJ export." +
-    "<code>ocaf/build/ocafcad serve --ui docs/parametric-cad.html</code></div></div>";
 }
 
 //! Hands the interface over to a kernel: catalogue first, then the document,
@@ -891,7 +882,7 @@ document.getElementById("btn-load").addEventListener("click", async () => {
   }
 });
 
-for (const button of document.querySelectorAll(".view-tools button")) {
+for (const button of document.querySelectorAll("#view-tools button")) {
   button.addEventListener("click", () => {
     const name = button.dataset.view;
     if (name === "fit") return fitView();
@@ -921,9 +912,31 @@ new MutationObserver(repaintTheme).observe(document.documentElement, { attribute
 addEventListener("resize", resize);
 new ResizeObserver(resize).observe(viewportEl);
 
+const treePanel = document.getElementById("tree-panel");
+const logPop = document.getElementById("log-pop");
+const remember = (key, value) => { try { localStorage.setItem(key, value); } catch (e) { /* private */ } };
+const recall = key => { try { return localStorage.getItem(key); } catch (e) { return null; } };
+
+function toggleTree(force) {
+  treePanel.hidden = force === undefined ? !treePanel.hidden : !force;
+  remember("ocafcad/tree", treePanel.hidden ? "off" : "on");
+}
+document.getElementById("btn-tree").addEventListener("click", () => toggleTree());
+document.getElementById("btn-def-close").addEventListener("click", () => {
+  state.edited = null;
+  buildPanel();
+});
+document.getElementById("btn-log").addEventListener("click", () => { logPop.hidden = !logPop.hidden; });
+addEventListener("pointerdown", event => {
+  if (!logPop.hidden && !logPop.contains(event.target) &&
+      !document.getElementById("btn-log").contains(event.target)) logPop.hidden = true;
+}, true);
+
 addEventListener("keydown", event => {
   if (event.target.matches("input, textarea, select")) return;
   if (event.key === "f" || event.key === "F") fitView();
+  if (event.key === "t" || event.key === "T") toggleTree();
+  if (event.key === "Escape") { state.edited = null; buildPanel(); logPop.hidden = true; }
 });
 
 (async function start() {
@@ -931,6 +944,8 @@ addEventListener("keydown", event => {
   buildGround();
   placeCamera();
   resize();
+
+  if (recall("ocafcad/tree") === "off") treePanel.hidden = true;
 
   const params = new URLSearchParams(location.search);
   let remembered = null;
