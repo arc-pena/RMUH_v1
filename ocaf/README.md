@@ -8,8 +8,8 @@ Two halves ship together and speak the same file format:
 
 | | |
 |---|---|
-| `ocaf/` | the kernel — C++ on OpenCascade 7.6, drivers + runtime + CLI |
-| `docs/parametric-cad.html` | the front-end — a CATIA-style tree, 3D view and parameter panel, published as an Artifact |
+| `ocaf/` | this kernel — C++ on OpenCascade 7.6, drivers + runtime + HTTP server |
+| `docs/` | the front-end — a CATIA-style tree, 3D view and parameter panel. It also carries OpenCascade compiled to WebAssembly, so it runs with no kernel installed; see `docs/README.md` |
 
 ## The model
 

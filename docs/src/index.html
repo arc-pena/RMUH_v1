@@ -1,0 +1,560 @@
+<title>OCAF Feature Modeller</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<style>
+:root {
+  /* Cool slate neutrals, biased toward the engineering blue accent. */
+  --ground:      #e7ecf0;
+  --panel:       #f7f9fb;
+  --panel-2:     #eef2f6;
+  --line:        #cdd7df;
+  --line-soft:   #dde4ea;
+  --ink:         #16222c;
+  --ink-2:       #4d5f6d;
+  --ink-3:       #7b8b98;
+  --accent:      #0a6cb0;
+  --accent-ink:  #ffffff;
+  --accent-soft: #dceaf5;
+  --datum:       #b07408;
+  --datum-soft:  #f6ead3;
+  --good:        #1c7a52;
+  --bad:         #bb3a2c;
+  --bad-soft:    #f8e2df;
+  --view-top:    #dfe6ec;
+  --view-bottom: #bcc8d2;
+  --shape:       #93a2ad;
+  --shape-edge:  #3d4c58;
+  --grid:        #a9b7c2;
+  --grid-axis:   #8494a1;
+  --shadow:      0 1px 2px rgba(22, 34, 44, .07), 0 6px 18px rgba(22, 34, 44, .06);
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --rail: 272px;
+  --panel-w: 320px;
+}
+:root:not([data-theme="light"]) { color-scheme: light dark; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #10171d;
+    --panel:       #161f27;
+    --panel-2:     #1c2731;
+    --line:        #2a3844;
+    --line-soft:   #223039;
+    --ink:         #e5edf3;
+    --ink-2:       #a3b3c0;
+    --ink-3:       #748693;
+    --accent:      #4aa8ea;
+    --accent-ink:  #06131d;
+    --accent-soft: #17303f;
+    --datum:       #e0a33c;
+    --datum-soft:  #33280f;
+    --good:        #4fb98a;
+    --bad:         #e2705f;
+    --bad-soft:    #3a1e1a;
+    --view-top:    #17212a;
+    --view-bottom: #0b1115;
+    --shape:       #7d8d99;
+    --shape-edge:  #cbd8e2;
+    --grid:        #2c3a45;
+    --grid-axis:   #3d4f5c;
+    --shadow:      0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .3);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground:      #10171d;
+  --panel:       #161f27;
+  --panel-2:     #1c2731;
+  --line:        #2a3844;
+  --line-soft:   #223039;
+  --ink:         #e5edf3;
+  --ink-2:       #a3b3c0;
+  --ink-3:       #748693;
+  --accent:      #4aa8ea;
+  --accent-ink:  #06131d;
+  --accent-soft: #17303f;
+  --datum:       #e0a33c;
+  --datum-soft:  #33280f;
+  --good:        #4fb98a;
+  --bad:         #e2705f;
+  --bad-soft:    #3a1e1a;
+  --view-top:    #17212a;
+  --view-bottom: #0b1115;
+  --shape:       #7d8d99;
+  --shape-edge:  #cbd8e2;
+  --grid:        #2c3a45;
+  --grid-axis:   #3d4f5c;
+  --shadow:      0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .3);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.45;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ------------------------------------------------------------------ chrome */
+.chrome {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 7px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+  flex-wrap: wrap;
+}
+.brand {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-right: 14px;
+  margin-right: 6px;
+  border-right: 1px solid var(--line);
+}
+.brand b { font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+.brand span {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  letter-spacing: .02em;
+}
+.group { display: flex; flex-direction: column; gap: 3px; padding: 0 8px; border-right: 1px solid var(--line-soft); }
+.group:last-of-type { border-right: 0; }
+.group > .row { display: flex; gap: 3px; }
+.group > .cap {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  color: var(--ink-3);
+  padding-left: 2px;
+}
+.tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px 5px 7px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--ink);
+  white-space: nowrap;
+  transition: background .12s, border-color .12s;
+}
+.tool:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
+.tool:disabled { opacity: .38; cursor: not-allowed; }
+.tool svg { width: 15px; height: 15px; flex: none; }
+.tool.icon-only { padding: 5px 6px; }
+.tool.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.tool.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+.spacer { flex: 1; }
+
+/* -------------------------------------------------------------------- body */
+main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--rail) minmax(0, 1fr) var(--panel-w);
+}
+.rail {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.rail.right { border-right: 0; border-left: 1px solid var(--line); }
+.rail-head {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+}
+.rail-head h2 {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--ink-3);
+}
+.rail-head .entry { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.rail-body { overflow: auto; padding: 8px 0 16px; flex: 1; }
+
+/* ---------------------------------------------------------- specification tree */
+.tree { list-style: none; margin: 0; padding: 0; }
+.tree .branch { list-style: none; margin: 0; padding: 0 0 0 15px; }
+.node {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 12px 3px 10px;
+  cursor: default;
+  user-select: none;
+  border-left: 2px solid transparent;
+}
+.node.pick { cursor: pointer; }
+.node.pick:hover { background: var(--panel-2); }
+.node.selected { background: var(--accent-soft); border-left-color: var(--accent); }
+.node .glyph { width: 15px; height: 15px; flex: none; color: var(--ink-2); }
+.node.datum .glyph { color: var(--datum); }
+.node .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .kind { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.node.consumed .label, .node.consumed .glyph { opacity: .45; }
+.node.consumed .label { text-decoration: line-through; text-decoration-thickness: 1px; }
+.node.failed .label { color: var(--bad); }
+.eye {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  width: 15px; height: 15px; color: var(--ink-3); opacity: .55;
+}
+.eye:hover { opacity: 1; color: var(--accent); }
+.eye.off { color: var(--ink-3); }
+.tree-root {
+  display: flex; align-items: center; gap: 7px;
+  padding: 3px 12px 3px 10px; font-weight: 600;
+}
+.tree-root .glyph { width: 15px; height: 15px; color: var(--ink-2); }
+.set-label {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 12px 3px 10px;
+  font-size: 10px; font-weight: 600; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.branch { position: relative; }
+.branch::before {
+  content: ""; position: absolute; left: 6px; top: 2px; bottom: 6px;
+  border-left: 1px solid var(--line);
+}
+
+/* ---------------------------------------------------------------- viewport */
+.viewport { position: relative; min-width: 0; background: var(--view-bottom); }
+.viewport canvas { display: block; width: 100%; height: 100%; }
+.view-tools {
+  position: absolute; top: 10px; right: 10px;
+  display: flex; gap: 3px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border: 1px solid var(--line); border-radius: 4px; padding: 3px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+}
+.view-tools button {
+  border: 0; background: none; padding: 4px 8px; border-radius: 3px; cursor: pointer;
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); letter-spacing: .03em;
+}
+.view-tools button:hover { background: var(--accent-soft); color: var(--accent); }
+.hint {
+  position: absolute; left: 12px; bottom: 10px;
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+  pointer-events: none;
+}
+.stamp {
+  position: absolute; left: 12px; top: 10px;
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+  pointer-events: none; line-height: 1.6;
+}
+.stamp b { color: var(--ink-2); font-weight: 500; }
+
+/* ------------------------------------------------------- definition panel */
+.def { padding: 0 0 20px; }
+.def-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--line-soft); }
+.def-head .name-row { display: flex; gap: 8px; align-items: center; }
+.def-head input.name {
+  flex: 1; min-width: 0;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 3px; padding: 5px 8px; font-weight: 600;
+}
+.badge {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .04em;
+  padding: 2px 7px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-2);
+}
+.badge.datum { background: var(--datum-soft); border-color: transparent; color: var(--datum); }
+.badge.body { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.badge.operation { background: var(--panel-2); border-color: var(--accent); color: var(--accent); }
+.def-head .meta {
+  margin-top: 8px; font-family: var(--mono); font-size: 10px;
+  color: var(--ink-3); line-height: 1.7; word-break: break-all;
+}
+.summary { padding: 10px 14px 0; color: var(--ink-2); max-width: 46ch; }
+.field { padding: 11px 14px 12px; border-bottom: 1px solid var(--line-soft); }
+.field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.field-head label { font-weight: 500; }
+.value-box { display: flex; align-items: baseline; gap: 3px; }
+.value-box input[type="number"] {
+  width: 74px; text-align: right;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px;
+  padding: 3px 6px; font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.value-box .unit { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); width: 18px; }
+input[type="range"] { width: 100%; margin: 9px 0 0; accent-color: var(--accent); }
+select {
+  width: 100%; margin-top: 6px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 3px; padding: 5px 7px;
+}
+.attr-path {
+  margin-top: 7px; font-family: var(--mono); font-size: 9.5px;
+  color: var(--ink-3); letter-spacing: .01em;
+}
+.attr-path b { color: var(--ink-2); font-weight: 500; }
+.notice {
+  margin: 12px 14px; padding: 9px 11px; border-radius: 3px;
+  background: var(--bad-soft); color: var(--bad);
+  border-left: 3px solid var(--bad);
+}
+.notice.info { background: var(--panel-2); color: var(--ink-2); border-left-color: var(--accent); }
+.actions { display: flex; gap: 6px; padding: 12px 14px; flex-wrap: wrap; }
+.empty { padding: 26px 16px; color: var(--ink-3); max-width: 42ch; }
+.empty h3 { margin: 0 0 8px; font-size: 13px; color: var(--ink-2); }
+.empty ol { margin: 10px 0 0; padding-left: 18px; line-height: 1.75; }
+.empty kbd {
+  font-family: var(--mono); font-size: 10.5px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px;
+}
+
+/* ------------------------------------------------------------------ log */
+.log-panel { border-top: 1px solid var(--line); flex: none; max-height: 40%; display: flex; flex-direction: column; }
+.log-list {
+  overflow: auto; padding: 6px 0 10px;
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.7;
+}
+.log-list div { padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log-list .ran { color: var(--good); }
+.log-list .same { color: var(--ink-3); }
+.log-list .err { color: var(--bad); }
+.log-list .head { color: var(--ink-2); padding-top: 4px; }
+
+/* --------------------------------------------------------------- status */
+.status {
+  flex: none; display: flex; align-items: center; gap: 16px;
+  padding: 5px 12px; background: var(--panel); border-top: 1px solid var(--line);
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+}
+.status b { color: var(--ink-2); font-weight: 500; }
+
+/* ---------------------------------------------------------------- modal */
+dialog {
+  border: 1px solid var(--line); border-radius: 5px; padding: 0;
+  background: var(--panel); color: var(--ink);
+  max-width: 640px; width: calc(100% - 40px); box-shadow: var(--shadow);
+}
+dialog::backdrop { background: rgba(8, 14, 19, .55); }
+dialog .dhead { padding: 13px 16px; border-bottom: 1px solid var(--line); }
+dialog h3 { margin: 0; font-size: 13px; }
+dialog p { margin: 5px 0 0; color: var(--ink-2); max-width: 62ch; }
+dialog textarea {
+  width: 100%; height: 300px; border: 0; border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel-2); color: var(--ink);
+  font-family: var(--mono); font-size: 11px; padding: 12px 16px; resize: vertical;
+}
+dialog .cli {
+  padding: 10px 16px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+  border-bottom: 1px solid var(--line-soft); overflow-x: auto; white-space: nowrap;
+}
+dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: flex-end; }
+
+@media (max-width: 1080px) {
+  body { height: auto; overflow: auto; }
+  main { grid-template-columns: 1fr; }
+  .viewport { height: 62vh; order: -1; }
+  .rail.right { border-left: 0; border-top: 1px solid var(--line); }
+  .rail { border-right: 0; border-top: 1px solid var(--line); }
+  .rail-body { max-height: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<style>
+/* --------------------------------------------- connection state additions */
+.link {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 10px; border-radius: 3px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--line-soft); color: var(--ink);
+  font-family: var(--mono); font-size: 11px;
+}
+.link:hover { border-color: var(--accent); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.link.live .dot { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent); }
+.link.live { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+.banner {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 11px 14px; border-bottom: 1px solid var(--line);
+  background: var(--panel-2); color: var(--ink-2);
+}
+.banner .dot { margin-top: 6px; }
+.banner b { color: var(--ink); font-weight: 600; }
+.banner code {
+  display: block; margin-top: 6px; font-family: var(--mono); font-size: 10.5px;
+  color: var(--accent); overflow-x: auto; white-space: nowrap;
+}
+.field.locked { opacity: .55; }
+.field.locked input { pointer-events: none; }
+dialog label.row { display: block; padding: 12px 16px 0; }
+dialog input.url {
+  width: 100%; margin-top: 6px; padding: 6px 9px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px;
+  font-family: var(--mono);
+}
+dialog ol { margin: 10px 0 0; padding-left: 20px; color: var(--ink-2); line-height: 1.8; }
+dialog ol code {
+  font-family: var(--mono); font-size: 10.5px; background: var(--panel-2);
+  border: 1px solid var(--line-soft); border-radius: 3px; padding: 1px 5px; color: var(--accent);
+}
+.stream { color: var(--accent); }
+
+/* ------------------------------------------------------------ boot state */
+#boot {
+  position: absolute; inset: 0; display: grid; place-content: center; justify-items: center;
+  gap: 14px; text-align: center; z-index: 5;
+  background: color-mix(in srgb, var(--ground) 92%, transparent);
+}
+#boot .ring {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--accent);
+  animation: spin 900ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#boot b { font-size: 13px; }
+#boot-message { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+#boot .note { font-size: 11.5px; color: var(--ink-3); max-width: 40ch; }
+#boot.failed .ring { animation: none; border-top-color: var(--bad); border-color: var(--bad); }
+@media (prefers-reduced-motion: reduce) { #boot .ring { animation: none; } }
+</style>
+
+<header class="chrome">
+  <div class="brand">
+    <b>OCAF Feature Modeller</b>
+    <span id="brand-sub">TDocStd_Document</span>
+  </div>
+
+  <div class="group">
+    <div class="cap">Datums</div>
+    <div class="row" id="tools-datum"></div>
+  </div>
+  <div class="group">
+    <div class="cap">Solids</div>
+    <div class="row" id="tools-body"></div>
+  </div>
+  <div class="group">
+    <div class="cap">Operations</div>
+    <div class="row" id="tools-op"></div>
+  </div>
+  <div class="group">
+    <div class="cap">Kernel</div>
+    <div class="row">
+      <button class="link" id="btn-link"><span class="dot"></span><span id="link-label">offline</span></button>
+      <button class="tool" id="btn-model">Model file…</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <aside class="rail">
+    <div class="rail-head">
+      <h2>Specification tree</h2>
+      <span class="entry" id="tree-entry">0:1:1</span>
+    </div>
+    <div class="rail-body">
+      <div class="tree-root">
+        <span class="glyph" id="root-glyph"></span>
+        <span id="doc-title">Part1</span>
+      </div>
+      <ul class="tree branch" id="tree"></ul>
+    </div>
+    <div class="log-panel">
+      <div class="rail-head"><h2>Regeneration</h2><span class="entry" id="log-count"></span></div>
+      <div class="log-list" id="log"></div>
+    </div>
+  </aside>
+
+  <section class="viewport" id="viewport">
+    <div id="boot">
+      <div class="ring"></div>
+      <b>OCAF Feature Modeller</b>
+      <div id="boot-message">loading</div>
+      <p class="note">OpenCascade is compiled into this page. The first load unpacks
+         the kernel; after that it is instant.</p>
+    </div>
+    <div class="stamp" id="stamp"></div>
+    <div class="view-tools">
+      <button data-view="iso">ISO</button>
+      <button data-view="top">TOP</button>
+      <button data-view="front">FRONT</button>
+      <button data-view="right">RIGHT</button>
+      <button data-view="fit">FIT</button>
+    </div>
+    <div class="hint">drag orbit · shift-drag pan · wheel zoom · click a body to select</div>
+  </section>
+
+  <aside class="rail right">
+    <div class="rail-head">
+      <h2>Definition</h2>
+      <span class="entry" id="def-entry"></span>
+    </div>
+    <div id="banner"></div>
+    <div class="rail-body"><div class="def" id="def"></div></div>
+  </aside>
+</main>
+
+<footer class="status">
+  <span id="status-sel">nothing selected</span>
+  <span id="status-regen"></span>
+  <span class="spacer"></span>
+  <span id="status-kernel"></span>
+</footer>
+
+<dialog id="modal-link">
+  <div class="dhead">
+    <h3>Which kernel</h3>
+    <p>This page carries OpenCascade compiled to WebAssembly, and builds the geometry
+       itself. A native kernel does the same work with the real OCAF document behind
+       it — labels, TFunction drivers, TNaming results — and can write
+       <code>.cbf</code>, STEP and OBJ to disk.</p>
+    <ol>
+      <li>Build it once: <code>cmake -S ocaf -B ocaf/build &amp;&amp; cmake --build ocaf/build -j</code></li>
+      <li>Or in Python: <code>pip install cadquery-ocp &amp;&amp; python -m ocafpy serve</code></li>
+      <li>Serve a model: <code>ocaf/build/ocafcad serve ocaf/examples/cube_fillet.ocaf.json</code></li>
+    </ol>
+  </div>
+  <label class="row">Kernel address
+    <input class="url" id="link-url" value="http://127.0.0.1:8787" spellcheck="false">
+  </label>
+  <div class="dfoot">
+    <button class="tool" id="btn-disconnect">Use the kernel in this page</button>
+    <button class="tool primary" id="btn-connect">Connect</button>
+  </div>
+</dialog>
+
+<dialog id="modal">
+  <div class="dhead">
+    <h3>Model file — <span class="badge">.ocaf.json</span></h3>
+    <p>The parametric model, no geometry — every feature, its arguments and its
+       references. Paste one in and the kernel rebuilds it.</p>
+  </div>
+  <div class="cli">$ ocafcad build model.ocaf.json -o part.cbf --step part.step</div>
+  <textarea id="model-text" spellcheck="false"></textarea>
+  <div class="dfoot">
+    <button class="tool" id="btn-copy">Copy</button>
+    <button class="tool" id="btn-load">Rebuild</button>
+    <button class="tool primary" id="btn-close">Done</button>
+  </div>
+</dialog>

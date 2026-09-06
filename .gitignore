@@ -3,3 +3,5 @@ __pycache__/
 ocaf/build/
 docs/snapshot.json
 docs/schema.json
+docs/.kernel/
+docs/parametric-cad.html
