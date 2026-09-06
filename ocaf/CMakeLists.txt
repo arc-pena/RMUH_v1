@@ -18,6 +18,7 @@ add_library(ocafcad_core
   src/Drivers.cxx
   src/Document.cxx
   src/Export.cxx
+  src/Server.cxx
 )
 target_include_directories(ocafcad_core PUBLIC include)
 

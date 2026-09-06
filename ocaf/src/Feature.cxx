@@ -125,6 +125,20 @@ void SetError(const TDF_Label& feature, const std::string& message)
     TDataStd_AsciiString::Set(errorLabel, TCollection_AsciiString(message.c_str()));
 }
 
+int Revision(const TDF_Label& feature)
+{
+  if (feature.IsNull()) return 0;
+  TDF_Label            label = feature.FindChild(REVISION_TAG, Standard_False);
+  Handle(TDataStd_Integer) value;
+  if (!label.IsNull() && label.FindAttribute(TDataStd_Integer::GetID(), value)) return value->Get();
+  return 0;
+}
+
+void BumpRevision(const TDF_Label& feature)
+{
+  TDataStd_Integer::Set(feature.FindChild(REVISION_TAG, Standard_True), Revision(feature) + 1);
+}
+
 bool PointOf(const TDF_Label& pointFeature, gp_Pnt& result)
 {
   const TypeSpec* spec = Type(pointFeature);

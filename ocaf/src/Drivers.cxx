@@ -38,7 +38,9 @@ void FeatureDriver::Arguments(TDF_LabelList& args) const
   for (TDF_ChildIterator it(feature); it.More(); it.Next())
   {
     const TDF_Label child = it.Value();
-    if (child.Tag() == RESULT_TAG || child.Tag() == Feature::ERROR_TAG) continue;
+    if (child.Tag() == RESULT_TAG || child.Tag() == Feature::ERROR_TAG
+        || child.Tag() == Feature::REVISION_TAG)
+      continue;
 
     Handle(TDF_Reference) ref;
     if (child.FindAttribute(TDF_Reference::GetID(), ref))
@@ -108,6 +110,7 @@ Standard_Integer FeatureDriver::Execute(Handle(TFunction_Logbook)& log) const
   builder.Generated(shape);
 
   Feature::SetError(feature, std::string());
+  Feature::BumpRevision(feature);
   if (!function.IsNull()) function->SetFailure(0);
 
   log->SetImpacted(result);
@@ -141,8 +144,12 @@ protected:
       error = "a vector needs a non-zero direction";
       return 2;
     }
-    // A vector is data, but it is drawn as an arrow shaft from the world origin.
-    shape = BRepBuilderAPI_MakeEdge(gp_Pnt(0, 0, 0), gp_Pnt(v.X(), v.Y(), v.Z())).Edge();
+    // A vector is data. Its shape exists only to be seen, so it is drawn at a
+    // readable length along the direction rather than at the raw magnitude -
+    // the magnitude stays in dx/dy/dz, where the parameters are read from.
+    const gp_Dir d(v);
+    shape = BRepBuilderAPI_MakeEdge(gp_Pnt(0, 0, 0),
+                                    gp_Pnt(0, 0, 0).Translated(gp_Vec(d) * 100.0)).Edge();
     return 0;
   }
 };

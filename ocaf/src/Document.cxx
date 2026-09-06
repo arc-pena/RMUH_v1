@@ -22,6 +22,7 @@
 #include <XmlDrivers.hxx>
 
 #include <algorithm>
+#include <set>
 #include <fstream>
 #include <sstream>
 
@@ -123,6 +124,31 @@ TDF_Label Document::FindFeature(const std::string& reference) const
 
 // ------------------------------------------------------------------ editing
 
+//! CAD naming: Cube.1, Cube.2 ... with a short stable id, CB1, CB2 ...
+std::string Document::UniqueName(const std::string& type) const
+{
+  std::set<std::string> used;
+  for (const TDF_Label& f : Features()) used.insert(Feature::Name(f));
+  for (int i = 1;; ++i)
+  {
+    const std::string candidate = type + "." + std::to_string(i);
+    if (!used.count(candidate)) return candidate;
+  }
+}
+
+std::string Document::UniqueId(const std::string& type) const
+{
+  std::set<std::string> used;
+  for (const TDF_Label& f : Features()) used.insert(Feature::Id(f));
+  std::string stem = type.substr(0, 2);
+  for (char& c : stem) c = (char)std::toupper((unsigned char)c);
+  for (int i = 1;; ++i)
+  {
+    const std::string candidate = stem + std::to_string(i);
+    if (!used.count(candidate)) return candidate;
+  }
+}
+
 TDF_Label Document::AddFeature(const std::string& type,
                                const std::string& id,
                                const std::string& name,
@@ -151,8 +177,8 @@ TDF_Label Document::AddFeature(const std::string& type,
     return TDF_Label();
   }
 
-  const std::string finalId   = id.empty() ? (type + "_" + std::to_string(feature.Tag())) : id;
-  const std::string finalName = name.empty() ? (type + "." + std::to_string(feature.Tag())) : name;
+  const std::string finalId   = id.empty() ? UniqueId(type) : id;
+  const std::string finalName = name.empty() ? UniqueName(type) : name;
   TDataStd_AsciiString::Set(feature, TCollection_AsciiString(finalId.c_str()));
   TDataStd_Name::Set(feature, TCollection_ExtendedString(finalName.c_str()));
   Feature::SetVisible(feature, true);
@@ -220,6 +246,46 @@ bool Document::SetReference(const std::string& featureRef,
   return true;
 }
 
+std::vector<TDF_Label> Document::Dependents(const TDF_Label& feature) const
+{
+  std::vector<TDF_Label> readers;
+  for (const TDF_Label& other : Features())
+  {
+    const TypeSpec* spec = Feature::Type(other);
+    if (!spec) continue;
+    for (const ArgSpec& arg : spec->args)
+      if (arg.kind == ArgKind::Ref && Feature::Reference(other, arg.key) == feature)
+      {
+        readers.push_back(other);
+        break;
+      }
+  }
+  return readers;
+}
+
+bool Document::DeleteFeature(const std::string& featureRef, std::string& error)
+{
+  TDF_Label feature = FindFeature(featureRef);
+  if (feature.IsNull())
+  {
+    error = "no feature '" + featureRef + "'";
+    return false;
+  }
+  const std::vector<TDF_Label> readers = Dependents(feature);
+  if (!readers.empty())
+  {
+    error = Feature::Name(readers.front()) + " still reads from " + Feature::Name(feature);
+    return false;
+  }
+
+  myDoc->NewCommand();
+  // OCAF labels are not removed, they are emptied: the function leaves the
+  // scope and the label stops answering as a feature.
+  TFunction_IFunction::DeleteFunction(feature);
+  feature.ForgetAllAttributes(Standard_True);
+  return true;
+}
+
 void Document::Touch(const TDF_Label& label)
 {
   if (label.IsNull()) return;
@@ -270,10 +336,14 @@ RegenReport Document::Recompute(bool all)
       ++report.functions;
       driver->Init(feature);
 
-      const std::string name = Feature::Name(feature);
+      RegenEntry entry;
+      entry.id   = Feature::Id(feature);
+      entry.name = Feature::Name(feature);
+
       if (!driver->MustExecute(log))
       {
-        report.skipped.push_back(name);
+        entry.revision = Feature::Revision(feature);
+        report.skipped.push_back(entry);
         driver->Validate(log);
         solver.SetStatus(feature, TFunction_ES_Succeeded);
         continue;
@@ -282,13 +352,16 @@ RegenReport Document::Recompute(bool all)
       const Standard_Integer status = driver->Execute(log);
       if (status == 0)
       {
-        report.executed.push_back(name);
+        entry.revision = Feature::Revision(feature);
+        report.executed.push_back(entry);
         driver->Validate(log);
         solver.SetStatus(feature, TFunction_ES_Succeeded);
       }
       else
       {
-        report.failed.push_back(name + ": " + Feature::Error(feature));
+        entry.revision = Feature::Revision(feature);
+        entry.message  = Feature::Error(feature);
+        report.failed.push_back(entry);
         // A failed feature keeps its last good shape, so the features after it
         // are still worth building.
         solver.SetStatus(feature, TFunction_ES_Succeeded);
@@ -450,6 +523,7 @@ Json Document::ToJson(bool withState) const
       Json state = Json::MakeObject();
       state.Set("entry", Json::Str(Entry(f)));
       state.Set("visible", Json::Bln(Feature::IsVisible(f)));
+      state.Set("revision", Json::Num(Feature::Revision(f)));
       state.Set("built", Json::Bln(!Feature::Shape(f).IsNull()));
       const std::string message = Feature::Error(f);
       if (!message.empty()) state.Set("error", Json::Str(message));

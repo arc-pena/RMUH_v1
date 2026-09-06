@@ -7,20 +7,30 @@
 
 #include <TDF_Label.hxx>
 #include <TDocStd_Document.hxx>
+#include <TopoDS_Shape.hxx>
 
 #include <string>
 #include <vector>
 
 namespace ocafcad {
 
+struct RegenEntry
+{
+  std::string id;
+  std::string name;
+  std::string message;  //!< failures only
+  int         revision = 0;
+};
+
 //! What a regeneration did. The point of a parametric kernel is that this list
-//! is short: only the features downstream of the edit are rebuilt.
+//! is short: only the features downstream of the edit are rebuilt, and only
+//! those need their triangles sent again.
 struct RegenReport
 {
-  std::vector<std::string> executed;  //!< feature names, in dependency order
-  std::vector<std::string> skipped;   //!< up to date, not touched by the edit
-  std::vector<std::string> failed;    //!< name + ": " + message
-  int                      functions = 0;
+  std::vector<RegenEntry> executed;  //!< rebuilt, in dependency order
+  std::vector<RegenEntry> skipped;   //!< up to date, not touched by the edit
+  std::vector<RegenEntry> failed;
+  int                     functions = 0;
 
   bool Ok() const { return failed.empty(); }
 };
@@ -62,6 +72,9 @@ public:
 
   //! Creates the feature label, its argument labels (defaults from the
   //! catalogue) and its TFunction_Function.
+  std::string UniqueName(const std::string& type) const;
+  std::string UniqueId(const std::string& type) const;
+
   TDF_Label AddFeature(const std::string& type,
                        const std::string& id,
                        const std::string& name,
@@ -76,6 +89,12 @@ public:
                     const std::string& key,
                     const std::string& targetRef,
                     std::string&       error);
+
+  //! Refuses while another feature still reads from this one.
+  bool DeleteFeature(const std::string& featureRef, std::string& error);
+
+  //! Every feature that references \p feature.
+  std::vector<TDF_Label> Dependents(const TDF_Label& feature) const;
 
   // ----------------------------------------------------------- regeneration
 
@@ -103,6 +122,20 @@ private:
 
 // ------------------------------------------------------------------ exports
 
+//! Meshes a B-Rep shape and returns its triangles - positions, normals and
+//! indices - plus its edge polylines. This is the whole contract between the
+//! kernel and any viewer: OpenCascade owns the geometry, the client draws the
+//! triangles it is handed.
+Json TessellateShape(const TopoDS_Shape& shape, double deflection = 0.0);
+
+//! One feature's triangle stream, tagged with the revision it was built at so
+//! a client can cache it and re-fetch only what changed.
+Json FeatureMeshToJson(const TDF_Label& feature, double deflection = 0.0);
+
+//! The document the front-end mirrors: every feature with its arguments,
+//! references, visibility, error and revision.
+Json TreeToJson(const Document& doc);
+
 //! Triangulated features as JSON: positions / normals / indices plus edge
 //! polylines, ready for a WebGL viewer.
 Json TessellateToJson(const Document& doc, double deflection = 0.0);
@@ -113,6 +146,8 @@ bool WriteStl(const Document& doc, const std::string& path, double deflection, s
 //! The feature catalogue as JSON - the same table the front-end builds its
 //! toolbar and its sliders from.
 Json SchemaToJson();
+
+Json RegenReportToJson(const RegenReport& report);
 
 } // namespace ocafcad
 

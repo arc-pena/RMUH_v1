@@ -8,6 +8,7 @@
 #include <ocafcad/Document.hxx>
 #include <ocafcad/Feature.hxx>
 #include <ocafcad/Schema.hxx>
+#include <ocafcad/Server.hxx>
 
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +31,9 @@ struct Options
   std::string              stlOut;   //!< --stl
   bool                     tree = false;
   double                   deflection = 0.0;
+  std::string              host = "127.0.0.1";
+  int                      port = 8787;
+  std::string              uiFile;
   std::vector<std::string> positional;
 };
 
@@ -45,6 +49,11 @@ void Usage()
     "  ocafcad set <part.cbf> <Feature>.<param>=<value> [...] [outputs]\n"
     "      Opens a stored document, edits parameters and regenerates. Only the\n"
     "      functions downstream of the edit are re-executed.\n"
+    "\n"
+    "  ocafcad serve [<model.ocaf.json|part.cbf>] [--port 8787] [--ui <file.html>]\n"
+    "      Holds the document in memory and serves it over HTTP. The browser\n"
+    "      mirrors the label tree and asks for a shape's triangles only when\n"
+    "      that shape's revision moves.\n"
     "\n"
     "  ocafcad tree <part.cbf|model.ocaf.json>\n"
     "  ocafcad schema\n"
@@ -82,6 +91,14 @@ bool ParseOptions(int argc, char** argv, int from, Options& options, std::string
       if (!next(value)) return false;
       options.deflection = std::atof(value.c_str());
     }
+    else if (a == "--host") { if (!next(options.host)) return false; }
+    else if (a == "--port")
+    {
+      std::string value;
+      if (!next(value)) return false;
+      options.port = std::atoi(value.c_str());
+    }
+    else if (a == "--ui") { if (!next(options.uiFile)) return false; }
     else if (a == "--tree") { options.tree = true; }
     else if (!a.empty() && a[0] == '-')
     {
@@ -103,9 +120,9 @@ void ReportRegen(const RegenReport& report)
   if (!report.skipped.empty()) std::cout << ", " << report.skipped.size() << " up to date";
   std::cout << "\n";
 
-  for (const std::string& name : report.executed) std::cout << "  + " << name << "\n";
-  for (const std::string& name : report.skipped)  std::cout << "  = " << name << " (unchanged)\n";
-  for (const std::string& failure : report.failed) std::cout << "  ! " << failure << "\n";
+  for (const RegenEntry& e : report.executed) std::cout << "  + " << e.name << "\n";
+  for (const RegenEntry& e : report.skipped)  std::cout << "  = " << e.name << " (unchanged)\n";
+  for (const RegenEntry& e : report.failed)   std::cout << "  ! " << e.name << ": " << e.message << "\n";
 }
 
 bool WriteJsonFile(const std::string& path, const Json& value)
@@ -271,6 +288,43 @@ int CommandSet(const std::vector<std::string>& positional, const Options& option
   return (report.Ok() && written) ? 0 : 1;
 }
 
+//! Opens whatever it is handed - a neutral model, a stored document, or
+//! nothing at all - and serves it.
+int CommandServe(const std::vector<std::string>& positional, const Options& options)
+{
+  Document    doc;
+  std::string error;
+
+  if (positional.empty())
+  {
+    if (!doc.LoadJsonText(kDemoModel, error))
+    {
+      std::cerr << "ocafcad: " << error << "\n";
+      return 1;
+    }
+  }
+  else
+  {
+    const std::string& source = positional[0];
+    const bool json = source.size() > 5 && source.compare(source.size() - 5, 5, ".json") == 0;
+    if (!(json ? doc.LoadJsonFile(source, error) : doc.OpenNative(source, error)))
+    {
+      std::cerr << "ocafcad: " << error << "\n";
+      return 1;
+    }
+  }
+
+  const RegenReport report = doc.Recompute(true);
+  ReportRegen(report);
+
+  ServerOptions server;
+  server.host       = options.host;
+  server.port       = options.port;
+  server.uiFile     = options.uiFile;
+  server.deflection = options.deflection;
+  return RunServer(doc, server);
+}
+
 int CommandTree(const std::string& source)
 {
   Document    doc;
@@ -313,7 +367,8 @@ int main(int argc, char** argv)
     std::cout << SchemaToJson().Dump() << "\n";
     return 0;
   }
-  if (command == "demo") return CommandDemo(options);
+  if (command == "demo")  return CommandDemo(options);
+  if (command == "serve") return CommandServe(options.positional, options);
 
   if (options.positional.empty())
   {

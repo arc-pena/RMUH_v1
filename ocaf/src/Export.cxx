@@ -5,6 +5,8 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <algorithm>
+#include <map>
+#include <TDF_Tool.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
@@ -37,6 +39,14 @@ double AutoDeflection(const TopoDS_Shape& shape)
   box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
   const double diagonal = gp_Pnt(xmin, ymin, zmin).Distance(gp_Pnt(xmax, ymax, zmax));
   return (std::max)(1.0e-3, diagonal * 2.0e-3);
+}
+
+std::string EntryOf(const TDF_Label& label)
+{
+  if (label.IsNull()) return std::string();
+  TCollection_AsciiString entry;
+  TDF_Tool::Entry(label, entry);
+  return entry.ToCString();
 }
 
 std::string ShapeKind(const TopoDS_Shape& shape)
@@ -133,6 +143,132 @@ void AddEdges(const TopoDS_Shape& shape, double deflection, Json& segments)
 
 } // namespace
 
+Json TessellateShape(const TopoDS_Shape& shape, double deflection)
+{
+  Json out = Json::MakeObject();
+  if (shape.IsNull()) return out;
+
+  out.Set("shape", Json::Str(ShapeKind(shape)));
+
+  const double d = deflection > 0.0 ? deflection : AutoDeflection(shape);
+  out.Set("deflection", Json::Num(d));
+
+  BRepMesh_IncrementalMesh mesher(shape, d, Standard_False, 0.3, Standard_True);
+  (void)mesher;
+
+  Json positions = Json::MakeArray();
+  Json normals   = Json::MakeArray();
+  Json index     = Json::MakeArray();
+  AddFaces(shape, positions, normals, index);
+  if (!index.items.empty())
+  {
+    out.Set("positions", positions);
+    out.Set("normals", normals);
+    out.Set("index", index);
+    out.Set("triangles", Json::Num((double)(index.items.size() / 3)));
+  }
+
+  Json segments = Json::MakeArray();
+  AddEdges(shape, d, segments);
+  if (!segments.items.empty()) out.Set("edges", segments);
+
+  if (shape.ShapeType() == TopAbs_VERTEX)
+  {
+    const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(shape));
+    Json         point = Json::MakeArray();
+    point.Push(Json::Num(p.X()));
+    point.Push(Json::Num(p.Y()));
+    point.Push(Json::Num(p.Z()));
+    out.Set("point", point);
+  }
+  return out;
+}
+
+Json FeatureMeshToJson(const TDF_Label& feature, double deflection)
+{
+  const TypeSpec* spec = Feature::Type(feature);
+  Json            out  = spec ? TessellateShape(Feature::Shape(feature), deflection) : Json::MakeObject();
+
+  out.Set("id", Json::Str(Feature::Id(feature)));
+  out.Set("revision", Json::Num(Feature::Revision(feature)));
+  out.Set("built", Json::Bln(!Feature::Shape(feature).IsNull()));
+  if (spec) out.Set("type", Json::Str(spec->type));
+  return out;
+}
+
+Json TreeToJson(const Document& doc)
+{
+  Json out = Json::MakeObject();
+  out.Set("format", Json::Str("ocaf-tree"));
+  out.Set("version", Json::Num(1));
+  out.Set("name", Json::Str(doc.Title()));
+  out.Set("units", Json::Str(doc.Units()));
+
+  // Which features an operation has swallowed, so the tree can grey them out.
+  std::map<std::string, std::string> consumedBy;
+  for (const TDF_Label& f : doc.Features())
+  {
+    const TypeSpec* spec = Feature::Type(f);
+    if (!spec) continue;
+    for (const ArgSpec& arg : spec->args)
+    {
+      if (arg.kind != ArgKind::Ref || !arg.consumes) continue;
+      const TDF_Label source = Feature::Reference(f, arg.key);
+      if (!source.IsNull()) consumedBy[Feature::Id(source)] = Feature::Id(f);
+    }
+  }
+
+  Json features = Json::MakeArray();
+  for (const TDF_Label& f : doc.Features())
+  {
+    const TypeSpec* spec = Feature::Type(f);
+    if (!spec) continue;
+
+    Json entry = Json::MakeObject();
+    entry.Set("id", Json::Str(Feature::Id(f)));
+    entry.Set("name", Json::Str(Feature::Name(f)));
+    entry.Set("type", Json::Str(spec->type));
+    entry.Set("category", Json::Str(spec->category == Category::Datum  ? "datum"
+                                    : spec->category == Category::Body ? "body"
+                                                                       : "operation"));
+    entry.Set("entry", Json::Str(EntryOf(f)));
+    entry.Set("visible", Json::Bln(Feature::IsVisible(f)));
+    entry.Set("revision", Json::Num(Feature::Revision(f)));
+    entry.Set("built", Json::Bln(!Feature::Shape(f).IsNull()));
+
+    const std::string message = Feature::Error(f);
+    if (!message.empty()) entry.Set("error", Json::Str(message));
+
+    const auto consumer = consumedBy.find(Feature::Id(f));
+    if (consumer != consumedBy.end()) entry.Set("consumedBy", Json::Str(consumer->second));
+
+    Json values = Json::MakeObject();
+    Json refs   = Json::MakeObject();
+    Json paths  = Json::MakeObject();
+    for (const ArgSpec& arg : spec->args)
+    {
+      const TDF_Label argLabel = Feature::ArgLabel(f, arg.key);
+      if (!argLabel.IsNull()) paths.Set(arg.key, Json::Str(EntryOf(argLabel)));
+      if (arg.kind == ArgKind::Real)
+      {
+        values.Set(arg.key, Json::Num(Feature::Real(f, arg.key, arg.def)));
+      }
+      else
+      {
+        const TDF_Label source = Feature::Reference(f, arg.key);
+        refs.Set(arg.key, source.IsNull() ? Json() : Json::Str(Feature::Id(source)));
+      }
+    }
+    entry.Set("values", values);
+    entry.Set("refs", refs);
+    entry.Set("labels", paths);
+
+    features.Push(entry);
+  }
+  out.Set("features", features);
+  return out;
+}
+
 Json TessellateToJson(const Document& doc, double deflection)
 {
   Json out = Json::MakeObject();
@@ -144,58 +280,13 @@ Json TessellateToJson(const Document& doc, double deflection)
   Json features = Json::MakeArray();
   for (const TDF_Label& f : doc.Features())
   {
-    const TypeSpec*    spec  = Feature::Type(f);
-    const TopoDS_Shape shape = Feature::Shape(f);
+    const TypeSpec* spec = Feature::Type(f);
     if (!spec) continue;
-
-    Json entry = Json::MakeObject();
-    entry.Set("id", Json::Str(Feature::Id(f)));
+    Json entry = FeatureMeshToJson(f, deflection);
     entry.Set("name", Json::Str(Feature::Name(f)));
-    entry.Set("type", Json::Str(spec->type));
     entry.Set("visible", Json::Bln(Feature::IsVisible(f)));
     const std::string message = Feature::Error(f);
     if (!message.empty()) entry.Set("error", Json::Str(message));
-
-    if (shape.IsNull())
-    {
-      entry.Set("built", Json::Bln(false));
-      features.Push(entry);
-      continue;
-    }
-    entry.Set("built", Json::Bln(true));
-    entry.Set("shape", Json::Str(ShapeKind(shape)));
-
-    const double d = deflection > 0.0 ? deflection : AutoDeflection(shape);
-    BRepMesh_IncrementalMesh mesher(shape, d, Standard_False, 0.3, Standard_True);
-    (void)mesher;
-
-    Json positions = Json::MakeArray();
-    Json normals   = Json::MakeArray();
-    Json index     = Json::MakeArray();
-    AddFaces(shape, positions, normals, index);
-    if (!index.items.empty())
-    {
-      Json mesh = Json::MakeObject();
-      mesh.Set("positions", positions);
-      mesh.Set("normals", normals);
-      mesh.Set("index", index);
-      entry.Set("mesh", mesh);
-    }
-
-    Json segments = Json::MakeArray();
-    AddEdges(shape, d, segments);
-    if (!segments.items.empty()) entry.Set("edges", segments);
-
-    if (shape.ShapeType() == TopAbs_VERTEX)
-    {
-      const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(shape));
-      Json         point = Json::MakeArray();
-      point.Push(Json::Num(p.X()));
-      point.Push(Json::Num(p.Y()));
-      point.Push(Json::Num(p.Z()));
-      entry.Set("point", point);
-    }
-
     features.Push(entry);
   }
   out.Set("features", features);
@@ -275,6 +366,30 @@ bool WriteStl(const Document& doc, const std::string& path, double deflection, s
     return false;
   }
   return true;
+}
+
+Json RegenReportToJson(const RegenReport& report)
+{
+  auto list = [](const std::vector<RegenEntry>& entries) {
+    Json array = Json::MakeArray();
+    for (const RegenEntry& e : entries)
+    {
+      Json item = Json::MakeObject();
+      item.Set("id", Json::Str(e.id));
+      item.Set("name", Json::Str(e.name));
+      item.Set("revision", Json::Num(e.revision));
+      if (!e.message.empty()) item.Set("message", Json::Str(e.message));
+      array.Push(item);
+    }
+    return array;
+  };
+
+  Json out = Json::MakeObject();
+  out.Set("functions", Json::Num(report.functions));
+  out.Set("executed", list(report.executed));
+  out.Set("skipped", list(report.skipped));
+  out.Set("failed", list(report.failed));
+  return out;
 }
 
 Json SchemaToJson()

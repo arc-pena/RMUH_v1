@@ -80,6 +80,32 @@ cmake -S ocaf -B ocaf/build -DCMAKE_BUILD_TYPE=Release
 cmake --build ocaf/build -j
 ```
 
+## Serving the model
+
+The interface holds no geometry of its own. The kernel keeps the document and
+hands over triangles; the browser mirrors the label tree and draws what it is
+sent.
+
+```sh
+ocafcad serve examples/cube_fillet.ocaf.json --ui ../docs/parametric-cad.html
+# ocafcad serving http://127.0.0.1:8787
+```
+
+| Route | |
+|---|---|
+| `GET /api/schema` | the feature catalogue the toolbar and sliders are built from |
+| `GET /api/tree` | every feature: arguments, references, visibility, error, revision |
+| `GET /api/mesh?ids=A,B` | triangles and edge polylines for named shapes |
+| `POST /api/param` | `{id, key, value}` → the regeneration report and the new tree |
+| `POST /api/feature` | `{type, refs}` → adds a feature and regenerates |
+| `POST /api/delete`, `/api/reference`, `/api/rename`, `/api/model` | |
+
+Every feature carries a **revision**, bumped only when its driver actually
+re-executed. That is the whole traffic rule: after an edit the client compares
+revisions and asks for the shapes that moved, and nothing else. Editing a
+fillet radius on the demo part re-meshes one shape; editing the cube re-meshes
+two; moving the origin point re-meshes none of the solids that did not change.
+
 ## Using the runtime
 
 ```sh

@@ -29,7 +29,8 @@
 namespace ocafcad {
 namespace Feature {
 
-inline constexpr int ERROR_TAG = 101;
+inline constexpr int ERROR_TAG    = 101;
+inline constexpr int REVISION_TAG = 102;
 
 const TypeSpec* Type(const TDF_Label& feature);
 
@@ -51,6 +52,11 @@ TopoDS_Shape Shape(const TDF_Label& feature);
 
 std::string Error(const TDF_Label& feature);
 void        SetError(const TDF_Label& feature, const std::string& message);
+
+//! Bumped every time the driver rebuilds the shape. A client caches triangles
+//! against this number and only re-fetches the shapes whose revision moved.
+int  Revision(const TDF_Label& feature);
+void BumpRevision(const TDF_Label& feature);
 
 //! Datum readers. They fall back to sensible defaults so a driver can report a
 //! useful message instead of throwing on a half-built model.
