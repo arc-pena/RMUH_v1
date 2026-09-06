@@ -68,6 +68,23 @@ one elliptical solid and its stringer one rectangular solid, each swept along
 its own helix. That is 13,836 triangles for the whole stair against 54,104 when
 the same two runs were built from segments.
 
+Two buttons give you the same feature from two different starting points, so you
+can reach for either without one replacing the other:
+
+| | |
+|---|---|
+| **Script** | a spiral stair — centre pole, treads, risers, stringer and handrail |
+| **Ribbon** | a lofted shell taken in bands, after Heydar Aliyev |
+
+`Ribbon` is the more instructive of the two. The driver surface is never built:
+it is defined as a loft through CV curves — a section control polygon carried
+along the length by Catmull-Rom through height, width and drift — and because a
+band is only a strip of that definition, the strips are read straight off it
+rather than slicing a surface that would be thrown away. Each band is a run of
+closed sections, the strip's width across the surface given thickness along the
+surface normal, lofted down the length: every band a solid, and the whole thing
+exportable as STEP.
+
 A new Script feature starts as a **spiral stair** — centre pole, treads,
 risers, stringer and handrail as separate solids, thirteen parameters on
 sliders. The treads and risers are modelled once and instanced up the helix.
