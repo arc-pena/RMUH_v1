@@ -143,6 +143,11 @@ Json TessellateToJson(const Document& doc, double deflection = 0.0);
 bool WriteStep(const Document& doc, const std::string& path, std::string& error);
 bool WriteStl(const Document& doc, const std::string& path, double deflection, std::string& error);
 
+//! Wavefront OBJ - one group per visible feature, with the vertex normals the
+//! surfaces actually have, so a fillet arrives smooth and a flat face arrives
+//! flat. This is the format to open in Blender.
+bool WriteObj(const Document& doc, const std::string& path, double deflection, std::string& error);
+
 //! The feature catalogue as JSON - the same table the front-end builds its
 //! toolbar and its sliders from.
 Json SchemaToJson();

@@ -5,6 +5,7 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <algorithm>
+#include <iomanip>
 #include <map>
 #include <TDF_Tool.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
@@ -390,6 +391,71 @@ Json RegenReportToJson(const RegenReport& report)
   out.Set("skipped", list(report.skipped));
   out.Set("failed", list(report.failed));
   return out;
+}
+
+bool WriteObj(const Document& doc, const std::string& path, double deflection, std::string& error)
+{
+  std::ofstream out(path, std::ios::binary);
+  if (!out)
+  {
+    error = "cannot write " + path;
+    return false;
+  }
+
+  out << "# " << doc.Title() << " - exported from ocafcad (OpenCascade OCAF)\n"
+      << "# units: " << doc.Units() << "\n";
+
+  int  vertexBase = 1; // OBJ indices are 1-based and run across the whole file
+  int  written    = 0;
+  for (const TDF_Label& f : doc.Features())
+  {
+    const TypeSpec* spec = Feature::Type(f);
+    // Datums are construction geometry: they orient the model, they are not
+    // part of it, so they stay out of an exchange file.
+    if (!spec || spec->category == Category::Datum) continue;
+    if (!Feature::IsVisible(f)) continue;
+    const TopoDS_Shape shape = Feature::Shape(f);
+    if (shape.IsNull()) continue;
+    if (!TopExp_Explorer(shape, TopAbs_FACE).More()) continue;
+
+    const double d = deflection > 0.0 ? deflection : AutoDeflection(shape);
+    BRepMesh_IncrementalMesh mesher(shape, d, Standard_False, 0.3, Standard_True);
+    (void)mesher;
+
+    Json positions = Json::MakeArray();
+    Json normals   = Json::MakeArray();
+    Json index     = Json::MakeArray();
+    AddFaces(shape, positions, normals, index);
+    if (index.items.empty()) continue;
+
+    out << "\no " << Feature::Name(f) << "\n";
+
+    out << std::fixed << std::setprecision(6);
+    for (size_t i = 0; i + 2 < positions.items.size(); i += 3)
+      out << "v " << positions.items[i].number << " " << positions.items[i + 1].number << " "
+          << positions.items[i + 2].number << "\n";
+    for (size_t i = 0; i + 2 < normals.items.size(); i += 3)
+      out << "vn " << normals.items[i].number << " " << normals.items[i + 1].number << " "
+          << normals.items[i + 2].number << "\n";
+
+    for (size_t i = 0; i + 2 < index.items.size(); i += 3)
+    {
+      const int a = vertexBase + (int)index.items[i].number;
+      const int b = vertexBase + (int)index.items[i + 1].number;
+      const int c = vertexBase + (int)index.items[i + 2].number;
+      out << "f " << a << "//" << a << " " << b << "//" << b << " " << c << "//" << c << "\n";
+    }
+
+    vertexBase += (int)(positions.items.size() / 3);
+    ++written;
+  }
+
+  if (written == 0)
+  {
+    error = "the model has no visible surface to export";
+    return false;
+  }
+  return true;
 }
 
 Json SchemaToJson()

@@ -29,6 +29,7 @@ struct Options
   std::string              meshOut;  //!< --mesh
   std::string              stepOut;  //!< --step
   std::string              stlOut;   //!< --stl
+  std::string              objOut;   //!< --obj
   bool                     tree = false;
   double                   deflection = 0.0;
   std::string              host = "127.0.0.1";
@@ -65,6 +66,7 @@ void Usage()
     "      --mesh     <mesh.json>           triangles and edges for a 3D viewer\n"
     "      --step     <part.step>           STEP AP214\n"
     "      --stl      <part.stl>            binary STL\n"
+    "      --obj      <part.obj>            Wavefront OBJ, one group per feature\n"
     "      --deflection <mm>                tessellation tolerance\n"
     "      --tree                           print the feature tree\n";
 }
@@ -85,6 +87,7 @@ bool ParseOptions(int argc, char** argv, int from, Options& options, std::string
     else if (a == "--mesh")             { if (!next(options.meshOut)) return false; }
     else if (a == "--step")             { if (!next(options.stepOut)) return false; }
     else if (a == "--stl")              { if (!next(options.stlOut)) return false; }
+    else if (a == "--obj")              { if (!next(options.objOut)) return false; }
     else if (a == "--deflection")
     {
       std::string value;
@@ -164,6 +167,12 @@ bool WriteOutputs(Document& doc, const Options& options)
   {
     if (WriteStl(doc, options.stlOut, options.deflection, error))
       std::cout << "wrote " << options.stlOut << "\n";
+    else { std::cerr << "ocafcad: " << error << "\n"; ok = false; }
+  }
+  if (!options.objOut.empty())
+  {
+    if (WriteObj(doc, options.objOut, options.deflection, error))
+      std::cout << "wrote " << options.objOut << "\n";
     else { std::cerr << "ocafcad: " << error << "\n"; ok = false; }
   }
   if (options.tree) std::cout << "\n" << doc.DumpTree();
