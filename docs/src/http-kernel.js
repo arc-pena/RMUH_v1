@@ -36,6 +36,7 @@ export async function createHttpKernel(base) {
     },
     setParameter(id, key, value) { return this.post("/api/param", { id, key, value }); },
     setReference(id, key, target) { return this.post("/api/reference", { id, key, target }); },
+    setCode(id, key, text) { return this.post("/api/code", { id, key, text }); },
     addFeature(type, refs) { return this.post("/api/feature", { type, refs }); },
     deleteFeature(id) { return this.post("/api/delete", { id }); },
     rename(id, name) { return this.post("/api/rename", { id, name }); },

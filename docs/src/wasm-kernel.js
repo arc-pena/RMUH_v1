@@ -21,7 +21,7 @@
 // A feature that fails keeps its last good shape and records the message, so
 // one bad radius never takes the model, or the page, down with it.
 
-import { CATALOGUE, Doc, Driver, F, kernelMessage, schemaJson, typeSpec } from "./ocaf.js";
+import { CATALOGUE, Doc, Driver, F, clampTo, kernelMessage, schemaJson, typeSpec } from "./ocaf.js";
 
 const CONFUSION = 1e-7;
 
@@ -42,6 +42,12 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   const dir = d => new oc.gp_Dir(d[0], d[1], d[2]);
 
   const length = v => Math.hypot(v[0], v[1], v[2]);
+  const V = {
+    add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+    scale: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
+    cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+    norm(a) { const l = Math.hypot(a[0], a[1], a[2]); return l < 1e-9 ? null : V.scale(a, 1 / l); },
+  };
   const readPoint = f => (f && F.spec(f) && F.spec(f).type === "Point")
     ? [F.real(f, "x"), F.real(f, "y"), F.real(f, "z")] : null;
   const readVector = f => (f && F.spec(f) && F.spec(f).type === "Vector")
@@ -334,6 +340,223 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     },
   };
 
+  /* ------------------------------------------------- the scripting surface
+
+     What a Script feature is handed. Small on purpose: solids, placement and
+     booleans, in the units the document is drawn in. Placement goes through
+     TopoDS_Shape::Moved, so repeating a shape costs a location and not a
+     rebuild - a stair with thirteen identical treads models one.            */
+
+  function axisSystem(opts = {}) {
+    const at = opts.at || [0, 0, 0];
+    const up = opts.axis || [0, 0, 1];
+    if (opts.xdir) return new oc.gp_Ax2(pnt(at), dir(up), dir(opts.xdir));
+    return new oc.gp_Ax2(pnt(at), dir(up));
+  }
+
+  const asNumber = (value, name) => {
+    if (!Number.isFinite(value)) throw new Error(name + " must be a number, got " + value);
+    return value;
+  };
+  const positive = (value, name) => {
+    if (!Number.isFinite(value) || value <= CONFUSION)
+      throw new Error(name + " must be greater than zero, got " + value);
+    return value;
+  };
+
+  function shapeApi() {
+    const api = {
+      box(dx, dy, dz, opts) {
+        return new oc.BRepPrimAPI_MakeBox(axisSystem(opts),
+          positive(dx, "box width"), positive(dy, "box depth"), positive(dz, "box height")).Shape();
+      },
+
+      //! A full cylinder, or a pie slice when an angle in degrees is given.
+      cylinder(radius, height, opts = {}) {
+        const axis = axisSystem(opts);
+        const r = positive(radius, "cylinder radius");
+        const h = positive(height, "cylinder height");
+        return opts.angle === undefined
+          ? new oc.BRepPrimAPI_MakeCylinder(axis, r, h).Shape()
+          : new oc.BRepPrimAPI_MakeCylinder(axis, r, h,
+              positive(opts.angle, "cylinder angle") * Math.PI / 180).Shape();
+      },
+
+      sphere(radius, opts) {
+        return new oc.BRepPrimAPI_MakeSphere(axisSystem(opts),
+          positive(radius, "sphere radius")).Shape();
+      },
+
+      //! An annular sector: a pie slice with its middle bored out. A stair
+      //! tread, in other words.
+      sector(innerRadius, outerRadius, angle, thickness, opts) {
+        const outer = api.cylinder(positive(outerRadius, "sector outer radius"),
+          positive(thickness, "sector thickness"),
+          { ...opts, angle: positive(angle, "sector angle") });
+        if (!(innerRadius > CONFUSION)) return outer;
+        if (innerRadius >= outerRadius)
+          throw new Error("the sector's inner radius must be smaller than its outer radius");
+        const bore = api.cylinder(innerRadius, thickness * 3,
+          { ...opts, at: [(opts && opts.at ? opts.at[0] : 0), (opts && opts.at ? opts.at[1] : 0),
+                          (opts && opts.at ? opts.at[2] : 0) - thickness] });
+        return api.cut(outer, bore);
+      },
+
+      //! A rectangular bar running from one point to another - a stringer, a
+      //! baluster, a beam. The bar's length lies along the axis system's main
+      //! direction, because gp_Ax2 projects the X direction onto the plane
+      //! normal to it: aim a sloping beam with X and it comes out horizontal.
+      beam(from, to, width, depth, opts = {}) {
+        const along = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+        const span = length(along);
+        if (span < CONFUSION) throw new Error("a beam needs two different points");
+        const w = positive(width, "beam width");
+        const d = positive(depth, "beam depth");
+
+        const up = opts.up || [0, 0, 1];
+        // Across the run, horizontally; if the run is vertical, any perpendicular will do.
+        let across = V.norm(V.cross(up, along)) || V.norm(V.cross([1, 0, 0], along)) || [1, 0, 0];
+        const upright = V.norm(V.cross(along, across)) || [0, 0, 1];
+
+        // Centre the section on the line rather than hanging it off one corner.
+        const origin = V.add(from, V.add(V.scale(across, -w / 2), V.scale(upright, -d / 2)));
+        return new oc.BRepPrimAPI_MakeBox(
+          new oc.gp_Ax2(pnt(origin), dir(along), dir(across)), w, d, span).Shape();
+      },
+
+      //! A round tube through a run of points: a cylinder per segment, a sphere
+      //! at every joint so the corners close.
+      tube(points, radius) {
+        const r = positive(radius, "tube radius");
+        if (!Array.isArray(points) || points.length < 2)
+          throw new Error("a tube needs at least two points");
+        const parts = [];
+        for (let i = 0; i < points.length - 1; i++) {
+          const along = [points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1],
+                         points[i + 1][2] - points[i][2]];
+          const span = length(along);
+          if (span < CONFUSION) continue;
+          parts.push(new oc.BRepPrimAPI_MakeCylinder(
+            new oc.gp_Ax2(pnt(points[i]), dir(along)), r, span).Shape());
+        }
+        for (let i = 1; i < points.length - 1; i++) parts.push(api.sphere(r, { at: points[i] }));
+        return api.compound(parts);
+      },
+
+      move(shape, by) {
+        const trsf = new oc.gp_Trsf();
+        trsf.SetTranslation(new oc.gp_Vec(asNumber(by[0], "dx"), asNumber(by[1], "dy"),
+                                          asNumber(by[2], "dz")));
+        return shape.Moved(new oc.TopLoc_Location(trsf));
+      },
+
+      rotate(shape, degrees, opts = {}) {
+        const trsf = new oc.gp_Trsf();
+        trsf.SetRotation(new oc.gp_Ax1(pnt(opts.at || [0, 0, 0]), dir(opts.axis || [0, 0, 1])),
+                         asNumber(degrees, "angle") * Math.PI / 180);
+        return shape.Moved(new oc.TopLoc_Location(trsf));
+      },
+
+      cut(a, b) { return api.boolean(oc.BRepAlgoAPI_Cut, a, b, "cut"); },
+      fuse(a, b) { return api.boolean(oc.BRepAlgoAPI_Fuse, a, b, "fuse"); },
+      common(a, b) { return api.boolean(oc.BRepAlgoAPI_Common, a, b, "common"); },
+      boolean(Operation, a, b, name) {
+        const operation = new Operation(a, b, new oc.Message_ProgressRange());
+        operation.Build(new oc.Message_ProgressRange());
+        if (!operation.IsDone()) throw new Error("the " + name + " did not succeed");
+        return operation.Shape();
+      },
+
+      fillet(shape, radius) {
+        const r = positive(radius, "fillet radius");
+        const smallest = smallestSolidExtent(shape);
+        if (Number.isFinite(smallest) && r >= smallest / 2)
+          throw new Error("a " + trim(r) + " mm fillet does not fit a body "
+                        + trim(smallest) + " mm across");
+        const maker = new oc.BRepFilletAPI_MakeFillet(shape, oc.ChFi3d_FilletShape.ChFi3d_Rational);
+        const explorer = new oc.TopExp_Explorer(shape, EDGE, ANY);
+        while (explorer.More()) { maker.Add(r, oc.TopoDS.Edge(explorer.Current())); explorer.Next(); }
+        explorer.delete();
+        maker.Build(new oc.Message_ProgressRange());
+        if (!maker.IsDone()) throw new Error("the fillet did not converge");
+        return maker.Shape();
+      },
+
+      compound(shapes) {
+        const list = [].concat(shapes).filter(Boolean);
+        if (!list.length) throw new Error("nothing to assemble");
+        const builder = new oc.TopoDS_Builder();
+        const compound = new oc.TopoDS_Compound();
+        builder.MakeCompound(compound);
+        for (const shape of list) builder.Add(compound, shape);
+        return compound;
+      },
+    };
+    return api;
+  }
+
+  //! Compiles the source and reads back what it declares. Anything the script
+  //! gets wrong - a syntax error, a missing build, a malformed parameter -
+  //! surfaces here rather than half-way through modelling.
+  function compileScript(source) {
+    let module;
+    try {
+      module = new Function('"use strict"; return (' + source + ");")();
+    } catch (err) {
+      throw new Error("the code did not compile: " + (err && err.message ? err.message : err));
+    }
+    if (!module || typeof module !== "object")
+      throw new Error("the code must evaluate to an object with params and build");
+    if (typeof module.build !== "function")
+      throw new Error("the code must define build(params, kernel)");
+
+    const params = [];
+    for (const raw of module.params || []) {
+      if (!raw || typeof raw.key !== "string" || !raw.key)
+        throw new Error("every parameter needs a key");
+      params.push({
+        key: raw.key,
+        label: typeof raw.label === "string" ? raw.label : raw.key,
+        def: Number.isFinite(raw.def) ? raw.def : 0,
+        min: Number.isFinite(raw.min) ? raw.min : 0,
+        max: Number.isFinite(raw.max) ? raw.max : 100,
+        step: Number.isFinite(raw.step) && raw.step > 0 ? raw.step : 1,
+        unit: typeof raw.unit === "string" ? raw.unit : "mm",
+      });
+    }
+    if (params.length > 40) throw new Error("a script may declare at most 40 parameters");
+    return { module, params };
+  }
+
+  builders.Script = {
+    //! Compiling is part of the check: a script that will not compile never
+    //! reaches the kernel, and the parameters it declares are reconciled with
+    //! the ones already stored before anything is built.
+    precondition: f => {
+      const source = F.code(f, "code", "");
+      if (!source.trim()) return "there is no code to run";
+      try {
+        const { params } = compileScript(source);
+        F.syncParams(f, params);
+      } catch (err) {
+        return err.message;
+      }
+      return null;
+    },
+    build: f => {
+      const { module, params } = compileScript(F.code(f, "code", ""));
+      const stored = F.paramValues(f);
+      const values = {};
+      for (const spec of params)
+        values[spec.key] = clampTo(spec, stored[spec.key] ?? spec.def);
+
+      const shape = module.build(values, shapeApi());
+      if (!shape || typeof shape.IsNull !== "function" || shape.IsNull())
+        throw new Error("build() must return a shape");
+      return shape;
+    },
+  };
+
   const drivers = new Map();
   for (const spec of CATALOGUE) {
     const builder = builders[spec.type];
@@ -409,6 +632,15 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       const f = doc.find(id);
       if (!f) throw new Error("no feature '" + id + "'");
       doc.setParameter(f, key, value);
+      return state(doc.recompute(false));
+    },
+
+    //! Editing a script is an edit of the document, undone and redone and saved
+    //! like any other.
+    async setCode(id, key, text) {
+      const f = doc.find(id);
+      if (!f) throw new Error("no feature '" + id + "'");
+      doc.setCode(f, key, text);
       return state(doc.recompute(false));
     },
 

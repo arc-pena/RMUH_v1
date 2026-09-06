@@ -335,6 +335,7 @@ const ICONS = {
   Cube: '<path d="M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M2.4 4.6L8 7.6l5.6-3M8 7.6v6.8" stroke="currentColor" stroke-width="1.1"/>',
   Sphere: '<circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.3"/><ellipse cx="8" cy="8" rx="2.7" ry="6.3" fill="none" stroke="currentColor" stroke-width="1"/>',
   Array: '<rect x="1.6" y="1.6" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9.4" y="1.6" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="1.6" y="9.4" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9.4" y="9.4" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".45"/>',
+  Script: '<path d="M6 4.5L2.5 8 6 11.5M10 4.5L13.5 8 10 11.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>',
   Fillet: '<path d="M2.5 13.5V8a5.5 5.5 0 015.5-5.5h5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 2.5h5.5M2.5 2.5v5.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2"/>',
   part: '<path d="M2.5 4.2L8 1.5l5.5 2.7v7.6L8 14.5l-5.5-2.7z" fill="none" stroke="currentColor" stroke-width="1.2"/>',
   eye: '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/>',
@@ -471,6 +472,8 @@ function buildPanel() {
   host.textContent = "";
   const entry = feature(state.edited);
   panel.hidden = !entry;
+  // A script needs room to be read; everything else stays narrow.
+  panel.classList.toggle("wide", !!entry && !!entry.code);
   if (!entry) return;
 
   const spec = schemaType(entry.type);
@@ -502,10 +505,21 @@ function buildPanel() {
 
   for (const arg of spec.args) {
     if (!argApplies(entry, arg)) continue;
+    if (arg.kind === "code") continue;   // the editor goes below the parameters
     host.appendChild(arg.kind === "real" ? realField(entry, arg)
                    : arg.kind === "choice" ? choiceField(entry, arg)
                    : refField(entry, arg));
   }
+
+  // Whatever the script declared for itself, as sliders.
+  if (entry.params && entry.params.length) {
+    const head = document.createElement("div");
+    head.className = "params-head";
+    head.textContent = "Parameters";
+    host.appendChild(head);
+    for (const param of entry.params) host.appendChild(scriptField(entry, param));
+  }
+  if (entry.code !== undefined) host.appendChild(codeEditor(entry));
 
   const actions = document.createElement("div");
   actions.className = "actions";
@@ -614,6 +628,95 @@ function realField(entry, arg) {
   slider.addEventListener("input", () => send(slider.value));
   number.addEventListener("change", () => send(number.value));
   return field;
+}
+
+//! A parameter the script declared. It is stored on a label of its own, so it
+//! reads and writes exactly like a catalogue argument.
+function scriptField(entry, param) {
+  const field = document.createElement("div");
+  field.className = "field";
+  field.innerHTML =
+    '<div class="field-head"><label for="s-' + param.key + '">' + escapeHtml(param.label) + "</label>" +
+    '<span class="value-box"><input type="number" id="sn-' + param.key + '" value="' +
+    round(param.value) + '" step="' + param.step + '" min="' + param.min + '" max="' + param.max +
+    '"><span class="unit">' + escapeHtml(param.unit || "") + "</span></span></div>" +
+    '<input type="range" id="s-' + param.key + '" min="' + param.min + '" max="' + param.max +
+    '" step="' + param.step + '" value="' + param.value + '">' +
+    '<div class="attr-path">' + escapeHtml(param.key) + " · <b>TDataStd_Real</b> · declared by the script</div>";
+
+  const slider = field.querySelector('input[type="range"]');
+  const number = field.querySelector('input[type="number"]');
+  const send = raw => {
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return;
+    slider.value = v; number.value = round(v);
+    pushParameter(entry.id, param.key, v);
+  };
+  slider.addEventListener("input", () => send(slider.value));
+  number.addEventListener("change", () => send(number.value));
+  return field;
+}
+
+//! The source of a Script feature. Applied on demand rather than on every
+//! keystroke, because a half-written function is not a model.
+function codeEditor(entry) {
+  const editor = document.createElement("div");
+  editor.className = "editor";
+  editor.innerHTML =
+    '<div class="editor-head"><label for="code-area"><b>Code</b></label>' +
+    '<span class="kind" style="font-family:var(--mono);font-size:9.5px;color:var(--ink-3)">' +
+    (entry.labels[entry.codeKey] || entry.entry) + " · TDataStd_AsciiString</span></div>";
+
+  const area = document.createElement("textarea");
+  area.id = "code-area";
+  area.spellcheck = false;
+  area.value = entry.code;
+  editor.appendChild(area);
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Return an object with params and build(p, k). k gives you box, "
+    + "cylinder, sphere, sector, beam, tube, move, rotate, cut, fuse, common, fillet "
+    + "and compound. Declared parameters become the sliders above.";
+  editor.appendChild(hint);
+
+  const row = document.createElement("div");
+  row.className = "row";
+  const apply = document.createElement("button");
+  apply.className = "btn primary";
+  apply.textContent = "Run";
+  const revert = document.createElement("button");
+  revert.className = "btn";
+  revert.textContent = "Revert";
+  const status = document.createElement("span");
+  status.className = "spacer";
+  status.style.cssText = "font-size:11px;color:var(--ink-3);text-align:right";
+  row.append(apply, revert, status);
+  editor.appendChild(row);
+
+  const run = async () => {
+    apply.disabled = true;
+    status.textContent = "running…";
+    try {
+      applyState(await kernel.setCode(entry.id, entry.codeKey, area.value));
+      status.textContent = "";
+    } catch (err) {
+      status.textContent = err.message.slice(0, 60);
+    } finally { apply.disabled = false; }
+  };
+  apply.addEventListener("click", run);
+  revert.addEventListener("click", () => { area.value = entry.code; status.textContent = ""; });
+
+  // Tab belongs to the code, not to the next control.
+  area.addEventListener("keydown", event => {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const at = area.selectionStart;
+      area.setRangeText("  ", at, area.selectionEnd, "end");
+    }
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); run(); }
+  });
+  return editor;
 }
 
 function refField(entry, arg) {

@@ -12,10 +12,84 @@
 
 /* ------------------------------------------------------------- catalogue */
 
+//! The script a new Script feature starts with: a spiral stair, whose treads,
+//! risers, centre pole, stringer and handrail are separate solids driven by the
+//! parameters it declares. Edit it and the feature becomes something else.
+export const SPIRAL_STAIR = `({
+  params: [
+    { key: "steps",            label: "Steps",             def: 13,  min: 3,   max: 40,   step: 1, unit: "" },
+    { key: "rise",             label: "Rise per step",     def: 190, min: 120, max: 280,  step: 5 },
+    { key: "sweep",            label: "Total sweep",       def: 270, min: 90,  max: 1080, step: 5, unit: "deg" },
+    { key: "innerRadius",      label: "Inner radius",      def: 110, min: 60,  max: 400,  step: 5 },
+    { key: "outerRadius",      label: "Outer radius",      def: 700, min: 300, max: 1600, step: 10 },
+    { key: "treadThickness",   label: "Tread thickness",   def: 45,  min: 10,  max: 90,   step: 1 },
+    { key: "treadGap",         label: "Gap between treads",def: 2,   min: 0,   max: 20,   step: 0.5, unit: "deg" },
+    { key: "riserThickness",   label: "Riser thickness",   def: 18,  min: 0,   max: 40,   step: 1 },
+    { key: "poleRadius",       label: "Centre pole radius",def: 75,  min: 30,  max: 250,  step: 5 },
+    { key: "stringerDepth",    label: "Stringer depth",    def: 180, min: 0,   max: 400,  step: 5 },
+    { key: "stringerThickness",label: "Stringer thickness",def: 12,  min: 4,   max: 40,   step: 1 },
+    { key: "railHeight",       label: "Handrail height",   def: 900, min: 700, max: 1200, step: 10 },
+    { key: "railRadius",       label: "Handrail radius",   def: 22,  min: 8,   max: 45,   step: 1 },
+  ],
+
+  build(p, k) {
+    const parts = [];
+    const step = p.sweep / p.steps;          // degrees of turn per tread
+    const top  = (p.steps + 1) * p.rise;
+
+    // Centre pole.
+    parts.push(k.cylinder(p.poleRadius, top));
+
+    // Tread and riser are modelled once. Every step is that same shape at a
+    // different location, so the kernel builds and meshes them only once.
+    const tread = k.sector(p.innerRadius, p.outerRadius, step - p.treadGap, p.treadThickness);
+    const riser = p.riserThickness > 0
+      ? k.box(p.outerRadius - p.innerRadius, p.riserThickness, p.rise - p.treadThickness,
+              { at: [p.innerRadius, -p.riserThickness / 2, 0] })
+      : null;
+
+    for (let i = 0; i < p.steps; i++) {
+      const angle = i * step;
+      parts.push(k.move(k.rotate(tread, angle), [0, 0, (i + 1) * p.rise - p.treadThickness]));
+      if (riser) parts.push(k.move(k.rotate(riser, angle), [0, 0, i * p.rise]));
+    }
+
+    // A helix, sampled finely enough that straight segments read as a curve.
+    const helix = (radius, zAt, perStep) => {
+      const points = [];
+      const n = p.steps * perStep;
+      for (let i = 0; i <= n; i++) {
+        const t = i / perStep;
+        const a = t * step * Math.PI / 180;
+        points.push([radius * Math.cos(a), radius * Math.sin(a), zAt(t)]);
+      }
+      return points;
+    };
+
+    // Stringer: a rectangular band under the outer edge of the treads.
+    if (p.stringerDepth > 0) {
+      const line = helix(p.outerRadius - p.stringerThickness / 2,
+                         t => (t + 1) * p.rise - p.treadThickness - p.stringerDepth / 2, 4);
+      for (let i = 0; i < line.length - 1; i++)
+        parts.push(k.beam(line[i], line[i + 1], p.stringerThickness, p.stringerDepth));
+    }
+
+    // Handrail: a round tube following the same helix, a rail height above the
+    // tread noses.
+    parts.push(k.tube(
+      helix(p.outerRadius - p.railRadius - 40, t => (t + 1) * p.rise + p.railHeight, 4),
+      p.railRadius));
+
+    return k.compound(parts);
+  }
+})`;
+
 const real = (key, label, def, min, max, step, unit = "mm") =>
   ({ key, label, kind: "real", def, min, max, step, unit });
 const ref = (key, label, accepts, consumes = false) =>
   ({ key, label, kind: "ref", accepts, consumes });
+//! Source the user edits, held as a TDataStd_AsciiString.
+const code = (key, label, def) => ({ key, label, kind: "code", def });
 //! A fixed set of alternatives, held as a TDataStd_Integer index.
 const choice = (key, label, options, def = 0) =>
   ({ key, label, kind: "choice", options, def });
@@ -54,7 +128,7 @@ export const CATALOGUE = [
   { type: "Array", guid: "9a1b2c30-0021-4c00-9e00-caf000000021", category: "operation",
     summary: "Repeats a body in a grid or around an axis. One feature in the tree, "
            + "however many copies it makes.",
-    args: [ref("source", "Feature", ["Cube", "Sphere", "Fillet", "Array"], true),
+    args: [ref("source", "Feature", ["Cube", "Sphere", "Fillet", "Array", "Script"], true),
            choice("mode", "Pattern", ["Rectangular", "Polar"], 0),
            when(real("countX", "Count X", 3, 1, 40, 1, ""), "mode", 0),
            when(real("spacingX", "Spacing X", 120, -600, 600, 1), "mode", 0),
@@ -66,13 +140,24 @@ export const CATALOGUE = [
            when(ref("axis", "Axis", ["Vector"]), "mode", 1),
            when(real("count", "Count", 6, 1, 120, 1, ""), "mode", 1),
            when(real("angle", "Sweep", 360, -360, 360, 5, "°"), "mode", 1)] },
+  { type: "Script", guid: "9a1b2c30-0030-4c00-9e00-caf000000030", category: "body",
+    summary: "A feature you write. The code declares its own parameters and returns "
+           + "a shape, so anything the kernel can build can become a feature.",
+    args: [code("code", "Code", SPIRAL_STAIR)] },
   { type: "Fillet", guid: "9a1b2c30-0020-4c00-9e00-caf000000020", category: "operation",
     summary: "Rounds every edge of a body. The body stays in the tree but leaves the 3D view.",
-    args: [ref("body", "Body", ["Cube", "Sphere", "Fillet", "Array"], true),
+    args: [ref("body", "Body", ["Cube", "Sphere", "Fillet", "Array", "Script"], true),
            real("radius", "Radius", 10, 0.1, 200, 0.5)] },
 ];
 
 export const FIRST_ARG_TAG = 1, RESULT_TAG = 100, ERROR_TAG = 101, REVISION_TAG = 102;
+
+//! A Script feature declares its own parameters, so they cannot live in the
+//! catalogue. Each gets a label of its own under the feature, carrying the
+//! parameter's name and value exactly as a catalogue argument would; the
+//! declaration itself is cached beside them so the interface can draw the
+//! sliders without compiling anything.
+export const PARAM_TAG_BASE = 10, PARAM_TAG_LIMIT = 50, SPECS_TAG = 51;
 
 const byType = new Map(CATALOGUE.map(t => [t.type, t]));
 const byGuid = new Map(CATALOGUE.map(t => [t.guid, t]));
@@ -140,6 +225,69 @@ export const F = {
       ? label.attr.TDataStd_Integer : fallback;
   },
   setChoice(f, key, index) { F.argLabel(f, key, true).attr.TDataStd_Integer = index; },
+
+  code(f, key, fallback = "") {
+    const label = F.argLabel(f, key);
+    return label && typeof label.attr.TDataStd_AsciiString === "string"
+      ? label.attr.TDataStd_AsciiString : fallback;
+  },
+  setCode(f, key, text) { F.argLabel(f, key, true).attr.TDataStd_AsciiString = text; },
+
+  //! What the script last declared, so the panel can draw its sliders without
+  //! compiling the code again.
+  paramSpecs(f) {
+    const label = f.findChild(SPECS_TAG);
+    if (!label || typeof label.attr.TDataStd_AsciiString !== "string") return [];
+    try { return JSON.parse(label.attr.TDataStd_AsciiString); } catch (e) { return []; }
+  },
+  setParamSpecs(f, specs) {
+    f.findChild(SPECS_TAG, true).attr.TDataStd_AsciiString = JSON.stringify(specs);
+  },
+
+  paramLabels(f) {
+    return f.childList().filter(l => l.tag >= PARAM_TAG_BASE && l.tag < PARAM_TAG_LIMIT
+                                     && l.attr.TDataStd_Name);
+  },
+  paramLabel(f, key) {
+    return F.paramLabels(f).find(l => l.attr.TDataStd_Name === key) || null;
+  },
+  paramValue(f, key, fallback = 0) {
+    const label = F.paramLabel(f, key);
+    return label && typeof label.attr.TDataStd_Real === "number" ? label.attr.TDataStd_Real : fallback;
+  },
+  paramValues(f) {
+    const values = {};
+    for (const label of F.paramLabels(f)) values[label.attr.TDataStd_Name] = label.attr.TDataStd_Real;
+    return values;
+  },
+  setParamValue(f, key, value) {
+    let label = F.paramLabel(f, key);
+    if (!label) {
+      for (let tag = PARAM_TAG_BASE; tag < PARAM_TAG_LIMIT; tag++)
+        if (!f.findChild(tag)) { label = f.findChild(tag, true); break; }
+      if (!label) throw new Error("a script may declare at most "
+        + (PARAM_TAG_LIMIT - PARAM_TAG_BASE) + " parameters");
+      label.attr.TDataStd_Name = key;
+    }
+    label.attr.TDataStd_Real = value;
+    return label;
+  },
+
+  //! Brings the stored parameters into line with what the script now declares:
+  //! values already there are kept, new ones take their default, and parameters
+  //! the script dropped are forgotten.
+  syncParams(f, specs) {
+    const wanted = new Set(specs.map(spec => spec.key));
+    for (const label of F.paramLabels(f))
+      if (!wanted.has(label.attr.TDataStd_Name)) f.children.delete(label.tag);
+    for (const spec of specs) {
+      const existing = F.paramLabel(f, spec.key);
+      const value = existing && typeof existing.attr.TDataStd_Real === "number"
+        ? existing.attr.TDataStd_Real : spec.def;
+      F.setParamValue(f, spec.key, clampTo(spec, value));
+    }
+    F.setParamSpecs(f, specs);
+  },
 
   //! An argument is live only when its condition holds; the rest are carried
   //! but not read, so switching a pattern back keeps the values you had.
@@ -289,6 +437,7 @@ export class Doc {
       const label = F.argLabel(f, arg.key, true);
       if (arg.kind === "real") label.attr.TDataStd_Real = arg.def;
       else if (arg.kind === "choice") label.attr.TDataStd_Integer = arg.def;
+      else if (arg.kind === "code") label.attr.TDataStd_AsciiString = arg.def;
     }
     F.resultLabel(f, true);
     this.log.touch(f);
@@ -311,9 +460,17 @@ export class Doc {
 
   setParameter(f, key, value) {
     const spec = F.spec(f);
-    const arg = spec && spec.args.find(a => a.key === key && a.kind !== "ref");
-    if (!arg) throw new Error(F.name(f) + " has no parameter '" + key + "'");
+    const arg = spec && spec.args.find(a => a.key === key && a.kind !== "ref" && a.kind !== "code");
     if (!Number.isFinite(value)) throw new Error("'" + key + "' must be a number");
+
+    if (!arg) {
+      // Not in the catalogue - it may be one the script declared for itself.
+      const declared = F.paramSpecs(f).find(p => p.key === key);
+      if (!declared) throw new Error(F.name(f) + " has no parameter '" + key + "'");
+      const stored = clampTo(declared, value);
+      this.log.touch(F.setParamValue(f, key, stored));
+      return stored;
+    }
 
     const label = F.argLabel(f, key, true);
     let stored;
@@ -327,6 +484,17 @@ export class Doc {
     }
     this.log.touch(label);
     return stored;
+  }
+
+  //! Editing the source is an edit like any other: the label is touched and the
+  //! solver re-runs this feature and everything downstream of it.
+  setCode(f, key, text) {
+    const spec = F.spec(f);
+    const arg = spec && spec.args.find(a => a.key === key && a.kind === "code");
+    if (!arg) throw new Error(F.name(f) + " has no code to edit");
+    if (typeof text !== "string") throw new Error("the code must be text");
+    F.setCode(f, key, text);
+    this.log.touch(F.argLabel(f, key));
   }
 
   setReference(f, key, target) {
@@ -436,6 +604,7 @@ export class Doc {
           labels[arg.key] = label.entry;
           if (arg.kind === "real") values[arg.key] = F.real(f, arg.key, arg.def);
           else if (arg.kind === "choice") values[arg.key] = F.choice(f, arg.key, arg.def);
+          else if (arg.kind === "code") { /* published separately, below */ }
           else {
             const target = F.reference(f, arg.key);
             refs[arg.key] = target ? F.id(target) : null;
@@ -447,6 +616,16 @@ export class Doc {
           entry: f.entry, visible: F.visible(f), revision: F.revision(f),
           built: !!F.shape(f), values, refs, labels,
         };
+        // A script publishes its source and the parameters it declared, so the
+        // panel can draw an editor and a slider per parameter without knowing
+        // anything about what the script builds.
+        const source = spec.args.find(a => a.kind === "code");
+        if (source) {
+          entry.code = F.code(f, source.key, source.def);
+          entry.codeKey = source.key;
+          const stored = F.paramValues(f);
+          entry.params = F.paramSpecs(f).map(p => ({ ...p, value: stored[p.key] ?? p.def }));
+        }
         if (F.error(f)) entry.error = F.error(f);
         if (consumer) entry.consumedBy = F.id(consumer);
         return entry;
@@ -463,6 +642,13 @@ export class Doc {
         for (const arg of spec.args) {
           if (arg.kind === "real") args[arg.key] = round(F.real(f, arg.key, arg.def));
           else if (arg.kind === "choice") args[arg.key] = arg.options[F.choice(f, arg.key, arg.def)];
+          else if (arg.kind === "code") {
+            args[arg.key] = F.code(f, arg.key, arg.def);
+            const stored = F.paramValues(f);
+            if (Object.keys(stored).length)
+              args.params = Object.fromEntries(
+                Object.entries(stored).map(([key, value]) => [key, round(value)]));
+          }
           else {
             const target = F.reference(f, arg.key);
             if (target) args[arg.key] = { ref: F.id(target) };
@@ -481,8 +667,20 @@ export class Doc {
       const f = doc.find(entry.id);
       const spec = F.spec(f);
       for (const [key, value] of Object.entries(entry.args || {})) {
+        if (key === "params" && value && typeof value === "object") {
+          // Restored before the script runs; the driver reconciles them against
+          // what the code declares once it compiles.
+          for (const [name, stored] of Object.entries(value))
+            if (typeof stored === "number") F.setParamValue(f, name, stored);
+          continue;
+        }
         const arg = spec.args.find(a => a.key === key);
         if (!arg) throw new Error(spec.type + ' has no argument "' + key + '"');
+        if (arg.kind === "code") {
+          if (typeof value !== "string") throw new Error(key + " of " + entry.id + " must be text");
+          F.setCode(f, key, value);
+          continue;
+        }
         if (arg.kind === "real") {
           if (typeof value !== "number") throw new Error(key + " of " + entry.id + " must be a number");
           F.setReal(f, key, value);
@@ -505,6 +703,14 @@ export class Doc {
 
 export const round = v => Math.round(v * 1e6) / 1e6;
 
+//! Keeps a value inside the range its declaration allows.
+export function clampTo(spec, value) {
+  if (!Number.isFinite(value)) return spec.def;
+  const min = Number.isFinite(spec.min) ? spec.min : -Infinity;
+  const max = Number.isFinite(spec.max) ? spec.max : Infinity;
+  return Math.min(max, Math.max(min, value));
+}
+
 //! The catalogue in the shape the HTTP kernel publishes it, so the interface
 //! reads one format whichever kernel it is talking to.
 export function schemaJson() {
@@ -520,6 +726,8 @@ export function schemaJson() {
                    step: arg.step, unit: arg.unit };
         if (arg.kind === "choice")
           return { ...base, default: arg.def, options: arg.options };
+        if (arg.kind === "code")
+          return { ...base, default: arg.def };
         return { ...base, accepts: arg.accepts.join(","), consumes: arg.consumes };
       }),
     })),

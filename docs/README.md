@@ -25,6 +25,39 @@ code learns which one it got:
 The Kernel chip in the toolbar switches between them and carries the part
 across.
 
+## A feature you write
+
+`Script` is a feature whose body is code. The source lives on the feature as a
+`TDataStd_AsciiString`; the script declares its own parameters, and each one
+gets a label of its own carrying a `TDataStd_Real`, exactly as a catalogue
+argument would. So a script's parameters are edited, regenerated, undone and
+saved like any other feature's — the panel draws a slider per declaration and
+the solver re-runs the feature when one moves.
+
+```js
+({
+  params: [{ key: "size", label: "Size", def: 60, min: 10, max: 200, step: 1 }],
+  build(p, k) { return k.fillet(k.box(p.size, p.size, p.size), p.size / 8); }
+})
+```
+
+`k` is a small surface over the kernel: `box`, `cylinder` (a pie slice when
+given an angle), `sphere`, `sector`, `beam`, `tube`, `move`, `rotate`, `cut`,
+`fuse`, `common`, `fillet`, `compound`. `move` and `rotate` go through
+`TopoDS_Shape::Moved`, so repeating a shape costs a location rather than a
+rebuild.
+
+A new Script feature starts as a **spiral stair** — centre pole, treads,
+risers, stringer and handrail as separate solids, thirteen parameters on
+sliders. The treads and risers are modelled once and instanced up the helix.
+Edit the code and the feature becomes something else; the parameters follow
+what the new code declares, keeping the values of any that survive.
+
+Compiling is part of the precondition, so a script that will not compile never
+reaches the kernel, and a syntax error reads as one rather than as a modelling
+failure. `Script` is a page-kernel feature: the native kernels hold a real OCAF
+document but cannot run JavaScript, so a model containing one is browser-only.
+
 ## Handling OpenCascade's failures
 
 `IsDone()` is not a reliable gate. On an 80 mm cube OpenCascade accepts a 39.9 mm
