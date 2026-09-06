@@ -75,6 +75,7 @@ can reach for either without one replacing the other:
 |---|---|
 | **Script** | a spiral stair — centre pole, treads, risers, stringer and handrail |
 | **Ribbon** | a lofted shell taken in bands, after Heydar Aliyev |
+| **Center** | the Heydar Aliyev Center: roof and glazed facade |
 
 A declared parameter that names its alternatives becomes a switch rather than a
 slider, and the panel draws it as a segmented control:
@@ -86,7 +87,20 @@ slider, and the panel draws it as a segmented control:
 The value stored is still a number — the index — so storage, regeneration, the
 model file and undo are untouched; only the panel knows the difference.
 
-`Ribbon` is the more instructive of the two. The driver surface is never built:
+`Center` is the most literal. Its roof is one loft through section curves laid
+the way the building draws them: up into a rolled lip that sits *lower than the
+mid-point*, down the long slope into a valley that touches the ground, then a
+rise through a 45-degree tangent to the peak and a steep drop behind it. Those
+three marked points are parameters; the rest of the control polygon follows from
+them. How the section changes across the width — settling, rippling into lobes,
+the ends drawing back — is what makes a roofscape rather than an extrusion. The
+steep face behind the peak is not shell but a grid of mullions, each member
+following the surface so the grid leans and stretches with it.
+
+It is an interpretation, not a reconstruction: the section rules come from a
+sketch and the massing from photographs, with no plan drawing to work from.
+
+`Ribbon` is the more instructive of the other two. The driver surface is never built:
 it is defined as a loft through CV curves — a section control polygon carried
 along the length by Catmull-Rom through height, width and drift — and because a
 band is only a strip of that definition, the strips are read straight off it
