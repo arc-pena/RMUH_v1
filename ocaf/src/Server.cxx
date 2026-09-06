@@ -7,6 +7,7 @@
 
 #include <arpa/inet.h>
 #include <csignal>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -378,6 +379,31 @@ int RunServer(Document& doc, const ServerOptions& options)
       {
         SendJson(client, doc.ToJson(false));
       }
+    }
+    else if (path == "/api/step")
+    {
+      // The browser asks for the text; the kernel writes it once to a scratch
+      // file, because that is the only thing STEPControl_Writer knows how to do.
+      const std::string scratch = "/tmp/ocafcad-export.step";
+      if (!WriteStep(doc, scratch, error)) { SendError(client, error); ::close(client); continue; }
+
+      std::ifstream in(scratch, std::ios::binary);
+      std::ostringstream text;
+      text << in.rdbuf();
+      in.close();
+      std::remove(scratch.c_str());
+
+      int solids = 0;
+      for (const TDF_Label& f : doc.Features())
+        if (Feature::IsVisible(f) && !Feature::Shape(f).IsNull()) ++solids;
+
+      Json out = Json::MakeObject();
+      out.Set("ok", Json::Bln(true));
+      out.Set("text", Json::Str(text.str()));
+      out.Set("solids", Json::Num(solids));
+      out.Set("name", Json::Str(doc.Title()));
+      out.Set("units", Json::Str(doc.Units()));
+      SendJson(client, out);
     }
     else if (path == "/api/save" && request.method == "POST")
     {

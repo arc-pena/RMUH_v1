@@ -79,6 +79,19 @@ reaches the kernel, and a syntax error reads as one rather than as a modelling
 failure. `Script` is a page-kernel feature: the native kernels hold a real OCAF
 document but cannot run JavaScript, so a model containing one is browser-only.
 
+## Getting the scene out
+
+The **STEP** button writes every visible solid with `STEPControl_Writer` — each
+feature transferred as its own root, so the parts arrive separate rather than as
+one lump — and offers the file to the viewer through the `downloads` capability.
+
+The viewer's save allowlist has no `.step` in it, so the page asks for `.step`
+first and, if that comes back `rejected_extension`, sends the same text as
+`.step.txt` to be renamed. Where there is no save surface at all — served by a
+local kernel, or opened as a file — it hands over the text to copy instead. A
+connected native kernel writes a real `.step` straight to disk, either from
+`/api/save` or from the `ocafcad build --step` command line.
+
 ## Handling OpenCascade's failures
 
 `IsDone()` is not a reliable gate. On an 80 mm cube OpenCascade accepts a 39.9 mm

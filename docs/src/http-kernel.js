@@ -44,6 +44,8 @@ export async function createHttpKernel(base) {
       return this.get("/api/mesh" + (ids && ids.length
         ? "?ids=" + encodeURIComponent(ids.join(",")) : ""));
     },
+    exportStep() { return this.get("/api/step"); },
+
     //! Only the native kernels can do this: write the document to disk beside
     //! the model, as OCAF's own format or as STEP.
     save(path) { return this.post("/api/save", { path }); },

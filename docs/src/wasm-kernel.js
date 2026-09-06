@@ -31,6 +31,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   if (onProgress) onProgress("kernel ready");
 
   const EDGE = oc.TopAbs_ShapeEnum.TopAbs_EDGE;
+  const SOLID = oc.TopAbs_ShapeEnum.TopAbs_SOLID;
   const FACE = oc.TopAbs_ShapeEnum.TopAbs_FACE;
   const ANY = oc.TopAbs_ShapeEnum.TopAbs_SHAPE;
 
@@ -823,6 +824,40 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       if (!f || !name) throw new Error("no such feature, or an empty name");
       f.attr.TDataStd_Name = name;
       return state({ functions: 0, executed: [], skipped: [], failed: [] });
+    },
+
+    //! The scene as STEP, for taking into any other CAD system. Every visible
+    //! solid is transferred as its own root, so the parts stay separate rather
+    //! than arriving as one lump.
+    async exportStep() {
+      const parts = [];
+      for (const f of doc.features()) {
+        if (!F.visible(f)) continue;
+        const shape = F.shape(f);
+        // Datums are construction geometry and have no business in a solid
+        // exchange file.
+        if (shape && countSubShapes(shape, SOLID) > 0) parts.push({ f, shape });
+      }
+      if (!parts.length) throw new Error("there is nothing solid in the scene to export");
+
+      const writer = new oc.STEPControl_Writer();
+      if (oc.Interface_Static)
+        oc.Interface_Static.SetCVal("write.step.unit", doc.units === "m" ? "M" : "MM");
+
+      for (const part of parts) {
+        const status = writer.Transfer(part.shape,
+          oc.STEPControl_StepModelType.STEPControl_AsIs, true, new oc.Message_ProgressRange());
+        if (String(status) !== "IFSelect_RetDone")
+          throw new Error("OpenCascade could not transfer " + F.name(part.f) + " to STEP");
+      }
+
+      const path = "/export.step";
+      if (String(writer.Write(path)) !== "IFSelect_RetDone")
+        throw new Error("OpenCascade could not write the STEP file");
+      const text = oc.FS.readFile(path, { encoding: "utf8" });
+      try { oc.FS.unlink(path); } catch (err) { /* the scratch file is not important */ }
+
+      return { ok: true, text, solids: parts.length, name: doc.title, units: doc.units };
     },
 
     //! Only the shapes the caller names, which is only ever the shapes whose

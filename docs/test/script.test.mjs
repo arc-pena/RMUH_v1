@@ -112,5 +112,14 @@ check("and it rebuilds", reloaded.report.failed.length === 0);
 check("with the value it was saved with",
   reloaded.tree.features.find(f => f.id === id).params[0].value === 137);
 
+console.log("7. the scene exports as STEP");
+await kernel.setCode(id, "code", (await import("../src/ocaf.js")).SPIRAL_STAIR);
+await kernel.setParameter(id, "steps", 6);
+const step = await kernel.exportStep();
+check("it is a STEP file", step.text.startsWith("ISO-10303-21;"), step.text.slice(0, 20));
+check("it carries solids", /MANIFOLD_SOLID_BREP/.test(step.text));
+check("in millimetres", /MILLI/.test(step.text) || step.units === "mm");
+check("every visible solid went in", step.solids >= 1, String(step.solids));
+check("and it is a real file, not a stub", step.text.length > 20000, step.text.length + " bytes");
 console.log(failures ? "\n" + failures + " check(s) failed" : "\nall checks passed");
 process.exit(failures ? 1 : 0);

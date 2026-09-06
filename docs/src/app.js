@@ -998,6 +998,79 @@ document.getElementById("btn-connect").addEventListener("click", async () => {
   }
 });
 
+/* ---------------------------------------------------------------- exporting */
+
+//! The viewer's own save dialog, where the page is allowed to offer one. Served
+//! by a local kernel, or opened as a file, there is no such surface at all.
+let downloads;
+const saveFile = async (filename, data) => {
+  if (downloads === undefined) {
+    const host = typeof claude !== "undefined" ? claude : null;
+    downloads = host && typeof host.use === "function"
+      ? await host.use("downloads").catch(() => null)
+      : null;
+  }
+  if (!downloads) return { status: "unavailable" };
+  return downloads.save({ filename, data });
+};
+
+const stepDialog = document.getElementById("modal-step");
+document.getElementById("btn-step-close").addEventListener("click", () => stepDialog.close());
+document.getElementById("btn-step-copy").addEventListener("click", async () => {
+  const button = document.getElementById("btn-step-copy");
+  const area = document.getElementById("step-text");
+  try { await navigator.clipboard.writeText(area.value); button.textContent = "Copied"; }
+  catch (e) { area.select(); button.textContent = "Press Ctrl+C"; }
+  setTimeout(() => { button.textContent = "Copy"; }, 1600);
+});
+
+document.getElementById("btn-step").addEventListener("click", async () => {
+  const button = document.getElementById("btn-step");
+  const was = button.textContent;
+  button.disabled = true;
+  button.textContent = "writing…";
+  try {
+    const step = await kernel.exportStep();
+    const summary = step.solids + " solid" + (step.solids === 1 ? "" : "s")
+      + " · " + Math.round(step.text.length / 1024) + " KB · " + step.units;
+    const stem = (step.name || "part").replace(/[^\w.-]+/g, "-");
+
+    let saved = null;
+    try {
+      saved = await saveFile(stem + ".step", step.text);
+    } catch (err) {
+      // The viewer's save allowlist has no .step, so the same text goes out
+      // under an extension it does accept and is renamed on the way in.
+      if (err && err.code === "rejected_extension") {
+        try { saved = await saveFile(stem + ".step.txt", step.text); }
+        catch (retry) { saved = { status: retry && retry.code === "declined" ? "declined" : "failed" }; }
+      } else {
+        saved = { status: err && err.code === "declined" ? "declined" : "failed" };
+      }
+    }
+
+    if (saved && saved.status === "saved") {
+      button.textContent = "saved";
+      setTimeout(() => { button.textContent = was; }, 2000);
+      return;
+    }
+    if (saved && saved.status === "declined") { button.textContent = was; return; }
+
+    // No save surface here: hand over the text instead.
+    document.getElementById("step-summary").textContent = summary;
+    document.getElementById("step-note").textContent =
+      "ISO-10303-21, written by OpenCascade. This view cannot save files, so copy "
+      + "the text and keep it as a .step file — or connect a native kernel, which "
+      + "writes one straight to disk.";
+    document.getElementById("step-text").value = step.text;
+    stepDialog.showModal();
+    button.textContent = was;
+  } catch (err) {
+    button.textContent = err.message.slice(0, 40);
+    setTimeout(() => { button.textContent = was; }, 3200);
+  } finally { button.disabled = false; }
+});
+
 document.getElementById("btn-model").addEventListener("click", async () => {
   let text;
   try { text = JSON.stringify(await kernel.model(), null, 2); }
