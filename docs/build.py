@@ -30,7 +30,8 @@ STAGE_PACKAGE = "playcanvas"
 STAGE_FILE = "build/playcanvas.min.js"
 
 # Concatenated in this order into one module script.
-MODULES = ["ocaf.js", "wasm-kernel.js", "http-kernel.js", "showroom.js", "app.js"]
+MODULES = ["ocaf.js", "wasm-kernel.js", "http-kernel.js", "mdl.js", "graph.js",
+           "showroom.js", "app.js"]
 
 IMPORT = re.compile(r"^\s*import\s.*?;\s*$", re.M)
 EXPORT = re.compile(r"^export\s+(?=(?:const|let|var|class|function|async)\b)", re.M)

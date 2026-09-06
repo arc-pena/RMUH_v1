@@ -1,6 +1,8 @@
 import { createWasmKernel } from "./wasm-kernel.js";
 import { createHttpKernel } from "./http-kernel.js";
 import { ENVIRONMENTS, FINISHES, Showroom, findFinish } from "./showroom.js";
+import { Mdl } from "./mdl.js";
+import { GraphEditor } from "./graph.js";
 
 "use strict";
 
@@ -47,6 +49,32 @@ const STARTER = {
       args: { origin: { ref: "PT1" }, plane: { ref: "PL1" }, dx: 80, dy: 80, dz: 80 } },
   ],
 };
+
+/* ==========================================================================
+   The one way in.
+
+   Nothing below calls the kernel directly. Every button, every slider, every
+   wire dragged in the node graph and every line typed into its console becomes
+   one JSON edit, goes through this channel, and the answer redraws whatever is
+   open. That is what makes the tree and the graph the same program: they are
+   two ways of writing the same text.
+   ========================================================================== */
+
+const mdl = new Mdl({
+  get kernel() { return kernel; },
+  apply: (payload, hint) => applyState(payload, hint),
+  setNode: (id, x, y) => graph.setNode(id, x, y),
+  readLayout: block => (block === undefined ? graph.layoutJson() : graph.readLayout(block)),
+  select: id => select(id, false),
+  selected: () => state.selected,
+});
+
+//! Runs an edit and redraws from the answer. Refusals land in the definition
+//! panel and in the graph console, both.
+async function edit(command, options = {}) {
+  try { return await mdl.run(command, options); }
+  catch (err) { showError(err.message); return null; }
+}
 
 const schemaType = type => (state.schema ? state.schema.types.find(t => t.type === type) : null) || null;
 const feature = id => state.tree ? state.tree.features.find(f => f.id === id) || null : null;
@@ -503,10 +531,8 @@ function buildPanel() {
   host.appendChild(head);
 
   const rename = head.querySelector("#feature-name");
-  rename.addEventListener("change", async () => {
-    try { applyState(await kernel.rename(entry.id, rename.value.trim())); }
-    catch (err) { showError(err.message); }
-  });
+  rename.addEventListener("change", () =>
+    edit({ op: "rename", id: entry.id, name: rename.value.trim() }));
 
   const summary = document.createElement("p");
   summary.className = "summary";
@@ -553,6 +579,28 @@ function buildPanel() {
   host.appendChild(actions);
 }
 
+//! Two surfaces, one document: a value changed in the node graph has to appear
+//! on the panel's slider, and the other way round. Only the control under the
+//! pointer is left alone.
+function refreshPanelValues() {
+  const entry = feature(state.edited);
+  const host = document.getElementById("def");
+  if (!entry || !host) return;
+  const values = { ...entry.values };
+  for (const param of entry.params || []) values[param.key] = param.value;
+  for (const [key, value] of Object.entries(values)) {
+    for (const prefix of ["p-", "n-", "s-", "sn-"]) {
+      const input = host.querySelector("#" + prefix + key);
+      if (input && input !== document.activeElement)
+        input.value = input.type === "number" ? round(value) : value;
+    }
+    const group = host.querySelector('.segmented[data-key="' + key + '"]');
+    if (group)
+      [...group.children].forEach((button, index) =>
+        button.setAttribute("aria-pressed", index === Math.round(value) ? "true" : "false"));
+  }
+}
+
 //! The panel is not rebuilt while a slider is being dragged - that would take
 //! the slider out from under the pointer - so the feature's state is refreshed
 //! on its own.
@@ -582,6 +630,7 @@ function choiceField(entry, arg) {
   field.innerHTML = '<div class="field-head"><label>' + arg.label + "</label></div>";
   const group = document.createElement("div");
   group.className = "segmented";
+  group.dataset.key = arg.key;
   group.setAttribute("role", "group");
   arg.options.forEach((option, index) => {
     const button = document.createElement("button");
@@ -657,6 +706,7 @@ function scriptField(entry, param) {
     field.innerHTML = '<div class="field-head"><label>' + escapeHtml(param.label) + "</label></div>";
     const group = document.createElement("div");
     group.className = "segmented";
+    group.dataset.key = param.key;
     group.setAttribute("role", "group");
     param.options.forEach((option, index) => {
       const button = document.createElement("button");
@@ -738,7 +788,7 @@ function codeEditor(entry) {
     apply.disabled = true;
     status.textContent = "running…";
     try {
-      applyState(await kernel.setCode(entry.id, entry.codeKey, area.value));
+      await mdl.run({ op: "code", id: entry.id, key: entry.codeKey, text: area.value });
       status.textContent = "";
     } catch (err) {
       status.textContent = err.message.slice(0, 60);
@@ -774,11 +824,9 @@ function refField(entry, arg) {
   select.innerHTML = '<option value="">— not set —</option>' + options.map(option =>
     '<option value="' + escapeAttr(option.id) + '"' + (option.id === current ? " selected" : "") +
     ">" + escapeHtml(option.name) + "</option>").join("");
-  select.addEventListener("change", async () => {
-    try {
-      applyState(await kernel.setReference(entry.id, arg.key, select.value));
-    } catch (err) { showError(err.message); }
-  });
+  select.addEventListener("change", () => edit(select.value
+    ? { op: "connect", id: entry.id, key: arg.key, from: select.value }
+    : { op: "disconnect", id: entry.id, key: arg.key }));
   field.appendChild(select);
 
   const path = document.createElement("div");
@@ -848,8 +896,8 @@ async function pushParameter(id, key, value, rebuildPanel = false) {
     while (pendingParam) {
       const next = pendingParam;
       pendingParam = null;
-      applyState(await kernel.setParameter(next.id, next.key, next.value),
-                 { keepPanel: !next.rebuildPanel });
+      await mdl.run({ op: "set", id: next.id, key: next.key, value: next.value },
+                    { keepPanel: !next.rebuildPanel });
     }
   } catch (err) { showError(err.message); }
   finally { inFlight = false; }
@@ -858,40 +906,23 @@ async function pushParameter(id, key, value, rebuildPanel = false) {
 async function addFeature(type) {
   if (!ready) return;
   const spec = schemaType(type);
-  const refs = {};
-  const selected = feature(state.selected);
-
-  // Pre-fill the inputs the way a CAD command does: the selected body for an
-  // operation, the first datum of the right type otherwise.
-  for (const arg of spec.args) {
-    if (arg.kind !== "ref") continue;
-    const accepts = arg.accepts.split(",");
-    let target = (arg.consumes && selected && accepts.includes(selected.type) && !selected.consumedBy)
-      ? selected : null;
-    // Never pick a body another operation has already swallowed.
-    if (!target)
-      target = state.tree.features.find(f =>
-        accepts.includes(f.type) && !(arg.consumes && f.consumedBy)) || null;
-    if (target) refs[arg.key] = target.id;
-  }
-
-  try {
-    const payload = await kernel.addFeature(type, refs);
-    applyState(payload);
-    select(payload.id, true);
-    if (spec.category !== "datum") fitView();
-  } catch (err) { showError(err.message); }
+  // No refs: the edit wires the inputs itself, the way a CAD command does - the
+  // selected body for an operation, the first datum of the right type for the
+  // rest. Typing the same edit into the graph console gets the same wiring.
+  const payload = await edit({ op: "add", type });
+  if (!payload) return;
+  select(payload.id, true);
+  if (spec.category !== "datum") fitView();
 }
 
 async function deleteFeature(id) {
-  try {
-    if (state.selected === id) state.selected = null;
-    if (state.edited === id) state.edited = null;
-    applyState(await kernel.deleteFeature(id));
-  } catch (err) {
-    state.edited = id;
+  const was = { selected: state.selected, edited: state.edited };
+  if (state.selected === id) state.selected = null;
+  if (state.edited === id) state.edited = null;
+  if (!(await edit({ op: "delete", id }))) {
+    state.selected = was.selected;
+    state.edited = was.edited;
     buildPanel();
-    showError(err.message);
   }
 }
 
@@ -903,6 +934,7 @@ function select(id, openDefinition) {
     ? "<b>" + escapeHtml(entry.name) + "</b> · " + entry.entry + " · " + entry.type
     : "click a body · double-click to edit it";
   buildTree(); buildPanel(); refreshToolbar(); paintSelection();
+  if (graph.showing) graph.update();
   if (staging) refreshStageSelection();
 }
 
@@ -914,9 +946,10 @@ function applyState(payload, options = {}) {
   buildTree();
   buildLog();
   updateStamp();
-  if (options.keepPanel) refreshPanelNotice();
+  if (options.keepPanel) { refreshPanelNotice(); refreshPanelValues(); }
   else buildPanel();
   refreshToolbar();
+  graph.sync();
   syncShapes().then(buildLog).catch(err => showError(err.message));
 }
 
@@ -1039,6 +1072,22 @@ document.getElementById("btn-connect").addEventListener("click", async () => {
   }
 });
 
+/* --------------------------------------------------------------- node graph
+   The specification tree read the other way round. It owns no state of its own
+   beyond where the nodes sit, and even that is written into the model file, so
+   a part opens laid out the way it was left.
+   -------------------------------------------------------------------------- */
+
+const graph = new GraphEditor({
+  mdl,
+  read: () => ({ tree: state.tree, schema: state.schema, selected: state.selected }),
+  get icons() { return ICONS; },
+  openDefinition: id => { select(id, true); toggleTree(true); },
+  onOpen: () => document.getElementById("btn-graph").setAttribute("aria-pressed", "true"),
+  onClose: () => document.getElementById("btn-graph").setAttribute("aria-pressed", "false"),
+});
+document.getElementById("btn-graph").addEventListener("click", () => graph.toggle());
+
 /* ----------------------------------------------------------------- showroom
 
    The modelling view and the stage are two renderers over one document: the
@@ -1110,8 +1159,7 @@ async function applyFinish(key) {
   const appearance = { finish: key, color: findFinish(key).color };
   showroom.paint(entry.id, appearance);
   try {
-    const payload = await kernel.setAppearance(entry.id, appearance);
-    if (payload.tree) state.tree = payload.tree;
+    await mdl.run({ op: "appearance", id: entry.id, appearance }, { keepPanel: true });
   } catch (err) { showError(err.message); }
   refreshStageSelection();
 }
@@ -1269,7 +1317,7 @@ document.getElementById("btn-step").addEventListener("click", async () => {
 
 document.getElementById("btn-model").addEventListener("click", async () => {
   let text;
-  try { text = JSON.stringify(await kernel.model(), null, 2); }
+  try { text = await mdl.modelText(); }
   catch (err) { text = "// " + err.message; }
   document.getElementById("model-text").value = text;
   modal.showModal();
@@ -1285,7 +1333,7 @@ document.getElementById("btn-copy").addEventListener("click", async () => {
 document.getElementById("btn-load").addEventListener("click", async () => {
   const button = document.getElementById("btn-load");
   try {
-    applyState(await kernel.loadModel(document.getElementById("model-text").value));
+    await mdl.run({ op: "model", model: document.getElementById("model-text").value });
     modal.close();
     fitView();
   } catch (err) {
@@ -1348,6 +1396,7 @@ addEventListener("keydown", event => {
   if (event.target.matches("input, textarea, select")) return;
   if (event.key === "f" || event.key === "F") fitView();
   if (event.key === "t" || event.key === "T") toggleTree();
+  if (event.key === "g" || event.key === "G") graph.toggle();
   if (event.key === "Escape") {
     if (staging) return leaveShowroom();
     state.edited = null; buildPanel(); logPop.hidden = true;

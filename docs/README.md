@@ -122,6 +122,59 @@ reaches the kernel, and a syntax error reads as one rather than as a modelling
 failure. `Script` is a page-kernel feature: the native kernels hold a real OCAF
 document but cannot run JavaScript, so a model containing one is browser-only.
 
+## One way in, two ways to look
+
+Everything the interface can do to the document is one JSON edit, and there is
+no second path. A toolbar button is a literal, `{"op":"add","type":"Cube"}`. A
+slider is a literal, `{"op":"set","id":"CB1","key":"dx","value":92}`. A wire
+dragged in the node graph is `{"op":"connect","id":"FI1","key":"body",
+"from":"CB1"}`. `src/mdl.js` holds the eleven of them and the channel they all
+go through; nothing else may touch the kernel.
+
+| | |
+|---|---|
+| `add` `delete` `rename` | features |
+| `set` | one number — a catalogue argument, or a parameter a script declared |
+| `connect` `disconnect` | one reference: one wire |
+| `code` | the source of a written feature |
+| `appearance` | a finish; redraws, does not rebuild |
+| `model` | the whole document at once — the other ten are small edits of the text this one writes wholesale |
+| `move` `select` | view state, through the same channel, recorded and marked as not rebuilding anything |
+
+`add` without `refs` wires its inputs the way pressing the button does — the
+selected body for an operation, the first datum of the right type for the rest
+— so `{"op":"add","type":"Fillet"}` typed into a console does what the toolbar
+does.
+
+## The node graph
+
+**Nodes** opens the same document as a graph. The specification tree reads it
+top to bottom, in the order the solver executes; the canvas reads it left to
+right, along the references that put it in that order. One acyclic graph, two
+drawings of it. A slider on a node and the same slider in the definition panel
+are the same edit arriving by two routes, and each redraws the other.
+
+It opens in a window of its own where the browser allows one, so it can sit on a
+second screen. Inside a sandboxed frame — an Artifact — `window.open` gives back
+nothing to write into, and it becomes a floating panel instead: dragged by its
+bar, resized from the corner, rolled up to the bar alone, and able to try for a
+real window again.
+
+* drag an output port onto an input to wire it; drag a wired input into empty
+  space to clear it
+* drag a node by its header — where it lands is a `move` edit, and the layout
+  travels in the model file under `"layout"`, so a part opens laid out the way
+  it was left
+* **Tidy** re-columns by rank and reports every move as an edit
+* double-click a node to open it in the definition panel, which is where a
+  written feature's code is edited
+* the console below is not a transcript, it is the way in: it shows every edit
+  as it happens and takes one — or an array of them — typed straight in. The
+  **Model file** tab shows the document as text, updating as you drag.
+
+That console is the surface an external driver would speak to. It already takes
+the whole language; what is missing is only the transport.
+
 ## Getting the scene out
 
 The **STEP** button writes every visible solid with `STEPControl_Writer` — each
@@ -169,13 +222,21 @@ reproducible from `docs/src/`.
 | `src/ocaf.js` | the OCAF document: labels, attributes, drivers, logbook, solver, catalogue |
 | `src/wasm-kernel.js` | OpenCascade in the page — geometry drivers, preconditions, meshing |
 | `src/http-kernel.js` | the same interface over HTTP |
+| `src/mdl.js` | the model description language: every edit, and the one channel they go through |
+| `src/graph.js` | the node editor — its own window, or a floating one |
+| `src/showroom.js` | the PlayCanvas stage: finishes, environments, procedural lighting |
 | `src/app.js` | tree, viewport, definition panel, regeneration log |
 | `build.py` | assembles the single file |
 | `test/kernel.test.mjs` | drives the page kernel headlessly under node |
+| `test/mdl.test.mjs` | every edit against a real kernel, the refusals, the round trip through the file |
 
 ```sh
 node docs/test/kernel.test.mjs
+node docs/test/mdl.test.mjs
 ```
 
-builds the model, edits it, checks that only the downstream functions re-run,
-and walks through every way a fillet can fail.
+The first builds the model, edits it, checks that only the downstream functions
+re-run, and walks through every way a fillet can fail. The second runs every
+edit in the language against a real kernel, checks that the refusals are refused
+and recorded rather than swallowed, and that the file the graph writes rebuilds
+the part and its layout.
