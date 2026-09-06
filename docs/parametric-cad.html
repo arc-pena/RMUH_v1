@@ -1,0 +1,1857 @@
+<title>OCAF Feature Modeller</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<style>
+:root {
+  /* Cool slate neutrals, biased toward the engineering blue accent. */
+  --ground:      #e7ecf0;
+  --panel:       #f7f9fb;
+  --panel-2:     #eef2f6;
+  --line:        #cdd7df;
+  --line-soft:   #dde4ea;
+  --ink:         #16222c;
+  --ink-2:       #4d5f6d;
+  --ink-3:       #7b8b98;
+  --accent:      #0a6cb0;
+  --accent-ink:  #ffffff;
+  --accent-soft: #dceaf5;
+  --datum:       #b07408;
+  --datum-soft:  #f6ead3;
+  --good:        #1c7a52;
+  --bad:         #bb3a2c;
+  --bad-soft:    #f8e2df;
+  --view-top:    #dfe6ec;
+  --view-bottom: #bcc8d2;
+  --shape:       #93a2ad;
+  --shape-edge:  #3d4c58;
+  --grid:        #a9b7c2;
+  --grid-axis:   #8494a1;
+  --shadow:      0 1px 2px rgba(22, 34, 44, .07), 0 6px 18px rgba(22, 34, 44, .06);
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --rail: 272px;
+  --panel-w: 320px;
+}
+:root:not([data-theme="light"]) { color-scheme: light dark; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #10171d;
+    --panel:       #161f27;
+    --panel-2:     #1c2731;
+    --line:        #2a3844;
+    --line-soft:   #223039;
+    --ink:         #e5edf3;
+    --ink-2:       #a3b3c0;
+    --ink-3:       #748693;
+    --accent:      #4aa8ea;
+    --accent-ink:  #06131d;
+    --accent-soft: #17303f;
+    --datum:       #e0a33c;
+    --datum-soft:  #33280f;
+    --good:        #4fb98a;
+    --bad:         #e2705f;
+    --bad-soft:    #3a1e1a;
+    --view-top:    #17212a;
+    --view-bottom: #0b1115;
+    --shape:       #7d8d99;
+    --shape-edge:  #cbd8e2;
+    --grid:        #2c3a45;
+    --grid-axis:   #3d4f5c;
+    --shadow:      0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .3);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground:      #10171d;
+  --panel:       #161f27;
+  --panel-2:     #1c2731;
+  --line:        #2a3844;
+  --line-soft:   #223039;
+  --ink:         #e5edf3;
+  --ink-2:       #a3b3c0;
+  --ink-3:       #748693;
+  --accent:      #4aa8ea;
+  --accent-ink:  #06131d;
+  --accent-soft: #17303f;
+  --datum:       #e0a33c;
+  --datum-soft:  #33280f;
+  --good:        #4fb98a;
+  --bad:         #e2705f;
+  --bad-soft:    #3a1e1a;
+  --view-top:    #17212a;
+  --view-bottom: #0b1115;
+  --shape:       #7d8d99;
+  --shape-edge:  #cbd8e2;
+  --grid:        #2c3a45;
+  --grid-axis:   #3d4f5c;
+  --shadow:      0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .3);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.45;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ------------------------------------------------------------------ chrome */
+.chrome {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 7px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+  flex-wrap: wrap;
+}
+.brand {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-right: 14px;
+  margin-right: 6px;
+  border-right: 1px solid var(--line);
+}
+.brand b { font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+.brand span {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  letter-spacing: .02em;
+}
+.group { display: flex; flex-direction: column; gap: 3px; padding: 0 8px; border-right: 1px solid var(--line-soft); }
+.group:last-of-type { border-right: 0; }
+.group > .row { display: flex; gap: 3px; }
+.group > .cap {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  color: var(--ink-3);
+  padding-left: 2px;
+}
+.tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px 5px 7px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--ink);
+  white-space: nowrap;
+  transition: background .12s, border-color .12s;
+}
+.tool:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
+.tool:disabled { opacity: .38; cursor: not-allowed; }
+.tool svg { width: 15px; height: 15px; flex: none; }
+.tool.icon-only { padding: 5px 6px; }
+.tool.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.tool.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+.spacer { flex: 1; }
+
+/* -------------------------------------------------------------------- body */
+main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--rail) minmax(0, 1fr) var(--panel-w);
+}
+.rail {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.rail.right { border-right: 0; border-left: 1px solid var(--line); }
+.rail-head {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+}
+.rail-head h2 {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--ink-3);
+}
+.rail-head .entry { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.rail-body { overflow: auto; padding: 8px 0 16px; flex: 1; }
+
+/* ---------------------------------------------------------- specification tree */
+.tree { list-style: none; margin: 0; padding: 0; }
+.tree .branch { list-style: none; margin: 0; padding: 0 0 0 15px; }
+.node {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 12px 3px 10px;
+  cursor: default;
+  user-select: none;
+  border-left: 2px solid transparent;
+}
+.node.pick { cursor: pointer; }
+.node.pick:hover { background: var(--panel-2); }
+.node.selected { background: var(--accent-soft); border-left-color: var(--accent); }
+.node .glyph { width: 15px; height: 15px; flex: none; color: var(--ink-2); }
+.node.datum .glyph { color: var(--datum); }
+.node .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .kind { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.node.consumed .label, .node.consumed .glyph { opacity: .45; }
+.node.consumed .label { text-decoration: line-through; text-decoration-thickness: 1px; }
+.node.failed .label { color: var(--bad); }
+.eye {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  width: 15px; height: 15px; color: var(--ink-3); opacity: .55;
+}
+.eye:hover { opacity: 1; color: var(--accent); }
+.eye.off { color: var(--ink-3); }
+.tree-root {
+  display: flex; align-items: center; gap: 7px;
+  padding: 3px 12px 3px 10px; font-weight: 600;
+}
+.tree-root .glyph { width: 15px; height: 15px; color: var(--ink-2); }
+.set-label {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 12px 3px 10px;
+  font-size: 10px; font-weight: 600; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.branch { position: relative; }
+.branch::before {
+  content: ""; position: absolute; left: 6px; top: 2px; bottom: 6px;
+  border-left: 1px solid var(--line);
+}
+
+/* ---------------------------------------------------------------- viewport */
+.viewport { position: relative; min-width: 0; background: var(--view-bottom); }
+.viewport canvas { display: block; width: 100%; height: 100%; }
+.view-tools {
+  position: absolute; top: 10px; right: 10px;
+  display: flex; gap: 3px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border: 1px solid var(--line); border-radius: 4px; padding: 3px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+}
+.view-tools button {
+  border: 0; background: none; padding: 4px 8px; border-radius: 3px; cursor: pointer;
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); letter-spacing: .03em;
+}
+.view-tools button:hover { background: var(--accent-soft); color: var(--accent); }
+.hint {
+  position: absolute; left: 12px; bottom: 10px;
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+  pointer-events: none;
+}
+.stamp {
+  position: absolute; left: 12px; top: 10px;
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+  pointer-events: none; line-height: 1.6;
+}
+.stamp b { color: var(--ink-2); font-weight: 500; }
+
+/* ------------------------------------------------------- definition panel */
+.def { padding: 0 0 20px; }
+.def-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--line-soft); }
+.def-head .name-row { display: flex; gap: 8px; align-items: center; }
+.def-head input.name {
+  flex: 1; min-width: 0;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 3px; padding: 5px 8px; font-weight: 600;
+}
+.badge {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .04em;
+  padding: 2px 7px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-2);
+}
+.badge.datum { background: var(--datum-soft); border-color: transparent; color: var(--datum); }
+.badge.body { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.badge.operation { background: var(--panel-2); border-color: var(--accent); color: var(--accent); }
+.def-head .meta {
+  margin-top: 8px; font-family: var(--mono); font-size: 10px;
+  color: var(--ink-3); line-height: 1.7; word-break: break-all;
+}
+.summary { padding: 10px 14px 0; color: var(--ink-2); max-width: 46ch; }
+.field { padding: 11px 14px 12px; border-bottom: 1px solid var(--line-soft); }
+.field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.field-head label { font-weight: 500; }
+.value-box { display: flex; align-items: baseline; gap: 3px; }
+.value-box input[type="number"] {
+  width: 74px; text-align: right;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px;
+  padding: 3px 6px; font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.value-box .unit { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); width: 18px; }
+input[type="range"] { width: 100%; margin: 9px 0 0; accent-color: var(--accent); }
+select {
+  width: 100%; margin-top: 6px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 3px; padding: 5px 7px;
+}
+.attr-path {
+  margin-top: 7px; font-family: var(--mono); font-size: 9.5px;
+  color: var(--ink-3); letter-spacing: .01em;
+}
+.attr-path b { color: var(--ink-2); font-weight: 500; }
+.notice {
+  margin: 12px 14px; padding: 9px 11px; border-radius: 3px;
+  background: var(--bad-soft); color: var(--bad);
+  border-left: 3px solid var(--bad);
+}
+.notice.info { background: var(--panel-2); color: var(--ink-2); border-left-color: var(--accent); }
+.actions { display: flex; gap: 6px; padding: 12px 14px; flex-wrap: wrap; }
+.empty { padding: 26px 16px; color: var(--ink-3); max-width: 42ch; }
+.empty h3 { margin: 0 0 8px; font-size: 13px; color: var(--ink-2); }
+.empty ol { margin: 10px 0 0; padding-left: 18px; line-height: 1.75; }
+.empty kbd {
+  font-family: var(--mono); font-size: 10.5px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px;
+}
+
+/* ------------------------------------------------------------------ log */
+.log-panel { border-top: 1px solid var(--line); flex: none; max-height: 40%; display: flex; flex-direction: column; }
+.log-list {
+  overflow: auto; padding: 6px 0 10px;
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.7;
+}
+.log-list div { padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log-list .ran { color: var(--good); }
+.log-list .same { color: var(--ink-3); }
+.log-list .err { color: var(--bad); }
+.log-list .head { color: var(--ink-2); padding-top: 4px; }
+
+/* --------------------------------------------------------------- status */
+.status {
+  flex: none; display: flex; align-items: center; gap: 16px;
+  padding: 5px 12px; background: var(--panel); border-top: 1px solid var(--line);
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+}
+.status b { color: var(--ink-2); font-weight: 500; }
+
+/* ---------------------------------------------------------------- modal */
+dialog {
+  border: 1px solid var(--line); border-radius: 5px; padding: 0;
+  background: var(--panel); color: var(--ink);
+  max-width: 640px; width: calc(100% - 40px); box-shadow: var(--shadow);
+}
+dialog::backdrop { background: rgba(8, 14, 19, .55); }
+dialog .dhead { padding: 13px 16px; border-bottom: 1px solid var(--line); }
+dialog h3 { margin: 0; font-size: 13px; }
+dialog p { margin: 5px 0 0; color: var(--ink-2); max-width: 62ch; }
+dialog textarea {
+  width: 100%; height: 300px; border: 0; border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel-2); color: var(--ink);
+  font-family: var(--mono); font-size: 11px; padding: 12px 16px; resize: vertical;
+}
+dialog .cli {
+  padding: 10px 16px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+  border-bottom: 1px solid var(--line-soft); overflow-x: auto; white-space: nowrap;
+}
+dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: flex-end; }
+
+@media (max-width: 1080px) {
+  body { height: auto; overflow: auto; }
+  main { grid-template-columns: 1fr; }
+  .viewport { height: 62vh; order: -1; }
+  .rail.right { border-left: 0; border-top: 1px solid var(--line); }
+  .rail { border-right: 0; border-top: 1px solid var(--line); }
+  .rail-body { max-height: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="chrome">
+  <div class="brand">
+    <b>OCAF Feature Modeller</b>
+    <span id="brand-sub">TDocStd_Document · BinOcaf</span>
+  </div>
+
+  <div class="group">
+    <div class="cap">Datums</div>
+    <div class="row" id="tools-datum"></div>
+  </div>
+  <div class="group">
+    <div class="cap">Solids</div>
+    <div class="row" id="tools-body"></div>
+  </div>
+  <div class="group">
+    <div class="cap">Operations</div>
+    <div class="row" id="tools-op"></div>
+  </div>
+  <div class="group">
+    <div class="cap">Document</div>
+    <div class="row">
+      <button class="tool icon-only" id="btn-undo" title="Undo (Ctrl+Z)"></button>
+      <button class="tool icon-only" id="btn-redo" title="Redo (Ctrl+Shift+Z)"></button>
+      <button class="tool" id="btn-model">Model file…</button>
+      <button class="tool" id="btn-reset">Reset</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <aside class="rail">
+    <div class="rail-head">
+      <h2>Specification tree</h2>
+      <span class="entry" id="tree-entry">0:1:1</span>
+    </div>
+    <div class="rail-body">
+      <div class="tree-root">
+        <span class="glyph" id="root-glyph"></span>
+        <span id="doc-title">Part1</span>
+      </div>
+      <ul class="tree branch" id="tree"></ul>
+    </div>
+    <div class="log-panel">
+      <div class="rail-head"><h2>Regeneration</h2><span class="entry" id="log-count"></span></div>
+      <div class="log-list" id="log"></div>
+    </div>
+  </aside>
+
+  <section class="viewport" id="viewport">
+    <div class="stamp" id="stamp"></div>
+    <div class="view-tools">
+      <button data-view="iso">ISO</button>
+      <button data-view="top">TOP</button>
+      <button data-view="front">FRONT</button>
+      <button data-view="right">RIGHT</button>
+      <button data-view="fit">FIT</button>
+    </div>
+    <div class="hint">drag orbit · shift-drag pan · wheel zoom · click a body to select</div>
+  </section>
+
+  <aside class="rail right">
+    <div class="rail-head">
+      <h2>Definition</h2>
+      <span class="entry" id="def-entry"></span>
+    </div>
+    <div class="rail-body"><div class="def" id="def"></div></div>
+  </aside>
+</main>
+
+<footer class="status">
+  <span id="status-sel">nothing selected</span>
+  <span id="status-regen"></span>
+  <span class="spacer"></span>
+  <span id="status-kernel"></span>
+</footer>
+
+<dialog id="modal">
+  <div class="dhead">
+    <h3>Model file — <span class="badge">.ocaf.json</span></h3>
+    <p>The neutral parametric file. <code>ocafcad</code> reads exactly this and rebuilds the
+       part on the real OpenCascade kernel. Paste one in and press Load to open it here.</p>
+  </div>
+  <div class="cli">$ ocafcad build model.ocaf.json -o part.cbf --step part.step</div>
+  <textarea id="model-text" spellcheck="false"></textarea>
+  <div class="dfoot">
+    <button class="tool" id="btn-copy">Copy</button>
+    <button class="tool" id="btn-load">Load</button>
+    <button class="tool primary" id="btn-close">Done</button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+
+/* ==========================================================================
+   1. The feature catalogue.  A mirror of ocaf/src/Schema.cxx - the same types,
+      the same driver GUIDs, the same argument order (an argument's position
+      here is its OCAF child tag) and the same slider ranges.
+   ========================================================================== */
+
+const real = (key, label, def, min, max, step, unit = "mm") =>
+  ({ key, label, kind: "real", def, min, max, step, unit });
+const ref = (key, label, accepts, consumes = false) =>
+  ({ key, label, kind: "ref", accepts: accepts.split(","), consumes });
+
+const CATALOGUE = [
+  { type: "Point", guid: "9a1b2c30-0001-4c00-9e00-caf000000001", category: "datum",
+    summary: "A location in space. Drives origins and centres.",
+    args: [real("x", "X", 0, -500, 500, 0.5), real("y", "Y", 0, -500, 500, 0.5),
+           real("z", "Z", 0, -500, 500, 0.5)] },
+  { type: "Vector", guid: "9a1b2c30-0002-4c00-9e00-caf000000002", category: "datum",
+    summary: "A direction. Orients lines, planes and the solids placed on them.",
+    args: [real("dx", "dX", 0, -100, 100, 0.1, ""), real("dy", "dY", 0, -100, 100, 0.1, ""),
+           real("dz", "dZ", 1, -100, 100, 0.1, "")] },
+  { type: "Line", guid: "9a1b2c30-0003-4c00-9e00-caf000000003", category: "datum",
+    summary: "A bounded line: a start point, a direction, a length.",
+    args: [ref("origin", "Start point", "Point"), ref("direction", "Direction", "Vector"),
+           real("length", "Length", 100, 1, 1000, 1)] },
+  { type: "Plane", guid: "9a1b2c30-0004-4c00-9e00-caf000000004", category: "datum",
+    summary: "A planar datum: an origin point and a normal vector.",
+    args: [ref("origin", "Origin", "Point"), ref("normal", "Normal", "Vector"),
+           real("size", "Display size", 160, 10, 1000, 5)] },
+  { type: "Cube", guid: "9a1b2c30-0010-4c00-9e00-caf000000010", category: "body",
+    summary: "A box placed at a point, oriented by a plane, sized in three axes.",
+    args: [ref("origin", "Corner point", "Point"), ref("plane", "Placement plane", "Plane"),
+           real("dx", "Length X", 80, 1, 500, 1), real("dy", "Length Y", 80, 1, 500, 1),
+           real("dz", "Length Z", 80, 1, 500, 1)] },
+  { type: "Sphere", guid: "9a1b2c30-0011-4c00-9e00-caf000000011", category: "body",
+    summary: "A sphere centred on a point.",
+    args: [ref("center", "Centre point", "Point"), real("radius", "Radius", 50, 1, 400, 1)] },
+  { type: "Fillet", guid: "9a1b2c30-0020-4c00-9e00-caf000000020", category: "operation",
+    summary: "Rounds every edge of a body. The body stays in the tree but leaves the 3D view.",
+    args: [ref("body", "Body", "Cube,Sphere,Fillet", true),
+           real("radius", "Radius", 10, 0.1, 200, 0.5)] },
+];
+
+const FIRST_ARG_TAG = 1, RESULT_TAG = 100, ERROR_TAG = 101;
+const byType = new Map(CATALOGUE.map(t => [t.type, t]));
+const byGuid = new Map(CATALOGUE.map(t => [t.guid, t]));
+const argTag = (spec, key) => FIRST_ARG_TAG + spec.args.findIndex(a => a.key === key);
+
+/* ==========================================================================
+   2. A miniature TDF.  Labels form a tree, each carrying named attributes -
+      the same attribute names OCAF uses, so what the panel prints is what the
+      C++ document actually holds.
+   ========================================================================== */
+
+class Label {
+  constructor(tag, parent) {
+    this.tag = tag;
+    this.parent = parent;
+    this.children = new Map();
+    this.attr = Object.create(null);
+    this.nextTag = 0;
+  }
+  findChild(tag, create = false) {
+    let child = this.children.get(tag);
+    if (!child && create) { child = new Label(tag, this); this.children.set(tag, child); }
+    return child || null;
+  }
+  newChild() { return this.findChild(++this.nextTag, true); }
+  childList() { return [...this.children.values()].sort((a, b) => a.tag - b.tag); }
+  get entry() {
+    const parts = [];
+    for (let l = this; l.parent; l = l.parent) parts.unshift(l.tag);
+    return "0:" + parts.join(":");
+  }
+}
+
+/* --------------------------------------------- reading a feature label ---- */
+const F = {
+  spec:   f => byGuid.get(f.attr.TFunction_Function) || null,
+  name:   f => f.attr.TDataStd_Name || "",
+  id:     f => f.attr.TDataStd_AsciiString || "",
+  visible: f => f.attr.TDataStd_Integer !== 0,
+  setVisible: (f, v) => { f.attr.TDataStd_Integer = v ? 1 : 0; },
+
+  argLabel(f, key, create = false) {
+    const spec = F.spec(f);
+    if (!spec) return null;
+    const tag = argTag(spec, key);
+    if (tag < FIRST_ARG_TAG) return null;
+    const label = f.findChild(tag, create);
+    if (label && create) label.attr.TDataStd_Name = key;
+    return label;
+  },
+  real(f, key, fallback = 0) {
+    const label = F.argLabel(f, key);
+    return label && typeof label.attr.TDataStd_Real === "number" ? label.attr.TDataStd_Real : fallback;
+  },
+  setReal(f, key, value) { F.argLabel(f, key, true).attr.TDataStd_Real = value; },
+  reference(f, key) {
+    const label = F.argLabel(f, key);
+    return label ? label.attr.TDF_Reference || null : null;
+  },
+  setReference(f, key, target) { F.argLabel(f, key, true).attr.TDF_Reference = target; },
+
+  resultLabel: (f, create = false) => f.findChild(RESULT_TAG, create),
+  shape(f) {
+    const r = F.resultLabel(f);
+    return r ? r.attr.TNaming_NamedShape || null : null;
+  },
+  error(f) {
+    const e = f.findChild(ERROR_TAG);
+    return e ? e.attr.TDataStd_AsciiString || "" : "";
+  },
+  setError(f, message) { f.findChild(ERROR_TAG, true).attr.TDataStd_AsciiString = message; },
+};
+
+/* ==========================================================================
+   3. Geometry.  The browser kernel works on compact shape descriptors rather
+      than a B-Rep; ocafcad rebuilds the identical model on OpenCascade.
+   ========================================================================== */
+
+const V = {
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  scale: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
+  len: a => Math.hypot(a[0], a[1], a[2]),
+  norm(a) { const l = V.len(a); return l < 1e-9 ? null : V.scale(a, 1 / l); },
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+};
+
+//! An OCC gp_Ax2: origin, main direction, and a reference X direction.
+function makeAx2(origin, dir) {
+  const z = V.norm(dir) || [0, 0, 1];
+  const seed = Math.abs(z[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1];
+  const x = V.norm(V.cross(seed, z)) || [1, 0, 0];
+  return { o: origin, z, x, y: V.cross(z, x) };
+}
+const pointOf = f => (f && F.spec(f) && F.spec(f).type === "Point")
+  ? [F.real(f, "x"), F.real(f, "y"), F.real(f, "z")] : null;
+const dirOf = f => (f && F.spec(f) && F.spec(f).type === "Vector")
+  ? V.norm([F.real(f, "dx"), F.real(f, "dy"), F.real(f, "dz")]) : null;
+const planeOf = f => (f && F.spec(f) && F.spec(f).type === "Plane")
+  ? makeAx2(pointOf(F.reference(f, "origin")) || [0, 0, 0],
+            dirOf(F.reference(f, "normal")) || [0, 0, 1]) : null;
+
+/* ==========================================================================
+   4. Drivers.  One per feature type, registered against its GUID, exactly as
+      TFunction_DriverTable holds them in the C++ kernel.
+   ========================================================================== */
+
+class Logbook {
+  constructor() { this.touched = new Set(); this.impacted = new Set(); }
+  touch(l) { this.touched.add(l); }
+  impact(l) { this.impacted.add(l); }
+  isModified(l) { return this.touched.has(l) || this.impacted.has(l); }
+  clear() { this.touched.clear(); this.impacted.clear(); }
+}
+
+class FeatureDriver {
+  constructor(spec) { this.spec = spec; }
+
+  // A reference argument depends on the *result* of the feature it points at,
+  // which is what gives the solver its dependency order.
+  arguments(f) {
+    const args = [];
+    for (const child of f.childList()) {
+      if (child.tag === RESULT_TAG || child.tag === ERROR_TAG) continue;
+      if (child.attr.TDF_Reference) {
+        args.push(F.resultLabel(child.attr.TDF_Reference, true));
+        args.push(child);
+      } else {
+        args.push(child);
+      }
+    }
+    return args;
+  }
+  results(f) { return [F.resultLabel(f, true)]; }
+  mustExecute(f, log) {
+    return log.isModified(f) || this.arguments(f).some(a => log.isModified(a));
+  }
+  execute(f, log) {
+    let out;
+    try { out = this.build(f); }
+    catch (err) { out = { error: "kernel error: " + err.message }; }
+    if (!out || out.error) {
+      F.setError(f, (out && out.error) || "the driver produced no shape");
+      return 1;
+    }
+    F.resultLabel(f, true).attr.TNaming_NamedShape = out.shape;
+    F.setError(f, "");
+    log.impact(F.resultLabel(f, true));
+    log.impact(f);
+    return 0;
+  }
+}
+
+const DRIVERS = new Map();
+const driver = (type, build) => {
+  const spec = byType.get(type);
+  const d = new FeatureDriver(spec);
+  d.build = build;
+  DRIVERS.set(spec.guid, d);
+};
+
+driver("Point", f => ({ shape: { kind: "vertex", p: [F.real(f, "x"), F.real(f, "y"), F.real(f, "z")] } }));
+
+driver("Vector", f => {
+  const v = [F.real(f, "dx"), F.real(f, "dy"), F.real(f, "dz")];
+  if (V.len(v) < 1e-9) return { error: "a vector needs a non-zero direction" };
+  return { shape: { kind: "arrow", from: [0, 0, 0], to: v } };
+});
+
+driver("Line", f => {
+  const origin = pointOf(F.reference(f, "origin"));
+  if (!origin) return { error: "start point is missing" };
+  const dir = dirOf(F.reference(f, "direction"));
+  if (!dir) return { error: "direction vector is missing or null" };
+  const length = F.real(f, "length", 100);
+  if (length <= 0) return { error: "length must be positive" };
+  return { shape: { kind: "edge", from: origin, to: V.add(origin, V.scale(dir, length)) } };
+});
+
+driver("Plane", f => {
+  const ax = planeOf(f);
+  if (!ax) return { error: "origin point or normal vector is missing" };
+  const half = F.real(f, "size", 160) / 2;
+  if (half <= 0) return { error: "display size must be positive" };
+  return { shape: { kind: "face", ax, half } };
+});
+
+driver("Cube", f => {
+  const corner = pointOf(F.reference(f, "origin"));
+  if (!corner) return { error: "corner point is missing" };
+  const plane = planeOf(F.reference(f, "plane"));
+  const ax = plane ? { o: corner, x: plane.x, y: plane.y, z: plane.z } : makeAx2(corner, [0, 0, 1]);
+  const dx = F.real(f, "dx", 80), dy = F.real(f, "dy", 80), dz = F.real(f, "dz", 80);
+  if (dx <= 0 || dy <= 0 || dz <= 0) return { error: "every side length must be positive" };
+  return { shape: { kind: "solid", prim: "box", ax, dx, dy, dz, radius: 0 } };
+});
+
+driver("Sphere", f => {
+  const centre = pointOf(F.reference(f, "center"));
+  if (!centre) return { error: "centre point is missing" };
+  const radius = F.real(f, "radius", 50);
+  if (radius <= 0) return { error: "radius must be positive" };
+  return { shape: { kind: "solid", prim: "sphere", c: centre, radius } };
+});
+
+driver("Fillet", f => {
+  const source = F.reference(f, "body");
+  const body = source ? F.shape(source) : null;
+  if (!body || body.kind !== "solid") return { error: "the body to fillet has not been built" };
+  if (body.prim === "sphere") return { error: "a sphere has no edges to round" };
+  const radius = F.real(f, "radius", 10);
+  if (radius <= 0) return { error: "radius must be positive" };
+  const smallest = Math.min(body.dx, body.dy, body.dz);
+  if (radius >= smallest / 2)
+    return { error: "the fillet failed - the radius is too large for this body (limit "
+                    + (smallest / 2).toFixed(1) + " mm)" };
+  return { shape: { ...body, radius } };
+});
+
+/* ==========================================================================
+   5. The document: create features, edit parameters, regenerate.
+   ========================================================================== */
+
+class Doc {
+  constructor(title = "Part1", units = "mm") {
+    this.root = new Label(0, null);
+    this.main = this.root.findChild(1, true);
+    this.main.attr.TDataStd_Name = title;
+    this.main.attr.TDataStd_AsciiString = units;
+    this.featuresRoot = this.main.findChild(1, true);
+    this.log = new Logbook();
+    this.title = title;
+    this.units = units;
+  }
+
+  features() { return this.featuresRoot.childList().filter(l => l.attr.TFunction_Function); }
+  find(reference) {
+    return this.features().find(f => F.id(f) === reference || F.name(f) === reference) || null;
+  }
+
+  //! Names follow the CAD convention: Cube.1, Cube.2, ...
+  uniqueName(type) {
+    const used = new Set(this.features().map(F.name));
+    for (let i = 1; ; i++) if (!used.has(type + "." + i)) return type + "." + i;
+  }
+  uniqueId(type) {
+    const used = new Set(this.features().map(F.id));
+    const stem = type.slice(0, 2).toUpperCase();
+    for (let i = 1; ; i++) if (!used.has(stem + i)) return stem + i;
+  }
+
+  addFeature(type, id, name) {
+    const spec = byType.get(type);
+    if (!spec) throw new Error("unknown feature type " + type);
+    const f = this.featuresRoot.newChild();
+    f.attr.TFunction_Function = spec.guid;
+    f.attr.TDataStd_AsciiString = id || this.uniqueId(type);
+    f.attr.TDataStd_Name = name || this.uniqueName(type);
+    F.setVisible(f, true);
+    for (const arg of spec.args) {
+      const label = F.argLabel(f, arg.key, true);
+      if (arg.kind === "real") label.attr.TDataStd_Real = arg.def;
+    }
+    F.resultLabel(f, true);
+    this.log.touch(f);
+    return f;
+  }
+
+  //! Every feature that reads from f. A feature with dependents cannot go.
+  dependents(f) {
+    return this.features().filter(other =>
+      F.spec(other).args.some(a => a.kind === "ref" && F.reference(other, a.key) === f));
+  }
+  deleteFeature(f) { this.featuresRoot.children.delete(f.tag); }
+
+  setParameter(f, key, value) {
+    const label = F.argLabel(f, key, true);
+    label.attr.TDataStd_Real = value;
+    this.log.touch(label);
+  }
+  setReference(f, key, target) {
+    F.setReference(f, key, target);
+    this.log.touch(F.argLabel(f, key));
+  }
+
+  //! Kahn's algorithm over producer -> consumer edges, the ordering
+  //! TFunction_Iterator derives from the same Arguments()/Results() lists.
+  order() {
+    const features = this.features();
+    const producer = new Map();
+    for (const f of features) producer.set(F.resultLabel(f, true), f);
+
+    const incoming = new Map(features.map(f => [f, new Set()]));
+    const outgoing = new Map(features.map(f => [f, new Set()]));
+    for (const f of features) {
+      for (const a of DRIVERS.get(f.attr.TFunction_Function).arguments(f)) {
+        const from = producer.get(a);
+        if (from && from !== f) { incoming.get(f).add(from); outgoing.get(from).add(f); }
+      }
+    }
+    const ready = features.filter(f => incoming.get(f).size === 0);
+    const sorted = [];
+    while (ready.length) {
+      const f = ready.shift();
+      sorted.push(f);
+      for (const next of outgoing.get(f)) {
+        incoming.get(next).delete(f);
+        if (incoming.get(next).size === 0) ready.push(next);
+      }
+    }
+    // A cycle cannot be built, but it must not swallow the rest of the tree.
+    for (const f of features) if (!sorted.includes(f)) sorted.push(f);
+    return sorted;
+  }
+
+  recompute(all = false) {
+    const report = { executed: [], skipped: [], failed: [], functions: 0 };
+    if (all) for (const f of this.features()) this.log.touch(f);
+
+    for (const f of this.order()) {
+      const d = DRIVERS.get(f.attr.TFunction_Function);
+      if (!d) continue;
+      report.functions++;
+      if (!d.mustExecute(f, this.log)) { report.skipped.push(f); continue; }
+      if (d.execute(f, this.log) === 0) report.executed.push(f);
+      else report.failed.push(f);
+    }
+    this.log.clear();
+    this.updateVisibility();
+    return report;
+  }
+
+  //! A body consumed by an operation stays in the tree and leaves the 3D view.
+  updateVisibility() {
+    const features = this.features();
+    for (const f of features) F.setVisible(f, true);
+    for (const f of features) {
+      const spec = F.spec(f);
+      for (const arg of spec.args) {
+        if (arg.kind !== "ref" || !arg.consumes) continue;
+        const source = F.reference(f, arg.key);
+        if (source) F.setVisible(source, false);
+      }
+    }
+  }
+  consumedBy(f) {
+    for (const other of this.features()) {
+      const spec = F.spec(other);
+      for (const arg of spec.args)
+        if (arg.kind === "ref" && arg.consumes && F.reference(other, arg.key) === f) return other;
+    }
+    return null;
+  }
+
+  /* ------------------------------------------------------- neutral format */
+  toJSON() {
+    return {
+      format: "ocaf-parametric-model", version: 1, name: this.title, units: this.units,
+      features: this.features().map(f => {
+        const spec = F.spec(f);
+        const args = {};
+        for (const arg of spec.args) {
+          if (arg.kind === "real") args[arg.key] = round(F.real(f, arg.key, arg.def));
+          else {
+            const target = F.reference(f, arg.key);
+            if (target) args[arg.key] = { ref: F.id(target) };
+          }
+        }
+        return { id: F.id(f), type: spec.type, name: F.name(f), args };
+      }),
+    };
+  }
+
+  static fromJSON(model) {
+    if (!model || !Array.isArray(model.features)) throw new Error("no \"features\" array");
+    const doc = new Doc(model.name || "Part1", model.units || "mm");
+    for (const entry of model.features) {
+      if (!byType.has(entry.type)) throw new Error("unknown feature type \"" + entry.type + "\"");
+      doc.addFeature(entry.type, entry.id, entry.name);
+    }
+    for (const entry of model.features) {
+      const f = doc.find(entry.id);
+      const spec = F.spec(f);
+      for (const [key, value] of Object.entries(entry.args || {})) {
+        const arg = spec.args.find(a => a.key === key);
+        if (!arg) throw new Error(spec.type + " has no argument \"" + key + "\"");
+        if (arg.kind === "real") {
+          if (typeof value !== "number") throw new Error(key + " of " + entry.id + " must be a number");
+          F.setReal(f, key, value);
+        } else {
+          const target = doc.find(typeof value === "string" ? value : value.ref);
+          if (!target) throw new Error(entry.id + "." + key + " references an unknown feature");
+          F.setReference(f, key, target);
+        }
+      }
+    }
+    return doc;
+  }
+}
+
+const round = v => Math.round(v * 1e6) / 1e6;
+
+const STARTER = {
+  format: "ocaf-parametric-model", version: 1, name: "Part1", units: "mm",
+  features: [
+    { id: "PT1", type: "Point",  name: "Origin",      args: { x: 0, y: 0, z: 0 } },
+    { id: "VZ",  type: "Vector", name: "Z Direction", args: { dx: 0, dy: 0, dz: 1 } },
+    { id: "PL1", type: "Plane",  name: "XY Plane",
+      args: { origin: { ref: "PT1" }, normal: { ref: "VZ" }, size: 200 } },
+    { id: "CB1", type: "Cube",   name: "Cube.1",
+      args: { origin: { ref: "PT1" }, plane: { ref: "PL1" }, dx: 80, dy: 80, dz: 80 } },
+  ],
+};
+
+/* ==========================================================================
+   6. Meshing.  Descriptors become three.js geometry.  A fillet is the real
+      thing: flat faces inset by the radius, quarter-cylinders along the twelve
+      edges, spherical octants at the eight corners.
+   ========================================================================== */
+
+function roundedBoxGeometry(dx, dy, dz, r, seg = 10) {
+  const positions = [], normals = [];
+  const half = [dx / 2, dy / 2, dz / 2];
+  const inner = half.map(h => Math.max(h - r, 0));
+  const axis = i => { const e = [0, 0, 0]; e[i] = 1; return e; };
+
+  // Emit a triangle, winding it so the front face agrees with the normal.
+  const tri = (p0, p1, p2, n0, n1, n2) => {
+    const u = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    const v = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+    const c = V.cross(u, v);
+    if (c[0] * n0[0] + c[1] * n0[1] + c[2] * n0[2] < 0) {
+      [p1, p2] = [p2, p1]; [n1, n2] = [n2, n1];
+    }
+    positions.push(...p0, ...p1, ...p2);
+    normals.push(...n0, ...n1, ...n2);
+  };
+  const quad = (a, b, c, d, na, nb, nc, nd) => { tri(a, b, c, na, nb, nc); tri(a, c, d, na, nc, nd); };
+
+  // Six flat faces, each inset by the radius on both of its in-plane axes.
+  for (let i = 0; i < 3; i++) {
+    const j = (i + 1) % 3, k = (i + 2) % 3;
+    for (const s of [1, -1]) {
+      const n = V.scale(axis(i), s);
+      const corner = (sj, sk) => {
+        const p = [0, 0, 0];
+        p[i] = s * half[i]; p[j] = sj * inner[j]; p[k] = sk * inner[k];
+        return p;
+      };
+      quad(corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1), n, n, n, n);
+    }
+  }
+
+  // Twelve quarter-cylinders: one along each edge of the box.
+  if (r > 0) {
+    for (let i = 0; i < 3; i++) {
+      const j = (i + 1) % 3, k = (i + 2) % 3; // the cylinder runs along k
+      for (const si of [1, -1]) for (const sj of [1, -1]) {
+        for (let s = 0; s < seg; s++) {
+          const t0 = (s / seg) * Math.PI / 2, t1 = ((s + 1) / seg) * Math.PI / 2;
+          const normalAt = t => {
+            const n = [0, 0, 0];
+            n[i] = si * Math.cos(t); n[j] = sj * Math.sin(t);
+            return n;
+          };
+          const pointAt = (t, sk) => {
+            const n = normalAt(t);
+            const p = [0, 0, 0];
+            p[i] = si * inner[i] + r * n[i];
+            p[j] = sj * inner[j] + r * n[j];
+            p[k] = sk * inner[k];
+            return p;
+          };
+          const n0 = normalAt(t0), n1 = normalAt(t1);
+          quad(pointAt(t0, -1), pointAt(t1, -1), pointAt(t1, 1), pointAt(t0, 1), n0, n1, n1, n0);
+        }
+      }
+    }
+
+    // Eight spherical octants at the corners.
+    for (const sx of [1, -1]) for (const sy of [1, -1]) for (const sz of [1, -1]) {
+      const centre = [sx * inner[0], sy * inner[1], sz * inner[2]];
+      const normalAt = (u, v) => {
+        const phi = (u / seg) * Math.PI / 2, theta = (v / seg) * Math.PI / 2;
+        return [sx * Math.sin(phi) * Math.cos(theta),
+                sy * Math.sin(phi) * Math.sin(theta),
+                sz * Math.cos(phi)];
+      };
+      const pointAt = (u, v) => { const n = normalAt(u, v); return V.add(centre, V.scale(n, r)); };
+      for (let u = 0; u < seg; u++) for (let v = 0; v < seg; v++) {
+        quad(pointAt(u, v), pointAt(u + 1, v), pointAt(u + 1, v + 1), pointAt(u, v + 1),
+             normalAt(u, v), normalAt(u + 1, v), normalAt(u + 1, v + 1), normalAt(u, v + 1));
+      }
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  return geometry;
+}
+
+//! The tangent edges a CAD viewer draws on a filleted box: the outline of each
+//! of the six flat faces.  With radius 0 that is the box's twelve edges.
+function roundedBoxEdges(dx, dy, dz, r) {
+  const points = [];
+  const half = [dx / 2, dy / 2, dz / 2];
+  const inner = half.map(h => Math.max(h - r, 0));
+  for (let i = 0; i < 3; i++) {
+    const j = (i + 1) % 3, k = (i + 2) % 3;
+    for (const s of [1, -1]) {
+      const corner = (sj, sk) => {
+        const p = [0, 0, 0];
+        p[i] = s * half[i]; p[j] = sj * inner[j]; p[k] = sk * inner[k];
+        return p;
+      };
+      const loop = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+      for (let n = 0; n < 4; n++) points.push(loop[n], loop[(n + 1) % 4]);
+    }
+  }
+  return points;
+}
+
+/* ==========================================================================
+   7. The viewport.
+   ========================================================================== */
+
+const viewportEl = document.getElementById("viewport");
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+viewportEl.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, 1, 1, 20000);
+const world = new THREE.Group();
+scene.add(world);
+
+const key = new THREE.DirectionalLight(0xffffff, 0.78);
+const fill = new THREE.DirectionalLight(0xffffff, 0.32);
+const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+key.position.set(220, -320, 420);
+fill.position.set(-360, 240, 120);
+scene.add(key, fill, ambient);
+
+let grid = null, axes = null;
+const THEME = {};
+
+function readTheme() {
+  const style = getComputedStyle(document.documentElement);
+  for (const name of ["shape", "shape-edge", "accent", "datum", "grid", "grid-axis",
+                      "view-top", "view-bottom", "bad", "ink-3"])
+    THEME[name] = new THREE.Color(style.getPropertyValue("--" + name).trim() || "#888888");
+  viewportEl.style.background =
+    `linear-gradient(${style.getPropertyValue("--view-top")}, ${style.getPropertyValue("--view-bottom")})`;
+}
+
+function buildGround() {
+  if (grid) { world.remove(grid); grid.geometry.dispose(); grid.material.dispose(); }
+  if (axes) { world.remove(axes); axes.geometry.dispose(); axes.material.dispose(); }
+  grid = new THREE.GridHelper(1000, 20, THEME["grid-axis"], THEME.grid);
+  grid.rotation.x = Math.PI / 2;   // OCC is Z-up
+  grid.material.transparent = true;
+  grid.material.opacity = 0.55;
+  world.add(grid);
+
+  const span = 520;
+  const geometry = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-span, 0, 0), new THREE.Vector3(span, 0, 0),
+    new THREE.Vector3(0, -span, 0), new THREE.Vector3(0, span, 0),
+  ]);
+  axes = new THREE.LineSegments(geometry,
+    new THREE.LineBasicMaterial({ color: THEME["grid-axis"], transparent: true, opacity: 0.9 }));
+  world.add(axes);
+}
+
+/* -------------------------------------------------------- orbit + zoom ---- */
+const view = { target: new THREE.Vector3(0, 0, 40), distance: 460, yaw: -0.72, pitch: 0.62 };
+
+function placeCamera() {
+  const cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
+  camera.position.set(
+    view.target.x + view.distance * cp * Math.cos(view.yaw),
+    view.target.y + view.distance * cp * Math.sin(view.yaw),
+    view.target.z + view.distance * sp);
+  camera.up.set(0, 0, 1);
+  camera.lookAt(view.target);
+}
+
+(function bindControls() {
+  let mode = null, lastX = 0, lastY = 0, moved = 0;
+  const down = e => {
+    mode = (e.shiftKey || e.button === 1 || e.button === 2) ? "pan" : "orbit";
+    lastX = e.clientX; lastY = e.clientY; moved = 0;
+    renderer.domElement.setPointerCapture(e.pointerId);
+  };
+  const move = e => {
+    if (!mode) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY; moved += Math.abs(dx) + Math.abs(dy);
+    if (mode === "orbit") {
+      view.yaw -= dx * 0.008;
+      view.pitch = Math.max(-1.53, Math.min(1.53, view.pitch + dy * 0.008));
+    } else {
+      const scale = view.distance * 0.0016;
+      const right = new THREE.Vector3().crossVectors(
+        new THREE.Vector3().subVectors(camera.position, view.target), camera.up).normalize();
+      const up = new THREE.Vector3().crossVectors(right,
+        new THREE.Vector3().subVectors(camera.position, view.target)).normalize();
+      view.target.addScaledVector(right, -dx * scale).addScaledVector(up, dy * scale);
+    }
+    placeCamera(); draw();
+  };
+  const up = e => {
+    if (mode === "orbit" && moved < 4) pick(e);
+    mode = null;
+  };
+  const el = renderer.domElement;
+  el.addEventListener("pointerdown", down);
+  el.addEventListener("pointermove", move);
+  el.addEventListener("pointerup", up);
+  el.addEventListener("pointercancel", () => { mode = null; });
+  el.addEventListener("contextmenu", e => e.preventDefault());
+  el.addEventListener("wheel", e => {
+    e.preventDefault();
+    view.distance = Math.max(30, Math.min(4000, view.distance * (1 + Math.sign(e.deltaY) * 0.12)));
+    placeCamera(); draw();
+  }, { passive: false });
+})();
+
+function resize() {
+  const w = viewportEl.clientWidth, h = viewportEl.clientHeight;
+  if (!w || !h) return;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  draw();
+}
+addEventListener("resize", resize);
+
+let frameQueued = false;
+function draw() {
+  if (frameQueued) return;
+  frameQueued = true;
+  requestAnimationFrame(() => { frameQueued = false; renderer.render(scene, camera); });
+}
+
+/* ------------------------------------------------------ feature display ---- */
+const groups = new Map();     // feature label -> THREE.Group
+const pickable = [];          // meshes that answer a click
+
+function disposeGroup(group) {
+  group.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+  });
+  world.remove(group);
+}
+
+function ax2Matrix(ax) {
+  const m = new THREE.Matrix4();
+  m.makeBasis(new THREE.Vector3(...ax.x), new THREE.Vector3(...ax.y), new THREE.Vector3(...ax.z));
+  m.setPosition(new THREE.Vector3(...ax.o));
+  return m;
+}
+
+function buildGroup(f) {
+  const shape = F.shape(f);
+  const group = new THREE.Group();
+  group.userData.feature = f;
+  if (!shape) return group;
+
+  const solidMaterial = () => new THREE.MeshStandardMaterial({
+    color: THEME.shape, metalness: 0.18, roughness: 0.52, flatShading: false });
+  const lineMaterial = c => new THREE.LineBasicMaterial({ color: c });
+
+  if (shape.kind === "solid" && shape.prim === "box") {
+    const geometry = roundedBoxGeometry(shape.dx, shape.dy, shape.dz, shape.radius);
+    const mesh = new THREE.Mesh(geometry, solidMaterial());
+    // The descriptor places the box corner at the origin point.
+    const local = new THREE.Matrix4().makeTranslation(shape.dx / 2, shape.dy / 2, shape.dz / 2);
+    mesh.applyMatrix4(ax2Matrix(shape.ax).multiply(local));
+    mesh.userData.feature = f;
+    group.add(mesh);
+    pickable.push(mesh);
+
+    const points = roundedBoxEdges(shape.dx, shape.dy, shape.dz, shape.radius)
+      .map(p => new THREE.Vector3(...p));
+    const edges = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(points), lineMaterial(THEME["shape-edge"]));
+    edges.applyMatrix4(ax2Matrix(shape.ax).multiply(local));
+    edges.material.transparent = true;
+    edges.material.opacity = 0.5;
+    group.add(edges);
+  } else if (shape.kind === "solid" && shape.prim === "sphere") {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(shape.radius, 48, 32), solidMaterial());
+    mesh.position.set(...shape.c);
+    mesh.userData.feature = f;
+    group.add(mesh);
+    pickable.push(mesh);
+  } else if (shape.kind === "face") {
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(shape.half * 2, shape.half * 2),
+      new THREE.MeshBasicMaterial({ color: THEME.datum, transparent: true, opacity: 0.09,
+                                    side: THREE.DoubleSide, depthWrite: false }));
+    plane.applyMatrix4(ax2Matrix(shape.ax));
+    group.add(plane);
+
+    const h = shape.half;
+    const loop = [[-h, -h], [h, -h], [h, h], [-h, h]];
+    const points = [];
+    for (let i = 0; i < 4; i++) {
+      const a = loop[i], b = loop[(i + 1) % 4];
+      points.push(new THREE.Vector3(a[0], a[1], 0), new THREE.Vector3(b[0], b[1], 0));
+    }
+    const border = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(points), lineMaterial(THEME.datum));
+    border.applyMatrix4(ax2Matrix(shape.ax));
+    border.material.transparent = true;
+    border.material.opacity = 0.75;
+    group.add(border);
+  } else if (shape.kind === "edge") {
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+      [new THREE.Vector3(...shape.from), new THREE.Vector3(...shape.to)]), lineMaterial(THEME.datum)));
+  } else if (shape.kind === "arrow") {
+    const dir = new THREE.Vector3(...shape.to).sub(new THREE.Vector3(...shape.from));
+    const length = Math.max(dir.length() * 60, 60);
+    group.add(new THREE.ArrowHelper(dir.clone().normalize(), new THREE.Vector3(...shape.from),
+                                    length, THEME.datum.getHex(), length * 0.16, length * 0.08));
+  } else if (shape.kind === "vertex") {
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(3.2, 16, 12),
+                               new THREE.MeshBasicMaterial({ color: THEME.datum }));
+    dot.position.set(...shape.p);
+    group.add(dot);
+  }
+  return group;
+}
+
+function syncScene(report) {
+  const rebuild = new Set([...(report ? report.executed : []), ...(report ? report.failed : [])]);
+  const live = new Set(doc.features());
+
+  for (const [f, group] of groups)
+    if (!live.has(f) || rebuild.has(f)) { disposeGroup(group); groups.delete(f); }
+
+  pickable.length = 0;
+  for (const [, group] of groups)
+    group.traverse(o => { if (o.isMesh && o.userData.feature) pickable.push(o); });
+
+  for (const f of doc.features()) {
+    if (!groups.has(f)) { const group = buildGroup(f); groups.set(f, group); world.add(group); }
+    groups.get(f).visible = F.visible(f) && !ui.hidden.has(F.id(f));
+  }
+  paintSelection();
+  draw();
+}
+
+function paintSelection() {
+  for (const [f, group] of groups) {
+    const selected = f === ui.selected;
+    group.traverse(o => {
+      if (o.isMesh && o.material.isMeshStandardMaterial) {
+        o.material.color.copy(selected ? THEME.accent : THEME.shape);
+        o.material.emissive.copy(selected ? THEME.accent : new THREE.Color(0x000000));
+        o.material.emissiveIntensity = selected ? 0.18 : 0;
+      }
+    });
+  }
+  draw();
+}
+
+const raycaster = new THREE.Raycaster();
+function pick(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndc = new THREE.Vector2(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects(pickable.filter(m => m.parent && m.parent.visible), false);
+  select(hits.length ? hits[0].object.userData.feature : null, hits.length > 0);
+}
+
+function fitView() {
+  const box = new THREE.Box3();
+  let any = false;
+  for (const [f, group] of groups) {
+    if (!group.visible) continue;
+    const spec = F.spec(f);
+    if (spec.category === "datum") continue;
+    box.expandByObject(group); any = true;
+  }
+  if (!any) for (const [, group] of groups) if (group.visible) { box.expandByObject(group); any = true; }
+  if (!any || box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3()).length() || 200;
+  view.target.copy(box.getCenter(new THREE.Vector3()));
+  view.distance = Math.max(120, size * 1.9);
+  placeCamera(); draw();
+}
+
+const STANDARD_VIEWS = {
+  iso:   { yaw: -0.72, pitch: 0.62 },
+  top:   { yaw: -Math.PI / 2, pitch: 1.5 },
+  front: { yaw: -Math.PI / 2, pitch: 0.001 },
+  right: { yaw: 0, pitch: 0.001 },
+};
+
+/* ==========================================================================
+   8. Interface.
+   ========================================================================== */
+
+const ICONS = {
+  Point: '<circle cx="8" cy="8" r="2.4" fill="currentColor"/><path d="M8 1v3M8 12v3M1 8h3M12 8h3" stroke="currentColor" stroke-width="1.2"/>',
+  Vector: '<path d="M2 13L12 4" stroke="currentColor" stroke-width="1.5"/><path d="M13.5 2.5L9 3.6l3.4 3.2z" fill="currentColor"/>',
+  Line: '<path d="M2 13L14 3" stroke="currentColor" stroke-width="1.5"/><circle cx="2.6" cy="12.6" r="1.6" fill="currentColor"/><circle cx="13.4" cy="3.4" r="1.6" fill="currentColor"/>',
+  Plane: '<path d="M1.5 10.5L6 4.5h8.5L10 10.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
+  Cube: '<path d="M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M2.4 4.6L8 7.6l5.6-3M8 7.6v6.8" stroke="currentColor" stroke-width="1.1"/>',
+  Sphere: '<circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.3"/><ellipse cx="8" cy="8" rx="2.7" ry="6.3" fill="none" stroke="currentColor" stroke-width="1"/>',
+  Fillet: '<path d="M2.5 13.5V8a5.5 5.5 0 015.5-5.5h5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 2.5h5.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2"/><path d="M2.5 2.5v5.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2"/>',
+  part: '<path d="M2.5 4.2L8 1.5l5.5 2.7v7.6L8 14.5l-5.5-2.7z" fill="none" stroke="currentColor" stroke-width="1.2"/>',
+  undo: '<path d="M6 4L2.5 7.5 6 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2.5 7.5H10a3.5 3.5 0 010 7H7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  redo: '<path d="M10 4l3.5 3.5L10 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M13.5 7.5H6a3.5 3.5 0 000 7h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  eye: '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/>',
+  eyeOff: '<path d="M1.5 8S4 3.5 8 3.5s6.5 4.5 6.5 4.5-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/><path d="M2.5 2.5l11 11" stroke="currentColor" stroke-width="1.3"/>',
+};
+const svg = body => '<svg viewBox="0 0 16 16" aria-hidden="true">' + body + "</svg>";
+
+const ui = {
+  selected: null,   // the feature the tree/viewport has selected
+  edited: null,     // the feature whose definition the panel shows
+  hidden: new Set(),// per-view hide, by feature id - not part of the document
+  lastReport: null,
+};
+
+let doc = null;
+const undoStack = [], redoStack = [];
+
+/* --------------------------------------------------------------- toolbar */
+function buildToolbar() {
+  const targets = { datum: "tools-datum", body: "tools-body", operation: "tools-op" };
+  for (const spec of CATALOGUE) {
+    const button = document.createElement("button");
+    button.className = "tool" + (spec.category === "operation" ? " primary" : "");
+    button.innerHTML = svg(ICONS[spec.type]) + "<span>" + spec.type + "</span>";
+    button.title = spec.summary;
+    button.dataset.type = spec.type;
+    button.addEventListener("click", () => addFeature(spec.type));
+    document.getElementById(targets[spec.category]).appendChild(button);
+  }
+  document.getElementById("btn-undo").innerHTML = svg(ICONS.undo);
+  document.getElementById("btn-redo").innerHTML = svg(ICONS.redo);
+  document.getElementById("root-glyph").innerHTML = svg(ICONS.part);
+}
+
+//! The Fillet button only lights up when a body is selected, the way a CAD
+//! operation waits for its input.
+function refreshToolbar() {
+  const spec = ui.selected ? F.spec(ui.selected) : null;
+  for (const button of document.querySelectorAll(".tool[data-type]")) {
+    const type = byType.get(button.dataset.type);
+    if (type.category !== "operation") continue;
+    const arg = type.args.find(a => a.kind === "ref" && a.consumes);
+    const ok = spec && arg.accepts.includes(spec.type);
+    button.disabled = !ok;
+    button.title = ok
+      ? "Apply " + type.type + " to " + F.name(ui.selected)
+      : "Select a body in the tree or the 3D view first";
+  }
+  document.getElementById("btn-undo").disabled = undoStack.length === 0;
+  document.getElementById("btn-redo").disabled = redoStack.length === 0;
+}
+
+/* ------------------------------------------------------ specification tree */
+function buildTree() {
+  const list = document.getElementById("tree");
+  list.textContent = "";
+  document.getElementById("doc-title").textContent = doc.title;
+
+  const sets = [
+    { name: "Datums", features: doc.features().filter(f => F.spec(f).category === "datum") },
+    { name: "PartBody", features: doc.features().filter(f => F.spec(f).category !== "datum") },
+  ];
+
+  for (const set of sets) {
+    const header = document.createElement("li");
+    header.className = "set-label";
+    header.textContent = set.name;
+    list.appendChild(header);
+
+    const branch = document.createElement("ul");
+    branch.className = "branch";
+    if (!set.features.length) {
+      const empty = document.createElement("li");
+      empty.className = "node";
+      empty.innerHTML = '<span class="kind" style="padding-left:22px">empty</span>';
+      branch.appendChild(empty);
+    }
+    for (const f of set.features) branch.appendChild(treeNode(f));
+    list.appendChild(branch);
+  }
+}
+
+function treeNode(f) {
+  const spec = F.spec(f);
+  const consumedBy = doc.consumedBy(f);
+  const failed = !!F.error(f);
+  const hidden = ui.hidden.has(F.id(f));
+
+  const li = document.createElement("li");
+  li.className = "node pick " + spec.category
+    + (consumedBy ? " consumed" : "") + (failed ? " failed" : "")
+    + (f === ui.selected ? " selected" : "");
+  li.tabIndex = 0;
+  li.title = consumedBy
+    ? F.name(f) + " is consumed by " + F.name(consumedBy) + " - it stays in the tree, not in the 3D view"
+    : spec.summary;
+
+  const glyph = document.createElement("span");
+  glyph.className = "glyph";
+  glyph.innerHTML = svg(ICONS[spec.type]);
+
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = F.name(f);
+
+  const kind = document.createElement("span");
+  kind.className = "kind";
+  kind.textContent = failed ? "error" : (consumedBy ? "hidden" : spec.type.toLowerCase());
+
+  li.append(glyph, label, kind);
+
+  if (!consumedBy) {
+    const eye = document.createElement("button");
+    eye.className = "eye" + (hidden ? " off" : "");
+    eye.innerHTML = svg(hidden ? ICONS.eyeOff : ICONS.eye);
+    eye.title = hidden ? "Show in 3D" : "Hide in 3D";
+    eye.addEventListener("click", event => {
+      event.stopPropagation();
+      hidden ? ui.hidden.delete(F.id(f)) : ui.hidden.add(F.id(f));
+      buildTree(); syncScene(null);
+    });
+    li.appendChild(eye);
+  }
+
+  li.addEventListener("click", () => select(f, false));
+  li.addEventListener("dblclick", () => select(f, true));
+  li.addEventListener("keydown", event => {
+    if (event.key === "Enter") { select(f, true); event.preventDefault(); }
+  });
+  return li;
+}
+
+/* ------------------------------------------------------- definition panel */
+function buildPanel() {
+  const host = document.getElementById("def");
+  host.textContent = "";
+  const f = ui.edited;
+  document.getElementById("def-entry").textContent = f ? f.entry : "";
+
+  if (!f) {
+    host.innerHTML =
+      '<div class="empty"><h3>No feature open</h3>' +
+      "<p>This panel is where a feature is defined - the OCAF arguments behind it, " +
+      "on sliders.</p><ol>" +
+      "<li>Click a feature in the tree, or a body in the 3D view.</li>" +
+      "<li><b>Double-click</b> it to open its definition here.</li>" +
+      "<li>Drag a slider: the kernel re-runs only the functions downstream of the edit.</li>" +
+      "</ol><p style=\"margin-top:14px\">With a body selected, <b>Fillet</b> in the toolbar " +
+      "consumes it: the fillet joins the tree and the body leaves the 3D view.</p></div>";
+    return;
+  }
+
+  const spec = F.spec(f);
+  const failure = F.error(f);
+  const consumedBy = doc.consumedBy(f);
+
+  const head = document.createElement("div");
+  head.className = "def-head";
+  head.innerHTML =
+    '<div class="name-row"><input class="name" id="feature-name" value="' +
+    escapeAttr(F.name(f)) + '" aria-label="Feature name">' +
+    '<span class="badge ' + spec.category + '">' + spec.type + "</span></div>" +
+    '<div class="meta">' + f.entry + " · TFunction_Function<br>{" + spec.guid + "}</div>";
+  host.appendChild(head);
+
+  const summary = document.createElement("p");
+  summary.className = "summary";
+  summary.textContent = spec.summary;
+  host.appendChild(summary);
+
+  if (failure) host.appendChild(notice(failure, "bad"));
+  else if (consumedBy)
+    host.appendChild(notice("Consumed by " + F.name(consumedBy) +
+      ". It stays in the tree; its result is replaced in the 3D view.", "info"));
+
+  for (const arg of spec.args) host.appendChild(arg.kind === "real" ? realField(f, arg) : refField(f, arg));
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+
+  if (spec.category !== "datum" && !consumedBy) {
+    const fillet = document.createElement("button");
+    fillet.className = "tool primary";
+    fillet.innerHTML = svg(ICONS.Fillet) + "<span>Apply fillet</span>";
+    fillet.addEventListener("click", () => { ui.selected = f; addFeature("Fillet"); });
+    actions.appendChild(fillet);
+  }
+
+  const remove = document.createElement("button");
+  remove.className = "tool";
+  remove.textContent = "Delete feature";
+  remove.addEventListener("click", () => deleteFeature(f));
+  actions.appendChild(remove);
+  host.appendChild(actions);
+}
+
+function notice(text, kind) {
+  const div = document.createElement("div");
+  div.className = "notice" + (kind === "info" ? " info" : "");
+  div.textContent = text;
+  return div;
+}
+
+function realField(f, arg) {
+  const field = document.createElement("div");
+  field.className = "field";
+  const value = F.real(f, arg.key, arg.def);
+  const label = F.argLabel(f, arg.key, true);
+
+  field.innerHTML =
+    '<div class="field-head"><label for="p-' + arg.key + '">' + arg.label + "</label>" +
+    '<span class="value-box"><input type="number" id="n-' + arg.key + '" value="' + round(value) +
+    '" step="' + arg.step + '" min="' + arg.min + '" max="' + arg.max +
+    '"><span class="unit">' + (arg.unit || "") + "</span></span></div>" +
+    '<input type="range" id="p-' + arg.key + '" min="' + arg.min + '" max="' + arg.max +
+    '" step="' + arg.step + '" value="' + value + '">' +
+    '<div class="attr-path">' + label.entry + " · <b>TDataStd_Real</b></div>";
+
+  const slider = field.querySelector('input[type="range"]');
+  const number = field.querySelector('input[type="number"]');
+  const apply = raw => {
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return;
+    slider.value = v; number.value = round(v);
+    doc.setParameter(f, arg.key, v);
+    regenerate();
+  };
+  slider.addEventListener("input", () => { pushUndoOnce(); apply(slider.value); });
+  slider.addEventListener("change", () => { undoArmed = true; });
+  number.addEventListener("change", () => { pushUndo(); apply(number.value); });
+  return field;
+}
+
+function refField(f, arg) {
+  const field = document.createElement("div");
+  field.className = "field";
+  const current = F.reference(f, arg.key);
+  const label = F.argLabel(f, arg.key, true);
+
+  const options = doc.features().filter(other =>
+    other !== f && arg.accepts.includes(F.spec(other).type) && !creates_cycle(f, other));
+
+  field.innerHTML = '<div class="field-head"><label>' + arg.label + "</label>" +
+    '<span class="kind">' + arg.accepts.join(" / ") + "</span></div>";
+
+  const select = document.createElement("select");
+  select.innerHTML = '<option value="">— not set —</option>' + options.map(o =>
+    '<option value="' + escapeAttr(F.id(o)) + '"' + (o === current ? " selected" : "") + ">" +
+    escapeHtml(F.name(o)) + "</option>").join("");
+  select.addEventListener("change", () => {
+    pushUndo();
+    const target = doc.find(select.value);
+    if (target) doc.setReference(f, arg.key, target);
+    regenerate(); buildTree(); buildPanel();
+  });
+  field.appendChild(select);
+
+  const path = document.createElement("div");
+  path.className = "attr-path";
+  path.innerHTML = label.entry + " · <b>TDF_Reference</b>" +
+    (current ? " → " + current.entry : "") + (arg.consumes ? " · consumes the body" : "");
+  field.appendChild(path);
+  return field;
+}
+
+//! Guards the reference dropdown: a feature may not read from anything that
+//! already depends on it.
+function creates_cycle(f, candidate) {
+  const seen = new Set();
+  const walk = node => {
+    if (node === f) return true;
+    if (seen.has(node)) return false;
+    seen.add(node);
+    const spec = F.spec(node);
+    return spec.args.some(a => {
+      if (a.kind !== "ref") return false;
+      const target = F.reference(node, a.key);
+      return target ? walk(target) : false;
+    });
+  };
+  return walk(candidate);
+}
+
+/* ------------------------------------------------------------------- log */
+function buildLog(report) {
+  const host = document.getElementById("log");
+  host.textContent = "";
+  const count = document.getElementById("log-count");
+  if (!report) { count.textContent = ""; return; }
+  count.textContent = report.executed.length + "/" + report.functions;
+
+  const line = (text, className) => {
+    const div = document.createElement("div");
+    div.className = className;
+    div.textContent = text;
+    host.appendChild(div);
+  };
+  line("regenerated " + report.executed.length + " of " + report.functions + " functions", "head");
+  for (const f of report.executed) line("+ " + F.name(f), "ran");
+  for (const f of report.failed) line("! " + F.name(f) + ": " + F.error(f), "err");
+  for (const f of report.skipped) line("= " + F.name(f), "same");
+
+  document.getElementById("status-regen").innerHTML =
+    "<b>" + report.executed.length + "</b> executed · <b>" + report.skipped.length +
+    "</b> up to date" + (report.failed.length ? " · <b>" + report.failed.length + "</b> failed" : "");
+}
+
+/* ------------------------------------------------------------- operations */
+function addFeature(type) {
+  pushUndo();
+  const spec = byType.get(type);
+  const f = doc.addFeature(type);
+
+  // Wire the new feature to sensible inputs, the way a CAD command pre-fills
+  // its dialog: the selected body for an operation, the first datum otherwise.
+  for (const arg of spec.args) {
+    if (arg.kind !== "ref") continue;
+    let target = null;
+    if (arg.consumes && ui.selected && arg.accepts.includes(F.spec(ui.selected).type))
+      target = ui.selected;
+    if (!target)
+      target = doc.features().find(o =>
+        o !== f && arg.accepts.includes(F.spec(o).type) && !creates_cycle(f, o)) || null;
+    if (target) F.setReference(f, arg.key, target);
+  }
+  regenerate(true);
+  select(f, true);
+  if (spec.category !== "datum") fitView();
+}
+
+function deleteFeature(f) {
+  const dependents = doc.dependents(f);
+  if (dependents.length) {
+    buildPanel();
+    document.getElementById("def").prepend(notice(
+      dependents.map(F.name).join(", ") + " reads from " + F.name(f) +
+      ". Delete that one first.", "bad"));
+    return;
+  }
+  pushUndo();
+  doc.deleteFeature(f);
+  if (ui.selected === f) ui.selected = null;
+  if (ui.edited === f) ui.edited = null;
+  const group = groups.get(f);
+  if (group) { disposeGroup(group); groups.delete(f); }
+  regenerate(true);
+}
+
+function select(f, openDefinition) {
+  ui.selected = f;
+  if (openDefinition || (f && ui.edited && f !== ui.edited)) ui.edited = f;
+  if (!f && openDefinition) ui.edited = null;
+  document.getElementById("status-sel").innerHTML = f
+    ? "<b>" + escapeHtml(F.name(f)) + "</b> · " + f.entry + " · " + F.spec(f).type
+    : "nothing selected";
+  buildTree(); buildPanel(); refreshToolbar(); paintSelection();
+}
+
+function regenerate(all = false) {
+  const report = doc.recompute(all);
+  ui.lastReport = report;
+  syncScene(report);
+  buildLog(report);
+  buildTree();
+  updateStamp();
+  save();
+}
+
+function updateStamp() {
+  const bodies = doc.features().filter(f => F.spec(f).category !== "datum" && F.visible(f));
+  const lines = [
+    "<b>" + escapeHtml(doc.title) + "</b>",
+    doc.features().length + " features · " + bodies.length + " shown · " + doc.units,
+  ];
+  document.getElementById("stamp").innerHTML = lines.join("<br>");
+  document.getElementById("status-kernel").textContent =
+    "browser preview kernel · ocafcad rebuilds this file on OpenCascade";
+  document.getElementById("brand-sub").textContent =
+    "TDocStd_Document · " + doc.features().length + " functions";
+}
+
+/* --------------------------------------------------------- undo / persist */
+let undoArmed = true;
+function pushUndo() {
+  undoStack.push(JSON.stringify(doc.toJSON()));
+  if (undoStack.length > 60) undoStack.shift();
+  redoStack.length = 0;
+  refreshToolbar();
+}
+//! A slider drag is one undo step, not one per frame.
+function pushUndoOnce() { if (undoArmed) { pushUndo(); undoArmed = false; } }
+
+function restore(text) {
+  doc = Doc.fromJSON(JSON.parse(text));
+  ui.selected = ui.edited = null;
+  for (const [, group] of groups) disposeGroup(group);
+  groups.clear();
+  regenerate(true);
+  select(null, true);
+}
+
+function undo() {
+  if (!undoStack.length) return;
+  redoStack.push(JSON.stringify(doc.toJSON()));
+  restore(undoStack.pop());
+  refreshToolbar();
+}
+function redo() {
+  if (!redoStack.length) return;
+  undoStack.push(JSON.stringify(doc.toJSON()));
+  restore(redoStack.pop());
+  refreshToolbar();
+}
+
+const STORAGE_KEY = "ocaf-feature-modeller/model";
+let saveTimer = 0;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(doc.toJSON())); }
+    catch (e) { /* a private window refuses storage; the model still works */ }
+  }, 400);
+}
+function load() {
+  try {
+    const text = localStorage.getItem(STORAGE_KEY);
+    if (text) return JSON.parse(text);
+  } catch (e) { /* unreadable storage is not an error */ }
+  return null;
+}
+
+/* -------------------------------------------------------------- utilities */
+const escapeHtml = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const escapeAttr = s => escapeHtml(s).replace(/"/g, "&quot;");
+
+/* ------------------------------------------------------------------ boot */
+function start() {
+  buildToolbar();
+  readTheme();
+  buildGround();
+
+  let model = load();
+  try { doc = Doc.fromJSON(model || STARTER); }
+  catch (e) { doc = Doc.fromJSON(STARTER); }
+
+  placeCamera();
+  resize();
+  regenerate(true);
+  select(doc.find("Cube.1") || doc.features()[doc.features().length - 1] || null, true);
+  fitView();
+}
+
+/* toolbar + viewport wiring */
+document.getElementById("btn-undo").addEventListener("click", undo);
+document.getElementById("btn-redo").addEventListener("click", redo);
+document.getElementById("btn-reset").addEventListener("click", () => {
+  pushUndo();
+  ui.hidden.clear();
+  restore(JSON.stringify(STARTER));
+  select(doc.find("Cube.1"), true);
+  fitView();
+});
+for (const button of document.querySelectorAll(".view-tools button")) {
+  button.addEventListener("click", () => {
+    const name = button.dataset.view;
+    if (name === "fit") return fitView();
+    Object.assign(view, STANDARD_VIEWS[name]);
+    placeCamera(); draw();
+  });
+}
+
+const modal = document.getElementById("modal");
+document.getElementById("btn-model").addEventListener("click", () => {
+  document.getElementById("model-text").value = JSON.stringify(doc.toJSON(), null, 2);
+  modal.showModal();
+});
+document.getElementById("btn-close").addEventListener("click", () => modal.close());
+document.getElementById("btn-copy").addEventListener("click", async () => {
+  const button = document.getElementById("btn-copy");
+  const area = document.getElementById("model-text");
+  try { await navigator.clipboard.writeText(area.value); button.textContent = "Copied"; }
+  catch (e) { area.select(); button.textContent = "Press Ctrl+C"; }
+  setTimeout(() => { button.textContent = "Copy"; }, 1600);
+});
+document.getElementById("btn-load").addEventListener("click", () => {
+  const area = document.getElementById("model-text");
+  try {
+    pushUndo();
+    restore(area.value);
+    modal.close();
+    fitView();
+  } catch (err) {
+    const button = document.getElementById("btn-load");
+    button.textContent = "Not a model file: " + err.message;
+    setTimeout(() => { button.textContent = "Load"; }, 3200);
+  }
+});
+
+addEventListener("keydown", event => {
+  if (event.target.matches("input, textarea, select")) return;
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+    event.preventDefault();
+    event.shiftKey ? redo() : undo();
+  }
+});
+
+function repaintTheme() {
+  readTheme();
+  buildGround();
+  for (const [, group] of groups) disposeGroup(group);
+  groups.clear();
+  syncScene({ executed: [], failed: [], skipped: [], functions: 0 });
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", repaintTheme);
+new MutationObserver(repaintTheme).observe(document.documentElement, { attributeFilter: ["data-theme"] });
+new ResizeObserver(resize).observe(viewportEl);
+
+start();
+</script>
