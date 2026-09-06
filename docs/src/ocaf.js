@@ -15,6 +15,172 @@
 //! The script a new Script feature starts with: a spiral stair, whose treads,
 //! risers, centre pole, stringer and handrail are separate solids driven by the
 //! parameters it declares. Edit it and the feature becomes something else.
+//! A third sample, and the most literal: the Heydar Aliyev Center. The roof
+//! is one loft through section curves laid the way the building draws them -
+//! rolled lip, valley on the ground, a rise through a 45-degree tangent to the
+//! peak - and the steep face behind the peak is a mullion grid rather than
+//! shell.
+export const HEYDAR_CENTER = `({
+  params: [
+    { key: "length",      label: "Length",           def: 4200, min: 1500, max: 12000, step: 100 },
+    { key: "width",       label: "Width",            def: 2600, min: 800,  max: 8000,  step: 100 },
+    { key: "height",      label: "Peak height",      def: 1450, min: 400,  max: 4000,  step: 25 },
+    { key: "lipHeight",   label: "Lip height",       def: 0.44, min: 0.15, max: 0.49,  step: 0.01, unit: "" },
+    { key: "valleyAt",    label: "Valley at",        def: 0.40, min: 0.15, max: 0.60,  step: 0.01, unit: "" },
+    { key: "peakAt",      label: "Peak at",          def: 0.86, min: 0.60, max: 0.95,  step: 0.01, unit: "" },
+    { key: "lobes",       label: "Lobes",            def: 3,    min: 1,    max: 6,     step: 1, unit: "" },
+    { key: "sections",    label: "Section curves",   def: 26,   min: 6,    max: 60,    step: 1, unit: "" },
+    { key: "stations",    label: "Points per curve", def: 46,   min: 16,   max: 90,    step: 2, unit: "" },
+    { key: "thickness",   label: "Shell thickness",  def: 40,   min: 8,    max: 200,   step: 2 },
+    { key: "facade",      label: "Facade",           options: ["On", "Off"], def: 0 },
+    { key: "facadeAt",    label: "Glazing starts",   def: 0.90, min: 0.70, max: 0.99,  step: 0.01, unit: "" },
+    { key: "mullionsU",   label: "Mullions across",  def: 26,   min: 4,    max: 60,    step: 1, unit: "" },
+    { key: "mullionsV",   label: "Transoms",         def: 7,    min: 2,    max: 20,    step: 1, unit: "" },
+    { key: "mullionSize", label: "Mullion size",     def: 34,   min: 8,    max: 120,   step: 2 },
+  ],
+
+  build(p, k) {
+    /* ------------------------------------------------------------------
+       The roof is a loft. Everything below is about where to put the
+       curves before lofting them, which is the whole job.
+
+       One section curve, drawn the way the sketch does it: from the plaza
+       up into the rolled lip - which sits LOWER than the mid-point - down
+       the long slope into a valley that touches the ground, then a rise
+       through a 45-degree tangent to the peak, and a steep drop behind it.
+       ------------------------------------------------------------------ */
+
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const smooth = t => t * t * (3 - 2 * t);
+
+    //! Catmull-Rom through a control polygon, parameterised by index so the
+    //! curve may double back on itself - which the lip and the back drop do.
+    const spline = (cps, t) => {
+      const n = cps.length - 1;
+      const x = Math.max(0, Math.min(1, t)) * n;
+      const i = Math.min(n - 1, Math.floor(x));
+      const f = x - i;
+      const at = j => cps[Math.max(0, Math.min(n, j))];
+      const [a, b, c, d] = [at(i - 1), at(i), at(i + 1), at(i + 2)];
+      const term = q => 0.5 * ((2 * b[q]) + (-a[q] + c[q]) * f
+        + (2 * a[q] - 5 * b[q] + 4 * c[q] - d[q]) * f * f
+        + (-a[q] + 3 * b[q] - 3 * c[q] + d[q]) * f * f * f);
+      return [term(0), term(1)];
+    };
+
+    //! The control polygon of one section, in fractions of length and height.
+    //! The three marked points of the sketch are the lip, the valley and the
+    //! peak; everything else follows from them.
+    const controls = (lip, valleyAt, peakAt, peak, lipOut) => {
+      const rise = peakAt - valleyAt;
+      return [
+        [0.000, 0.000],                       // meets the plaza
+        [-0.004 * lipOut, 0.14 * lip / 0.44], // the lip rolls back on itself
+        [0.028 * lipOut, lip * 0.86],
+        [0.085, lip],                         // the lip: lower than mid-point
+        [0.180, lip * 0.90],
+        [0.290, lip * 0.55],
+        [valleyAt - rise * 0.18, lip * 0.16],
+        [valleyAt, 0.012],                    // the valley, down on the ground
+        [valleyAt + rise * 0.30, peak * 0.22],
+        [valleyAt + rise * 0.52, peak * 0.52],// through the 45-degree tangent
+        [valleyAt + rise * 0.76, peak * 0.83],
+        [peakAt, peak],                       // the peak
+        [peakAt + (1 - peakAt) * 0.42, peak * 0.86],
+        [peakAt + (1 - peakAt) * 0.80, peak * 0.46],
+        [1.000, 0.030],                       // the steep drop behind it
+      ];
+    };
+
+    /* How a section changes across the width. The main peak stands at the
+       front; behind it the roof settles into lobes, each lower and shifted
+       forward of the last, which is what gives the roofscape its ridges. */
+    const lobes = Math.max(1, Math.round(p.lobes));
+    const sectionAt = v => {
+      const fall = 1 - smooth(Math.min(1, v * 1.05));          // the overall settle
+      const ripple = 0.5 + 0.5 * Math.cos(v * Math.PI * 2 * lobes);
+      const peak = Math.max(0.10, lerp(0.16, 1.0, fall) * lerp(0.72, 1.0, ripple));
+      return {
+        peak,
+        lip: p.lipHeight * lerp(0.35, 1.0, fall),
+        valleyAt: lerp(p.valleyAt * 0.72, p.valleyAt, fall),
+        peakAt: lerp(p.peakAt - 0.22, p.peakAt, fall),
+        lipOut: lerp(0.2, 1.0, fall),
+        // The plan is not a rectangle: the ends draw back as the roof settles.
+        span: lerp(0.62, 1.0, smooth(Math.min(1, (1 - v) * 1.6))),
+        shift: (1 - fall) * 0.10 * p.length,
+      };
+    };
+
+    //! A point on the roof surface. u runs along a section curve, v across
+    //! the building.
+    const surface = (u, v) => {
+      const s = sectionAt(v);
+      const [along, up] = spline(controls(s.lip, s.valleyAt, s.peakAt, s.peak, s.lipOut), u);
+      return [s.shift + along * p.length * s.span, v * p.width, up * p.height];
+    };
+
+    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+                             a[0] * b[1] - a[1] * b[0]];
+    const unit = a => {
+      const l = Math.hypot(a[0], a[1], a[2]);
+      return l < 1e-9 ? [0, 0, 1] : [a[0] / l, a[1] / l, a[2] / l];
+    };
+    const d = 8e-4;
+    const normalAt = (u, v) => unit(cross(
+      sub(surface(Math.min(1, u + d), v), surface(Math.max(0, u - d), v)),
+      sub(surface(u, Math.min(1, v + d)), surface(u, Math.max(0, v - d)))));
+
+    const glazed = Math.round(p.facade) === 0;
+    const shellEnd = glazed ? Math.min(0.995, p.facadeAt) : 1;
+    const sections = Math.max(3, Math.round(p.sections));
+    const stations = Math.max(8, Math.round(p.stations));
+    const half = p.thickness / 2;
+    const parts = [];
+
+    /* ---- the roof: one closed profile per section curve, lofted across ---- */
+    const profiles = [];
+    for (let j = 0; j <= sections; j++) {
+      const v = j / sections;
+      const outer = [], inner = [];
+      for (let i = 0; i <= stations; i++) {
+        const u = (i / stations) * shellEnd;
+        const point = surface(u, v);
+        const n = normalAt(u, v);
+        outer.push([point[0] + n[0] * half, point[1] + n[1] * half, point[2] + n[2] * half]);
+        inner.push([point[0] - n[0] * half, point[1] - n[1] * half, point[2] - n[2] * half]);
+      }
+      profiles.push(k.polyline(outer.concat(inner.reverse()), { closed: true }));
+    }
+    parts.push(k.loft(profiles, { solid: true, ruled: true }));
+
+    /* ---- the facade: a soft grid of mullions on the steep face ----
+       It is not a flat curtain wall. Every member follows the surface, so the
+       grid stretches and leans with it - which is what makes it read as one
+       of these buildings rather than a shopfront. */
+    if (glazed) {
+      const across = Math.max(2, Math.round(p.mullionsU));
+      const down = Math.max(2, Math.round(p.mullionsV));
+      const size = p.mullionSize;
+      const face = (a, b) => surface(lerp(shellEnd, 1, b), a);   // (v, t) on the glazing
+
+      for (let i = 0; i <= across; i++) {
+        const v = i / across;
+        for (let s = 0; s < down; s++)
+          parts.push(k.beam(face(v, s / down), face(v, (s + 1) / down), size, size));
+      }
+      for (let s = 0; s <= down; s++) {
+        const t = s / down;
+        for (let i = 0; i < across; i++)
+          parts.push(k.beam(face(i / across, t), face((i + 1) / across, t), size * 0.7, size * 0.7));
+      }
+    }
+
+    return k.compound(parts);
+  }
+})`;
+
 //! A second sample: the ribboned shell of a Heydar-Aliyev-like form. A
 //! lofted driver surface, taken in bands with a gap between each - and the
 //! driver surface itself never built, only the bands.
@@ -273,7 +439,7 @@ export const CATALOGUE = [
   { type: "Array", guid: "9a1b2c30-0021-4c00-9e00-caf000000021", category: "operation",
     summary: "Repeats a body in a grid or around an axis. One feature in the tree, "
            + "however many copies it makes.",
-    args: [ref("source", "Feature", ["Cube", "Sphere", "Fillet", "Array", "Script", "Ribbon"], true),
+    args: [ref("source", "Feature", ["Cube", "Sphere", "Fillet", "Array", "Script", "Ribbon", "Center"], true),
            choice("mode", "Pattern", ["Rectangular", "Polar"], 0),
            when(real("countX", "Count X", 3, 1, 40, 1, ""), "mode", 0),
            when(real("spacingX", "Spacing X", 120, -600, 600, 1), "mode", 0),
@@ -290,6 +456,11 @@ export const CATALOGUE = [
            + "a shape, so anything the kernel can build can become a feature. "
            + "This one starts as a spiral stair.",
     args: [code("code", "Code", SPIRAL_STAIR)] },
+  { type: "Center", guid: "9a1b2c30-0032-4c00-9e00-caf000000032", category: "body",
+    summary: "A written feature starting from the Heydar Aliyev Center: a roof lofted "
+           + "through section curves, and a soft grid of mullions on the glazed face "
+           + "behind the peak.",
+    args: [code("code", "Code", HEYDAR_CENTER)] },
   { type: "Ribbon", guid: "9a1b2c30-0031-4c00-9e00-caf000000031", category: "body",
     summary: "The same written feature, starting from a different sample: a lofted "
            + "shell taken in bands with a gap between each, after Heydar Aliyev. The "
@@ -297,7 +468,7 @@ export const CATALOGUE = [
     args: [code("code", "Code", HEYDAR)] },
   { type: "Fillet", guid: "9a1b2c30-0020-4c00-9e00-caf000000020", category: "operation",
     summary: "Rounds every edge of a body. The body stays in the tree but leaves the 3D view.",
-    args: [ref("body", "Body", ["Cube", "Sphere", "Fillet", "Array", "Script", "Ribbon"], true),
+    args: [ref("body", "Body", ["Cube", "Sphere", "Fillet", "Array", "Script", "Ribbon", "Center"], true),
            real("radius", "Radius", 10, 0.1, 200, 0.5)] },
 ];
 

@@ -714,6 +714,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
 
   // The same driver behind both: what differs is only the code it starts with.
   builders.Ribbon = builders.Script;
+  builders.Center = builders.Script;
 
   const drivers = new Map();
   for (const spec of CATALOGUE) {
