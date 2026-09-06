@@ -15,6 +15,140 @@
 //! The script a new Script feature starts with: a spiral stair, whose treads,
 //! risers, centre pole, stringer and handrail are separate solids driven by the
 //! parameters it declares. Edit it and the feature becomes something else.
+//! A second sample: the ribboned shell of a Heydar-Aliyev-like form. A
+//! lofted driver surface, taken in bands with a gap between each - and the
+//! driver surface itself never built, only the bands.
+export const HEYDAR = `({
+  params: [
+    { key: "length",     label: "Length",          def: 3600, min: 800, max: 9000, step: 100 },
+    { key: "width",      label: "Width",           def: 1500, min: 400, max: 4000, step: 50 },
+    { key: "height",     label: "Peak height",     def: 1000, min: 200, max: 3000, step: 25 },
+    { key: "bands",      label: "Bands",           def: 22,   min: 4,   max: 44,   step: 1, unit: "" },
+    { key: "solidRatio", label: "Band / gap",      def: 0.62, min: 0.15,max: 0.95, step: 0.01, unit: "" },
+    { key: "thickness",  label: "Band thickness",  def: 26,   min: 4,   max: 120,  step: 2 },
+    { key: "stations",   label: "Loft stations",   def: 26,   min: 8,   max: 60,   step: 1, unit: "" },
+    { key: "meander",    label: "Meander",         def: 240,  min: 0,   max: 1200, step: 20 },
+    { key: "crownShift", label: "Crown shift",     def: 0.16, min: -0.6,max: 0.6,  step: 0.02, unit: "" },
+  ],
+
+  build(p, k) {
+    /* ------------------------------------------------------------------
+       The driver surface is never built. It is a loft through CV curves,
+       and every band is a strip of it - so the strips are taken straight
+       off the definition instead of slicing a surface that would only be
+       thrown away.
+
+       S(u, v): u runs the length of the building, v runs across a section
+       from the ground on one side, over the crown, to the ground on the
+       other.
+       ------------------------------------------------------------------ */
+
+    // The section's control polygon, normalised: ground, up over the crown,
+    // and back down to ground. This is the CV curve the whole thing lofts from.
+    const SECTION = [
+      [-1.00, 0.00], [-0.86, 0.06], [-0.62, 0.30], [-0.34, 0.72],
+      [-0.04, 1.00], [ 0.30, 0.94], [ 0.60, 0.66], [ 0.82, 0.30],
+      [ 0.94, 0.09], [ 1.00, 0.00],
+    ];
+
+    // How the section grows and shrinks down the length: one dominant peak,
+    // a trough, then a second swell that runs out to the ground.
+    const HEIGHT = [0.06, 0.42, 0.86, 1.00, 0.83, 0.58, 0.72, 0.63, 0.34, 0.10, 0.02];
+    const WIDTH  = [0.30, 0.62, 0.88, 1.00, 0.97, 0.86, 0.92, 0.88, 0.70, 0.44, 0.26];
+    const DRIFT  = [-0.9, -0.62, -0.24, 0.04, 0.28, 0.42, 0.30, 0.06, -0.26, -0.62, -0.9];
+
+    //! Catmull-Rom through a list of numbers, clamped at the ends.
+    const alongList = (list, t) => {
+      const n = list.length - 1;
+      const x = Math.max(0, Math.min(1, t)) * n;
+      const i = Math.min(n - 1, Math.floor(x));
+      const f = x - i;
+      const at = j => list[Math.max(0, Math.min(n, j))];
+      const [p0, p1, p2, p3] = [at(i - 1), at(i), at(i + 1), at(i + 2)];
+      return 0.5 * ((2 * p1) + (-p0 + p2) * f
+        + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f * f
+        + (-p0 + 3 * p1 - 3 * p2 + p3) * f * f * f);
+    };
+
+    //! The same interpolation through the section's control points, which is
+    //! what turns ten CVs into a smooth curve.
+    const alongSection = t => {
+      const n = SECTION.length - 1;
+      const x = Math.max(0, Math.min(1, t)) * n;
+      const i = Math.min(n - 1, Math.floor(x));
+      const f = x - i;
+      const at = j => SECTION[Math.max(0, Math.min(n, j))];
+      const [p0, p1, p2, p3] = [at(i - 1), at(i), at(i + 1), at(i + 2)];
+      const term = c => 0.5 * ((2 * p1[c]) + (-p0[c] + p2[c]) * f
+        + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * f * f
+        + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * f * f * f);
+      return [term(0), term(1)];
+    };
+
+    const surface = (u, v) => {
+      const h = alongList(HEIGHT, u) * p.height;
+      const w = alongList(WIDTH, u) * p.width / 2;
+      const drift = alongList(DRIFT, u) * p.meander;
+      const [ny, nz] = alongSection(v);
+      // The crown leans along the length, which is what stops it reading as
+      // an extrusion.
+      const lean = p.crownShift * p.width * 0.5 * Math.sin(Math.PI * u) * nz;
+      return [u * p.length, drift + ny * w + lean, nz * h];
+    };
+
+    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1],
+                             a[2] * b[0] - a[0] * b[2],
+                             a[0] * b[1] - a[1] * b[0]];
+    const unit = a => {
+      const l = Math.hypot(a[0], a[1], a[2]);
+      return l < 1e-9 ? [0, 0, 1] : [a[0] / l, a[1] / l, a[2] / l];
+    };
+    const step = 1e-3;
+
+    //! The surface normal, from the two tangents. It is the direction the band
+    //! is given its thickness in.
+    const normalAt = (u, v) => {
+      const du = sub(surface(Math.min(1, u + step), v), surface(Math.max(0, u - step), v));
+      const dv = sub(surface(u, Math.min(1, v + step)), surface(u, Math.max(0, v - step)));
+      return unit(cross(du, dv));
+    };
+
+    const bands = Math.max(2, Math.round(p.bands));
+    const stations = Math.max(4, Math.round(p.stations));
+    const pitch = 1 / bands;
+    const solid = pitch * Math.max(0.05, Math.min(0.98, p.solidRatio));
+    const half = p.thickness / 2;
+
+    const ribbons = [];
+    for (let band = 0; band < bands; band++) {
+      const v0 = band * pitch;
+      const v1 = v0 + solid;
+
+      // One closed section per station: the strip's width across the surface,
+      // given thickness along the normal. Lofting these down the length is the
+      // band.
+      const profiles = [];
+      for (let s = 0; s <= stations; s++) {
+        const u = s / stations;
+        const a = surface(u, v0);
+        const b = surface(u, v1);
+        const n = normalAt(u, (v0 + v1) / 2);
+        const out = [n[0] * half, n[1] * half, n[2] * half];
+        profiles.push(k.polyline([
+          [a[0] + out[0], a[1] + out[1], a[2] + out[2]],
+          [b[0] + out[0], b[1] + out[1], b[2] + out[2]],
+          [b[0] - out[0], b[1] - out[1], b[2] - out[2]],
+          [a[0] - out[0], a[1] - out[1], a[2] - out[2]],
+        ], { closed: true }));
+      }
+      ribbons.push(k.loft(profiles, { solid: true, ruled: true }));
+    }
+
+    return k.compound(ribbons);
+  }
+})`;
+
 export const SPIRAL_STAIR = `({
   params: [
     { key: "steps",            label: "Steps",             def: 13,  min: 3,   max: 40,   step: 1, unit: "" },
@@ -131,7 +265,7 @@ export const CATALOGUE = [
   { type: "Array", guid: "9a1b2c30-0021-4c00-9e00-caf000000021", category: "operation",
     summary: "Repeats a body in a grid or around an axis. One feature in the tree, "
            + "however many copies it makes.",
-    args: [ref("source", "Feature", ["Cube", "Sphere", "Fillet", "Array", "Script"], true),
+    args: [ref("source", "Feature", ["Cube", "Sphere", "Fillet", "Array", "Script", "Ribbon"], true),
            choice("mode", "Pattern", ["Rectangular", "Polar"], 0),
            when(real("countX", "Count X", 3, 1, 40, 1, ""), "mode", 0),
            when(real("spacingX", "Spacing X", 120, -600, 600, 1), "mode", 0),
@@ -145,11 +279,17 @@ export const CATALOGUE = [
            when(real("angle", "Sweep", 360, -360, 360, 5, "°"), "mode", 1)] },
   { type: "Script", guid: "9a1b2c30-0030-4c00-9e00-caf000000030", category: "body",
     summary: "A feature you write. The code declares its own parameters and returns "
-           + "a shape, so anything the kernel can build can become a feature.",
+           + "a shape, so anything the kernel can build can become a feature. "
+           + "This one starts as a spiral stair.",
     args: [code("code", "Code", SPIRAL_STAIR)] },
+  { type: "Ribbon", guid: "9a1b2c30-0031-4c00-9e00-caf000000031", category: "body",
+    summary: "The same written feature, starting from a different sample: a lofted "
+           + "shell taken in bands with a gap between each, after Heydar Aliyev. The "
+           + "driver surface is never built - only the bands cut from it.",
+    args: [code("code", "Code", HEYDAR)] },
   { type: "Fillet", guid: "9a1b2c30-0020-4c00-9e00-caf000000020", category: "operation",
     summary: "Rounds every edge of a body. The body stays in the tree but leaves the 3D view.",
-    args: [ref("body", "Body", ["Cube", "Sphere", "Fillet", "Array", "Script"], true),
+    args: [ref("body", "Body", ["Cube", "Sphere", "Fillet", "Array", "Script", "Ribbon"], true),
            real("radius", "Radius", 10, 0.1, 200, 0.5)] },
 ];
 
