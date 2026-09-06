@@ -25,36 +25,42 @@ export const HEYDAR_CENTER = `({
     { key: "length",      label: "Length",           def: 4200, min: 1500, max: 12000, step: 100 },
     { key: "width",       label: "Width",            def: 2600, min: 800,  max: 8000,  step: 100 },
     { key: "height",      label: "Peak height",      def: 1450, min: 400,  max: 4000,  step: 25 },
-    { key: "lipHeight",   label: "Lip height",       def: 0.44, min: 0.15, max: 0.49,  step: 0.01, unit: "" },
-    { key: "valleyAt",    label: "Valley at",        def: 0.40, min: 0.15, max: 0.60,  step: 0.01, unit: "" },
-    { key: "peakAt",      label: "Peak at",          def: 0.86, min: 0.60, max: 0.95,  step: 0.01, unit: "" },
+    { key: "lipHeight",   label: "Lip height",       def: 0.40, min: 0.15, max: 0.49,  step: 0.01, unit: "" },
+    { key: "valleyAt",    label: "Valley at",        def: 0.43, min: 0.20, max: 0.60,  step: 0.01, unit: "" },
+    { key: "peakAt",      label: "Peak at",          def: 0.92, min: 0.70, max: 0.97,  step: 0.01, unit: "" },
+    { key: "soffit",      label: "Soffit height",    def: 0.17, min: 0.05, max: 0.45,  step: 0.01, unit: "" },
+    { key: "soffitBack",  label: "Soffit reach",     def: 0.74, min: 0.45, max: 0.95,  step: 0.01, unit: "" },
+    { key: "hookTail",    label: "Hook tail",        def: 0.20, min: 0.02, max: 0.40,  step: 0.01, unit: "" },
     { key: "lobes",       label: "Lobes",            def: 3,    min: 1,    max: 6,     step: 1, unit: "" },
     { key: "sections",    label: "Section curves",   def: 26,   min: 6,    max: 60,    step: 1, unit: "" },
-    { key: "stations",    label: "Points per curve", def: 46,   min: 16,   max: 90,    step: 2, unit: "" },
-    { key: "thickness",   label: "Shell thickness",  def: 40,   min: 8,    max: 200,   step: 2 },
+    { key: "stations",    label: "Points per curve", def: 56,   min: 20,   max: 110,   step: 2, unit: "" },
+    { key: "thickness",   label: "Shell thickness",  def: 34,   min: 6,    max: 160,   step: 2 },
     { key: "facade",      label: "Facade",           options: ["On", "Off"], def: 0 },
-    { key: "facadeAt",    label: "Glazing starts",   def: 0.90, min: 0.70, max: 0.99,  step: 0.01, unit: "" },
-    { key: "mullionsU",   label: "Mullions across",  def: 26,   min: 4,    max: 60,    step: 1, unit: "" },
-    { key: "mullionsV",   label: "Transoms",         def: 7,    min: 2,    max: 20,    step: 1, unit: "" },
-    { key: "mullionSize", label: "Mullion size",     def: 34,   min: 8,    max: 120,   step: 2 },
+    { key: "mullionsU",   label: "Mullions across",  def: 30,   min: 4,    max: 70,    step: 1, unit: "" },
+    { key: "mullionsV",   label: "Transoms",         def: 8,    min: 2,    max: 24,    step: 1, unit: "" },
+    { key: "mullionSize", label: "Mullion size",     def: 30,   min: 6,    max: 120,   step: 2 },
   ],
 
   build(p, k) {
     /* ------------------------------------------------------------------
-       The roof is a loft. Everything below is about where to put the
-       curves before lofting them, which is the whole job.
+       One curve drives the whole roof. Read left to right it is:
 
-       One section curve, drawn the way the sketch does it: from the plaza
-       up into the rolled lip - which sits LOWER than the mid-point - down
-       the long slope into a valley that touches the ground, then a rise
-       through a 45-degree tangent to the peak, and a steep drop behind it.
+         a hook - the skin runs out along the plaza, turns back on itself
+                  and curls over at a lip LOWER than the mid-point
+         a fall - the long slope down into a valley that touches the ground
+         a rise - through a 45-degree tangent, to the peak
+         a soffit - the steep drop behind the peak turns back under itself
+                  and runs in, leaving the entrance overhang
+
+       So the section is open at both ends and doubles back at both ends.
+       Everything else is that curve, changed across the width and lofted.
        ------------------------------------------------------------------ */
 
     const lerp = (a, b, t) => a + (b - a) * t;
     const smooth = t => t * t * (3 - 2 * t);
 
-    //! Catmull-Rom through a control polygon, parameterised by index so the
-    //! curve may double back on itself - which the lip and the back drop do.
+    //! Catmull-Rom through the control polygon, parameterised by index - the
+    //! curve turns back on itself at both ends, so it cannot be a function of x.
     const spline = (cps, t) => {
       const n = cps.length - 1;
       const x = Math.max(0, Math.min(1, t)) * n;
@@ -68,112 +74,122 @@ export const HEYDAR_CENTER = `({
       return [term(0), term(1)];
     };
 
-    //! The control polygon of one section, in fractions of length and height.
-    //! The three marked points of the sketch are the lip, the valley and the
-    //! peak; everything else follows from them.
-    const controls = (lip, valleyAt, peakAt, peak, lipOut) => {
-      const rise = peakAt - valleyAt;
+    const controls = s => {
+      const rise = s.peakAt - s.valleyAt;
+      const lip = s.lip;
+      const sof = s.soffit;
       return [
-        [0.000, 0.000],                       // meets the plaza
-        [-0.004 * lipOut, 0.14 * lip / 0.44], // the lip rolls back on itself
-        [0.028 * lipOut, lip * 0.86],
-        [0.085, lip],                         // the lip: lower than mid-point
-        [0.180, lip * 0.90],
-        [0.290, lip * 0.55],
-        [valleyAt - rise * 0.18, lip * 0.16],
-        [valleyAt, 0.012],                    // the valley, down on the ground
-        [valleyAt + rise * 0.30, peak * 0.22],
-        [valleyAt + rise * 0.52, peak * 0.52],// through the 45-degree tangent
-        [valleyAt + rise * 0.76, peak * 0.83],
-        [peakAt, peak],                       // the peak
-        [peakAt + (1 - peakAt) * 0.42, peak * 0.86],
-        [peakAt + (1 - peakAt) * 0.80, peak * 0.46],
-        [1.000, 0.030],                       // the steep drop behind it
+        [s.hookTail,            0.000],          // free edge, out on the plaza
+        [s.hookTail * 0.42,     0.006],
+        [0.032,                 0.034],
+        [0.000,                 0.115],          // the turn at the far left
+        [0.001,                 lip * 0.58],
+        [0.020,                 lip * 0.89],
+        [0.068,                 lip],            // the lip: lower than mid-point
+        [0.150,                 lip * 0.96],
+        [0.248,                 lip * 0.78],
+        [0.338,                 lip * 0.47],
+        [s.valleyAt - 0.045,    lip * 0.15],
+        [s.valleyAt,            0.000],          // the valley, on the ground
+        [s.valleyAt + rise*0.11, s.peak * 0.14],
+        [s.valleyAt + rise*0.26, s.peak * 0.38], // the 45-degree tangent
+        [s.valleyAt + rise*0.46, s.peak * 0.64],
+        [s.valleyAt + rise*0.70, s.peak * 0.86],
+        [s.valleyAt + rise*0.89, s.peak * 0.978],
+        [s.peakAt,              s.peak],         // the peak
+        [s.peakAt + (1-s.peakAt)*0.56, s.peak * 0.92],
+        [1.000,                 s.peak * 0.62],
+        [1.000,                 sof + (s.peak - sof) * 0.26],
+        [0.986,                 sof * 1.12],
+        [0.946,                 sof],            // turns back under itself
+        [s.soffitBack + 0.055,  sof * 0.99],
+        [s.soffitBack,          sof * 0.98],     // the free edge of the soffit
       ];
     };
 
-    /* How a section changes across the width. The main peak stands at the
-       front; behind it the roof settles into lobes, each lower and shifted
-       forward of the last, which is what gives the roofscape its ridges. */
+    /* How the section changes across the width: the main peak stands at the
+       front, and behind it the roof settles into lobes, each lower and drawn
+       further forward - which is the roofscape rather than an extrusion. */
     const lobes = Math.max(1, Math.round(p.lobes));
     const sectionAt = v => {
-      const fall = 1 - smooth(Math.min(1, v * 1.05));          // the overall settle
+      const fall = 1 - smooth(Math.min(1, v * 1.04));
       const ripple = 0.5 + 0.5 * Math.cos(v * Math.PI * 2 * lobes);
-      const peak = Math.max(0.10, lerp(0.16, 1.0, fall) * lerp(0.72, 1.0, ripple));
+      const peak = Math.max(0.12, lerp(0.17, 1.0, fall) * lerp(0.74, 1.0, ripple));
       return {
         peak,
-        lip: p.lipHeight * lerp(0.35, 1.0, fall),
-        valleyAt: lerp(p.valleyAt * 0.72, p.valleyAt, fall),
-        peakAt: lerp(p.peakAt - 0.22, p.peakAt, fall),
-        lipOut: lerp(0.2, 1.0, fall),
-        // The plan is not a rectangle: the ends draw back as the roof settles.
-        span: lerp(0.62, 1.0, smooth(Math.min(1, (1 - v) * 1.6))),
+        lip: p.lipHeight * lerp(0.34, 1.0, fall),
+        // The overhang cannot sit above the roof it hangs from.
+        soffit: Math.min(p.soffit, peak * 0.45),
+        soffitBack: lerp(0.90, p.soffitBack, fall),
+        hookTail: p.hookTail * lerp(0.25, 1.0, fall),
+        valleyAt: lerp(p.valleyAt * 0.74, p.valleyAt, fall),
+        peakAt: lerp(p.peakAt - 0.20, p.peakAt, fall),
+        span: lerp(0.64, 1.0, smooth(Math.min(1, (1 - v) * 1.55))),
         shift: (1 - fall) * 0.10 * p.length,
       };
     };
 
-    //! A point on the roof surface. u runs along a section curve, v across
-    //! the building.
     const surface = (u, v) => {
       const s = sectionAt(v);
-      const [along, up] = spline(controls(s.lip, s.valleyAt, s.peakAt, s.peak, s.lipOut), u);
+      const [along, up] = spline(controls(s), u);
       return [s.shift + along * p.length * s.span, v * p.width, up * p.height];
     };
 
     const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
-                             a[0] * b[1] - a[1] * b[0]];
+    const cross = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
     const unit = a => {
       const l = Math.hypot(a[0], a[1], a[2]);
-      return l < 1e-9 ? [0, 0, 1] : [a[0] / l, a[1] / l, a[2] / l];
+      return l < 1e-9 ? [0, 0, 1] : [a[0]/l, a[1]/l, a[2]/l];
     };
-    const d = 8e-4;
+    const d = 6e-4;
     const normalAt = (u, v) => unit(cross(
       sub(surface(Math.min(1, u + d), v), surface(Math.max(0, u - d), v)),
       sub(surface(u, Math.min(1, v + d)), surface(u, Math.max(0, v - d)))));
 
-    const glazed = Math.round(p.facade) === 0;
-    const shellEnd = glazed ? Math.min(0.995, p.facadeAt) : 1;
     const sections = Math.max(3, Math.round(p.sections));
-    const stations = Math.max(8, Math.round(p.stations));
+    const stations = Math.max(12, Math.round(p.stations));
     const half = p.thickness / 2;
     const parts = [];
 
-    /* ---- the roof: one closed profile per section curve, lofted across ---- */
+    /* ---- the roof: the section curve given thickness, lofted across ---- */
     const profiles = [];
     for (let j = 0; j <= sections; j++) {
       const v = j / sections;
       const outer = [], inner = [];
       for (let i = 0; i <= stations; i++) {
-        const u = (i / stations) * shellEnd;
+        const u = i / stations;
         const point = surface(u, v);
         const n = normalAt(u, v);
-        outer.push([point[0] + n[0] * half, point[1] + n[1] * half, point[2] + n[2] * half]);
-        inner.push([point[0] - n[0] * half, point[1] - n[1] * half, point[2] - n[2] * half]);
+        outer.push([point[0] + n[0]*half, point[1] + n[1]*half, point[2] + n[2]*half]);
+        inner.push([point[0] - n[0]*half, point[1] - n[1]*half, point[2] - n[2]*half]);
       }
       profiles.push(k.polyline(outer.concat(inner.reverse()), { closed: true }));
     }
     parts.push(k.loft(profiles, { solid: true, ruled: true }));
 
-    /* ---- the facade: a soft grid of mullions on the steep face ----
-       It is not a flat curtain wall. Every member follows the surface, so the
-       grid stretches and leans with it - which is what makes it read as one
-       of these buildings rather than a shopfront. */
-    if (glazed) {
+    /* ---- the facade: the glazed wall standing under the overhang ----
+       It hangs from the free edge of the soffit and meets the plaza, so its
+       plan follows the roof's edge and every mullion leans with it. */
+    if (Math.round(p.facade) === 0) {
       const across = Math.max(2, Math.round(p.mullionsU));
       const down = Math.max(2, Math.round(p.mullionsV));
       const size = p.mullionSize;
-      const face = (a, b) => surface(lerp(shellEnd, 1, b), a);   // (v, t) on the glazing
+      const head = v => surface(1, v);
+      const wall = (v, t) => {
+        const top = head(v);
+        return [top[0], top[1], lerp(top[2], 0, t)];
+      };
 
       for (let i = 0; i <= across; i++) {
         const v = i / across;
         for (let s = 0; s < down; s++)
-          parts.push(k.beam(face(v, s / down), face(v, (s + 1) / down), size, size));
+          parts.push(k.beam(wall(v, s / down), wall(v, (s + 1) / down), size, size));
       }
       for (let s = 0; s <= down; s++) {
         const t = s / down;
         for (let i = 0; i < across; i++)
-          parts.push(k.beam(face(i / across, t), face((i + 1) / across, t), size * 0.7, size * 0.7));
+          parts.push(k.beam(wall(i / across, t), wall((i + 1) / across, t),
+                            size * 0.7, size * 0.7));
       }
     }
 
