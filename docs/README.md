@@ -199,6 +199,48 @@ target's surfaces, and re-fits. An exact projected curve wants
 `BRepProj_Projection`, which this kernel does not carry either. The nearest
 point is exact at every sample, and the sample count is a parameter.
 
+## Samples
+
+The **Samples** button loads a worked example whole. It takes two clicks — the
+list, then the entry — because it replaces what is open, and the list says so.
+
+### Hillside town
+
+A landform with six villas terraced across it: pool decks, balustrades, glazed
+faces with mullions, hipped roofs. **47 nodes and not one script**, ~150 ms to
+build, and the whole document is 5.9 kB.
+
+The chain reads left to right in the graph:
+
+| | |
+|---|---|
+| **the hill** | `MeshGrid` → `MeshDisplace`, one formula in one node, → `Subdivide`. Its width, depth and height are `Number` features wired into those sliders, so the hill is a fixed surface whose size and height you drive from three places. |
+| **the plan** | a `Numbers` list — `-1450, 0, 1450` — into the `x` of a `Point`, with `y` a plain slider. Two of those are the two terrace rows. Flat, two-dimensional, and it never mentions z. |
+| **the projection** | `Drape` drops each plan point straight down onto the hill and hands back where it landed. That is the whole of "project the plan onto the mountain", in one wire. |
+| **the villa** | boxes for the deck and the glass, a `Boolean` for the pool, two `Polyline` rectangles `Loft`ed into a hipped roof, an `Array` of posts and another of mullions, all gathered by `Join`. Twenty-two nodes, built once. |
+| **the town** | `PlaceAt` puts that one villa at every draped site, turned by an angle from a second `Numbers` list. Retype `0, 16, -12` and three nodes rebuild, not forty-seven. |
+
+Individual control is the two typed lists: bay positions in plan, and a turn
+per villa. Everything else is a slider.
+
+## Four primitives, so a graph can compose
+
+Before these, a definition of any size fell back to a written feature — and a
+written feature takes no inputs, so it stops being part of the graph at all.
+These four are what a node editor needs to stand on its own:
+
+| | |
+|---|---|
+| `Numbers` | a list you type. Where `Series` gives an even run, this gives the ones you meant. |
+| `Join` | several shapes as one, compounded rather than fused — the group of a node editor. |
+| `Drape` | points dropped straight down onto a surface, a solid or a mesh. The highest hit wins, so a point over an overhang lands on top of it. |
+| `PlaceAt` | one shape at every point in a list, turned by an angle from another. The shape is built once and each copy is the same `TopoDS_Shape` under a different `TopLoc_Location` — the instancing `Array` uses, so the hundredth copy costs a matrix rather than a rebuild. |
+
+`Numbers` introduced a `text` argument kind: one line, a `TDataStd_AsciiString`
+like code, with a field rather than an editor. It shows on the node itself,
+because a list of numbers is short enough to read and change without opening
+anything.
+
 ## Polymesh
 
 A different kind of geometry from everything above. A B-Rep has a surface under
@@ -377,6 +419,7 @@ reproducible from `docs/src/`.
 | `src/graph.js` | the node editor — its own window, or a floating one |
 | `test/components.test.mjs` | the data half of the catalogue against a real kernel |
 | `test/mesh.test.mjs` | polymesh, subdivision, welding, filling, and the hand edits |
+| `test/samples.test.mjs` | the four composition primitives, and the worked example end to end |
 | `src/showroom.js` | the PlayCanvas stage: finishes, environments, procedural lighting |
 | `src/app.js` | tree, viewport, definition panel, regeneration log |
 | `build.py` | assembles the single file |
@@ -388,6 +431,7 @@ node docs/test/kernel.test.mjs
 node docs/test/mdl.test.mjs
 node docs/test/components.test.mjs
 node docs/test/mesh.test.mjs
+node docs/test/samples.test.mjs
 ```
 
 The first builds the model, edits it, checks that only the downstream functions

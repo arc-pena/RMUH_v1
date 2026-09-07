@@ -134,10 +134,12 @@ const GRAPH_CSS = `
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .g-seg button[aria-pressed="true"] { background: var(--g-accent); border-color: var(--g-accent); color: var(--g-accent-ink); }
-.g-pick {
-  width: 100%; height: 20px; padding: 0 4px; border: 1px solid var(--g-line);
+.g-pick, .g-line {
+  width: 100%; height: 20px; padding: 0 5px; border: 1px solid var(--g-line);
   border-radius: 4px; background: var(--g-node); font-size: 10.5px;
 }
+.g-line { font-family: var(--g-mono); font-size: 10px; }
+.g-line:focus { outline: none; border-color: var(--g-accent); }
 .g-pick:focus { outline: none; border-color: var(--g-accent); }
 .g-params { max-height: 216px; overflow-y: auto; margin: 0 -3px; padding: 0 3px; }
 .g-params::-webkit-scrollbar { width: 6px; }
@@ -795,6 +797,7 @@ export class GraphEditor {
     return tree.features.map(f =>
       f.id + ":" + f.type + ":" + Object.keys(f.values).join(",") +
       ":" + Object.entries(f.refs).map(([k, v]) => k + ">" + v).join(",") +
+      ":" + Object.keys(f.texts || {}).join(",") +
       ":" + Object.entries(f.lists || {}).map(([k, v]) =>
         k + "*" + (Array.isArray(v) ? v.join("+") : v)).join(",") +
       ":" + (f.params ? f.params.map(p => p.key).join(",") : "")).join("|");
@@ -859,7 +862,7 @@ export class GraphEditor {
       if (arg.kind === "code" || !this.applies(entry, arg)) continue;
       rows += arg.kind === "refs" ? (entry.lists[arg.key] || []).length + 1
             : arg.kind === "real" ? 2 : 1;
-      if (arg.kind === "edits") rows += 1;
+      if (arg.kind === "edits" || arg.kind === "text") rows += 1;
     }
     return rows + (entry.params ? Math.min(entry.params.length, 7) + 1 : 0)
          + (entry.code !== undefined ? 1 : 0) + (entry.data ? 2 : 0);
@@ -908,6 +911,7 @@ export class GraphEditor {
       if (arg.kind === "code" || !this.applies(entry, arg)) continue;
       if (arg.kind === "ref" || arg.kind === "refs")
         body.appendChild(this.refRow(entry, arg, ports));
+      else if (arg.kind === "text") body.appendChild(this.textRow(entry, arg));
       else if (arg.kind === "choice") body.appendChild(this.choiceRow(entry, arg));
       else body.appendChild(this.realRow(entry, arg, arg.key, entry.values[arg.key], ports));
     }
@@ -1088,6 +1092,31 @@ export class GraphEditor {
 
   //! One wire, or several in order. A multi-wire input draws a row per wire and
   //! one empty row under them, which is where the next one lands.
+  //! A line of text on the node itself - a list of numbers is short enough to
+  //! read and to change without opening anything.
+  textRow(entry, arg) {
+    const doc = this.doc;
+    const row = doc.createElement("div");
+    row.className = "g-row";
+    row.style.display = "block";
+    row.innerHTML = '<span class="g-lab" style="display:block;margin-bottom:2px">' +
+      gesc(arg.label) + "</span>";
+    const input = doc.createElement("input");
+    input.className = "g-line";
+    input.type = "text";
+    input.spellcheck = false;
+    input.dataset.textKey = arg.key;
+    input.value = (entry.texts && entry.texts[arg.key]) || "";
+    input.addEventListener("pointerdown", event => event.stopPropagation());
+    input.addEventListener("focus", () => { this.holding = input; });
+    input.addEventListener("blur", () => { if (this.holding === input) this.holding = null; });
+    input.addEventListener("change", () =>
+      this.mdl.run({ op: "code", id: entry.id, key: arg.key, text: input.value },
+                   { keepPanel: true }).catch(() => {}));
+    row.appendChild(input);
+    return row;
+  }
+
   refRow(entry, arg, ports) {
     const doc = this.doc;
     const many = arg.kind === "refs";
@@ -1160,6 +1189,10 @@ export class GraphEditor {
         const target = list ? list[Number(slot.split("#")[1])] : entry.refs[key];
         port.classList.toggle("wired", !!target);
         port.classList.toggle("slack", !target);
+      }
+      for (const input of node.el.querySelectorAll("[data-text-key]")) {
+        const value = (entry.texts && entry.texts[input.dataset.textKey]) || "";
+        if (input !== this.holding && input.value !== value) input.value = value;
       }
       for (const strip of node.el.querySelectorAll("[data-edits]")) {
         const moves = (entry.lists && entry.lists[strip.dataset.edits]) || {};

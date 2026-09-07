@@ -21,7 +21,8 @@
 // A feature that fails keeps its last good shape and records the message, so
 // one bad radius never takes the model, or the page, down with it.
 
-import { CATALOGUE, Doc, Driver, F, clampTo, dataLines, kernelMessage, meshFaces, schemaJson,
+import { CATALOGUE, Doc, Driver, F, clampTo, dataLines, kernelMessage, meshFaces,
+         parseNumbers, schemaJson,
          typeSpec } from "./ocaf.js";
 
 const CONFUSION = 1e-7;
@@ -2012,6 +2013,136 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     const size = [0, 1, 2].map(i => (Number.isFinite(hi[i] - lo[i]) ? hi[i] - lo[i] : 0));
     return quantity === 6 ? Math.hypot(...size) : size[quantity - 3];
   }
+
+  /* ================================================================ lists
+
+     The four primitives a graph needs before it can compose anything: a list
+     you type, a group, a projection onto terrain, and a way to put one shape
+     at many places. Without them a definition of any size falls back to a
+     written feature, and a written feature takes no inputs - so it stops being
+     part of the graph at all.
+     ================================================================== */
+
+  builders.Numbers = {
+    precondition: f => parseNumbers(F.text(f, "values", "")).length
+      ? null : "type some numbers, separated by commas or spaces",
+    build: f => {
+      const scale = F.real(f, "scale", 1);
+      return { data: numbers(parseNumbers(F.text(f, "values", "")).map(v => v * scale)) };
+    },
+  };
+
+  builders.Join = {
+    precondition: f => {
+      const parts = F.references(f, "parts");
+      if (!parts.length) return "nothing is wired in to join";
+      for (const part of parts)
+        if (!F.shape(part)) return F.name(part) + " has not been built";
+      return null;
+    },
+    //! A compound, not a fuse. The parts keep their own faces and nothing is
+    //! recomputed - which is what a group is for.
+    build: f => compoundOf(F.references(f, "parts").map(F.shape)),
+  };
+
+  //! Triangles to cast against, whether the target is a mesh or a solid. A
+  //! solid is tessellated once, here, at the resolution the viewer would use.
+  function targetTriangles(source, what) {
+    const data = F.data(source);
+    if (data && data.kind === "mesh")
+      return trianglesOf({ points: F.triples(data), faces: meshFaces(data) });
+    const shape = F.shape(source);
+    if (!shape) throw new Error(F.name(source) + " has not been built");
+    const stream = tessellate(shape, 0);
+    if (!stream.positions || !stream.index || !stream.index.length)
+      throw new Error("there is no surface on " + F.name(source) + " to land on");
+    const out = [];
+    const at = i => [stream.positions[i * 3], stream.positions[i * 3 + 1], stream.positions[i * 3 + 2]];
+    for (let i = 0; i + 2 < stream.index.length; i += 3)
+      out.push([at(stream.index[i]), at(stream.index[i + 1]), at(stream.index[i + 2])]);
+    return out;
+  }
+
+  builders.Drape = {
+    precondition: f => {
+      if (!F.reference(f, "points")) return "no points to drape";
+      if (!F.reference(f, "onto")) return "nothing to drape them onto";
+      return null;
+    },
+    //! Straight down, and the highest thing hit wins - so a point over an
+    //! overhang lands on the top of it, the way a building sits on a hill
+    //! rather than inside it.
+    build: f => {
+      const plan = pointsFrom(F.reference(f, "points"));
+      if (!plan.length) throw new Error("that input carries no points");
+      const triangles = targetTriangles(F.reference(f, "onto"), "target");
+      if (!triangles.length) throw new Error("the target has no surface to land on");
+
+      let high = -Infinity;
+      for (const [a, b, c] of triangles) high = Math.max(high, a[2], b[2], c[2]);
+      const start = high + 1;
+      const down = [0, 0, -1];
+      const lift = F.real(f, "lift", 0);
+      const keep = Feature_choice(f, "miss") === 1;
+
+      const landed = [];
+      let missed = 0;
+      for (const point of plan) {
+        const from = [point[0], point[1], start];
+        let best = null;
+        for (const triangle of triangles) {
+          const t = rayHitsTriangle(from, down, triangle);
+          if (t === null) continue;
+          const z = start - t;
+          if (best === null || z > best) best = z;
+        }
+        if (best === null) { missed++; if (keep) landed.push([point[0], point[1], point[2] + lift]); continue; }
+        landed.push([point[0], point[1], best + lift]);
+      }
+      if (!landed.length)
+        throw new Error("not one of those " + plan.length + " points is over the target");
+      if (missed && !keep && landed.length < plan.length)
+        F.setError(f, "");                       // a partial drape is still a drape
+      return { shape: compoundOf(landed.map(vertexAt)), data: points(landed) };
+    },
+  };
+
+  builders.PlaceAt = {
+    precondition: f => {
+      const shape = F.reference(f, "shape");
+      if (!shape) return "no shape to place";
+      if (!F.shape(shape)) return F.name(shape) + " has not been built";
+      const at = F.reference(f, "points");
+      if (!at) return "no points to place it at";
+      if (!pointsFrom(at).length) return F.name(at) + " carries no points";
+      return null;
+    },
+    //! One shape, many locations. Each copy is the same TopoDS_Shape with a
+    //! different TopLoc_Location on it - the instancing the Array feature uses,
+    //! so the cost of the hundredth copy is a matrix, not a rebuild.
+    build: f => {
+      const shape = F.shape(F.reference(f, "shape"));
+      const at = pointsFrom(F.reference(f, "points"));
+      const angles = F.reference(f, "angles");
+      const turns = angles ? (F.data(angles) || { values: [] }).values : [];
+      const base = F.real(f, "turn", 0);
+      const lift = F.real(f, "lift", 0);
+      if (at.length > 2000)
+        throw new Error(at.length + " places is more than this will build at once");
+
+      const api = shapeApi();
+      const copies = at.map((point, i) => {
+        // The angle list is read the way every other list is: the shortest
+        // repeats its last value, so one angle turns them all.
+        const turn = base + (turns.length ? turns[Math.min(i, turns.length - 1)] : 0);
+        const turned = Math.abs(turn) > 1e-9
+          ? api.rotate(shape, turn, { at: [0, 0, 0], axis: [0, 0, 1] })
+          : shape;
+        return api.move(turned, [point[0], point[1], point[2] + lift]);
+      });
+      return compoundOf(copies);
+    },
+  };
 
   /* --------------------------------------------------------- operations */
 

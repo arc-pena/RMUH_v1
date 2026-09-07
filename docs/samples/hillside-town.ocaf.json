@@ -35,36 +35,574 @@
         "normal": {
           "ref": "VZ"
         },
-        "size": 400
+        "size": 300
       }
     },
     {
-      "id": "SC1",
-      "type": "Script",
-      "name": "Hillside Town",
+      "id": "NW",
+      "type": "Number",
+      "name": "Site width",
       "args": {
-        "code": "({\n  params: [\n    /* ------------------------------------------------------------- the hill */\n    { key: \"siteX\",     label: \"Site width\",          def: 4200, min: 1500, max: 12000, step: 100 },\n    { key: \"siteY\",     label: \"Site depth\",          def: 3000, min: 1000, max: 9000,  step: 100 },\n    { key: \"peak\",      label: \"Hill height\",         def: 1150, min: 100,  max: 4000,  step: 25 },\n    { key: \"crest\",     label: \"Crest across\",        def: 0.55, min: 0,    max: 1,     step: 0.01, unit: \"\" },\n    { key: \"shoulder\",  label: \"Crest width\",         def: 0.46, min: 0.15, max: 1.2,   step: 0.01, unit: \"\" },\n    { key: \"fold\",      label: \"Side folds\",          def: 0.16, min: 0,    max: 0.6,   step: 0.01, unit: \"\" },\n    { key: \"sections\",  label: \"Terrain sections\",    def: 16,   min: 4,    max: 36,    step: 1, unit: \"\" },\n    { key: \"samples\",   label: \"Points per section\",  def: 26,   min: 6,    max: 60,    step: 2, unit: \"\" },\n    { key: \"ground\",    label: \"Ground\",              options: [\"On\", \"Off\"], def: 0 },\n\n    /* ------------------------------------------------------------- the plan */\n    { key: \"rows\",      label: \"Terrace rows\",        def: 2,    min: 1,    max: 3,     step: 1, unit: \"\" },\n    { key: \"bay\",       label: \"Bay spacing\",         def: 1150, min: 300,  max: 4000,  step: 25 },\n    { key: \"setback\",   label: \"Front set-back\",      def: 620,  min: 0,    max: 3000,  step: 20 },\n    { key: \"rowStep\",   label: \"Row set-back\",        def: 900,  min: 150,  max: 3000,  step: 20 },\n\n    /* ------------------------------------------------------------ the villa */\n    { key: \"villaX\",    label: \"Villa depth\",         def: 330,  min: 120,  max: 1200,  step: 10 },\n    { key: \"villaY\",    label: \"Villa width\",         def: 460,  min: 120,  max: 1600,  step: 10 },\n    { key: \"storey\",    label: \"Floor to floor\",      def: 165,  min: 80,   max: 400,   step: 5 },\n    { key: \"storeys\",   label: \"Storeys\",             def: 2,    min: 1,    max: 4,     step: 1, unit: \"\" },\n    { key: \"eaves\",     label: \"Slab overhang\",       def: 42,   min: 0,    max: 200,   step: 2 },\n    { key: \"roofRise\",  label: \"Roof rise\",           def: 95,   min: 0,    max: 400,   step: 5 },\n    { key: \"mullion\",   label: \"Mullion spacing\",     def: 62,   min: 20,   max: 400,   step: 2 },\n    { key: \"deck\",      label: \"Deck margin\",         def: 250,  min: 40,   max: 1200,  step: 10 },\n    { key: \"pool\",      label: \"Pool length\",         def: 0.62, min: 0,    max: 0.92,  step: 0.01, unit: \"\" },\n    { key: \"rail\",      label: \"Balustrade height\",   def: 56,   min: 20,   max: 160,   step: 1 },\n    { key: \"postBay\",   label: \"Post spacing\",        def: 78,   min: 25,   max: 400,   step: 2 },\n\n    /* --------------------------------------------------- each villa, by hand\n       Turn is added to the rule, so zero leaves the villa facing straight down\n       the slope. Push slides it along that same line in plan, and it climbs or\n       drops because the hill is asked again where it lands.                  */\n    { key: \"turn1\", label: \"Villa 1 · turn\", def:   0, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push1\", label: \"Villa 1 · push\", def:   0, min: -1500, max: 1500, step: 10 },\n    { key: \"turn2\", label: \"Villa 2 · turn\", def:  14, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push2\", label: \"Villa 2 · push\", def: 120, min: -1500, max: 1500, step: 10 },\n    { key: \"turn3\", label: \"Villa 3 · turn\", def: -12, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push3\", label: \"Villa 3 · push\", def:   0, min: -1500, max: 1500, step: 10 },\n    { key: \"turn4\", label: \"Villa 4 · turn\", def:  22, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push4\", label: \"Villa 4 · push\", def: -90, min: -1500, max: 1500, step: 10 },\n    { key: \"turn5\", label: \"Villa 5 · turn\", def:  -8, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push5\", label: \"Villa 5 · push\", def:   0, min: -1500, max: 1500, step: 10 },\n    { key: \"turn6\", label: \"Villa 6 · turn\", def:  18, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push6\", label: \"Villa 6 · push\", def: 150, min: -1500, max: 1500, step: 10 },\n  ],\n\n  build(p, k) {\n    /* ======================================================================\n       A hillside town, in four moves.\n\n         1  the hill      one function, z = H(x, y). Nothing else on this site\n                          holds a height; everything asks it.\n         2  the ground    that function lofted into a solid, section by section\n         3  the plan      six centre points drawn flat on the site, in 2D, with\n                          no idea that there is a hill at all\n         4  the town      each centre dropped onto the hill, turned to face\n                          downhill, and a villa put there\n\n       Which is how a hillside is actually laid out: you draw the plan on the\n       survey, and the survey tells you what happens to it.\n       ====================================================================== */\n\n    const VILLAS = 6;\n    const smooth = t => t * t * (3 - 2 * t);\n    const clamp = (t, lo, hi) => Math.max(lo, Math.min(hi, t));\n\n    /* ---------------------------------------------------------- 1 · the hill\n\n       x runs across the slope, y up it. The shore is at y = 0 and the ridge at\n       the back; a gaussian across x gives the crest its shoulder, and a cosine\n       folds the flanks into spurs and gullies.                              */\n\n    const hill = (x, y) => {\n      const u = clamp(x / p.siteX, 0, 1), v = clamp(y / p.siteY, 0, 1);\n      const rise = smooth(v);\n      const along = Math.exp(-Math.pow((u - p.crest) / p.shoulder, 2));\n      const folds = Math.cos(u * Math.PI * 4) * p.fold * v;\n      return p.peak * rise * (0.30 + 0.70 * along + folds);\n    };\n\n    //! Which way the water runs, in degrees. A villa faces this by default,\n    //! and a per-villa turn is added to it.\n    const aspect = (x, y) => {\n      const e = Math.max(1, p.siteX * 0.004);\n      const dx = hill(x + e, y) - hill(x - e, y);\n      const dy = hill(x, y + e) - hill(x, y - e);\n      if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return -90;\n      return Math.atan2(-dy, -dx) * 180 / Math.PI;\n    };\n\n    /* -------------------------------------------------------- 2 · the ground\n\n       One closed section per station up the slope: the ground line across the\n       site, then straight down and back, so the profile encloses something.\n       Lofted through, they are a solid with a landscape on top.             */\n\n    const parts = [];\n    const base = p.peak * 0.12 + 60;\n    const samples = Math.max(6, Math.round(p.samples));\n    const sections = Math.max(3, Math.round(p.sections));\n\n    if (p.ground === 0) {\n      const profiles = [];\n      for (let j = 0; j <= sections; j++) {\n        const y = p.siteY * j / sections;\n        const line = [];\n        for (let i = 0; i <= samples; i++) {\n          const x = p.siteX * i / samples;\n          line.push([x, y, hill(x, y)]);\n        }\n        line.push([p.siteX, y, -base], [0, y, -base]);\n        profiles.push(k.polyline(line, { closed: true }));\n      }\n      parts.push(k.loft(profiles, { solid: true, ruled: true }));\n    }\n\n    /* ---------------------------------------------------------- 3 · the plan\n\n       Flat. Two dimensions. The villas sit on terrace rows set back up the\n       slope, evenly spaced along each row, centred on the site. This is the\n       only place the layout is decided, and it never mentions z.            */\n\n    const rows = clamp(Math.round(p.rows), 1, 3);\n    const perRow = Math.ceil(VILLAS / rows);\n    const plan = i => {\n      const row = Math.floor(i / perRow), col = i % perRow;\n      const x = p.siteX / 2 + (col - (perRow - 1) / 2) * p.bay;\n      const y = p.setback + row * p.rowStep;\n      return [x, y];\n    };\n\n    /* --------------------------------------------------------- 4 · the villa\n\n       Built once, at the origin, facing +X. Six copies are placed by moving\n       and turning that one shape - the same trick the Array feature uses, and\n       the reason six villas cost about what one does.                       */\n\n    const deckX = p.villaX + 2 * p.deck;\n    const deckY = p.villaY + 2 * p.deck;\n    const box = (dx, dy, dz, at) =>\n      k.box(dx, dy, dz, { at, axis: [0, 0, 1], xdir: [1, 0, 0] });\n\n    const villa = (() => {\n      const bits = [];\n\n      // The terrace, on a plinth that reaches down into the hill whatever the\n      // slope does under it. The pool is cut out of the downhill margin.\n      const plinth = Math.max(260, p.peak * 0.6);\n      let terrace = box(deckX, deckY, plinth, [-deckX / 2, -deckY / 2, -plinth]);\n      if (p.pool > 0.03) {\n        const poolY = deckY * p.pool, poolX = p.deck * 0.6, poolD = Math.max(20, p.deck * 0.3);\n        terrace = k.cut(terrace, box(poolX, poolY, poolD * 3,\n          [p.villaX / 2 + (p.deck - poolX) / 2, -poolY / 2, -poolD]));\n      }\n      bits.push(terrace);\n\n      // Slabs and glass. The slab oversails on every side, the glass is set\n      // back behind its edge, and the mullions run up the view face.\n      const levels = clamp(Math.round(p.storeys), 1, 4);\n      const slab = Math.max(6, p.storey * 0.085);\n      const overX = p.villaX + 2 * p.eaves, overY = p.villaY + 2 * p.eaves;\n      const inset = slab * 0.6;\n      const glassX = p.villaX - 2 * inset, glassY = p.villaY - 2 * inset;\n      const bays = Math.max(1, Math.round(glassY / p.mullion));\n      const post = Math.max(3, p.rail * 0.085);\n\n      for (let i = 0; i <= levels; i++)\n        bits.push(box(overX, overY, slab, [-overX / 2, -overY / 2, i * p.storey]));\n\n      for (let i = 0; i < levels; i++) {\n        const z = i * p.storey + slab;\n        const h = p.storey - slab;\n        bits.push(box(glassX, glassY, h, [-glassX / 2, -glassY / 2, z]));\n        // Mullions up the view face and both flanks - the three sides that are\n        // glass. The back is where the hill is.\n        const rib = post * 1.3;\n        for (let m = 0; m <= bays; m++) {\n          const y = -glassY / 2 + glassY * m / bays;\n          bits.push(box(rib, rib, h, [glassX / 2 - post, y - rib / 2, z]));\n        }\n        const deep = Math.max(1, Math.round(glassX / p.mullion));\n        for (let m = 0; m <= deep; m++) {\n          const x = -glassX / 2 + glassX * m / deep;\n          bits.push(box(rib, rib, h, [x - rib / 2, glassY / 2 - post, z]));\n          bits.push(box(rib, rib, h, [x - rib / 2, -glassY / 2 + post - rib, z]));\n        }\n      }\n\n      // The roof: the eaves rectangle lofted up to a short ridge, so it hips\n      // in on all four sides. Rise to nothing and it is a flat roof instead.\n      const top = levels * p.storey + slab;\n      if (p.roofRise > 2) {\n        bits.push(k.loft([\n          k.rectangle(overX, overY, { at: [0, 0, top], axis: [0, 0, 1], xdir: [1, 0, 0] }),\n          k.rectangle(overX * 0.16, overY * 0.66,\n            { at: [0, 0, top + p.roofRise], axis: [0, 0, 1], xdir: [1, 0, 0] }),\n        ], { solid: true, ruled: true }));\n      } else {\n        bits.push(box(overX, overY, slab, [-overX / 2, -overY / 2, top]));\n      }\n\n      // Balustrade round three sides of the deck: the view, and both flanks.\n      // The uphill side is where you arrive, so it is left open.\n      const runs = [\n        [[deckX / 2 - post, -deckY / 2 + post], [deckX / 2 - post, deckY / 2 - post]],\n        [[-deckX / 2 + post, deckY / 2 - post], [deckX / 2 - post, deckY / 2 - post]],\n        [[-deckX / 2 + post, -deckY / 2 + post], [deckX / 2 - post, -deckY / 2 + post]],\n      ];\n      for (const [a, b] of runs) {\n        const span = Math.hypot(b[0] - a[0], b[1] - a[1]);\n        const n = Math.max(1, Math.round(span / p.postBay));\n        for (let i = 0; i <= n; i++) {\n          const t = i / n;\n          const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;\n          bits.push(box(post, post, p.rail, [x - post / 2, y - post / 2, 0]));\n        }\n        bits.push(k.beam([a[0], a[1], p.rail], [b[0], b[1], p.rail], post * 2.2, post * 1.1));\n      }\n\n      return k.compound(bits);\n    })();\n\n    /* ----------------------------------------------------------- the town\n\n       Each centre point, projected. The hill is asked for its height there and\n       for which way it falls; the villa is turned to face that, plus whatever\n       this one has been turned by hand; and push slides it along the same line\n       in plan, so a villa pushed downhill really does come down the hill.   */\n\n    for (let i = 0; i < VILLAS; i++) {\n      const [x0, y0] = plan(i);\n      const facing = aspect(x0, y0);\n      const rad = facing * Math.PI / 180;\n      const push = p[\"push\" + (i + 1)] || 0;\n      const x = clamp(x0 + Math.cos(rad) * push, deckX * 0.5, p.siteX - deckX * 0.5);\n      const y = clamp(y0 + Math.sin(rad) * push, deckY * 0.5, p.siteY - deckY * 0.5);\n      const turned = k.rotate(villa, facing + (p[\"turn\" + (i + 1)] || 0),\n                              { at: [0, 0, 0], axis: [0, 0, 1] });\n      parts.push(k.move(turned, [x, y, hill(x, y)]));\n    }\n\n    return k.compound(parts);\n  },\n})\n"
+        "value": 4200
       }
     },
     {
-      "id": "ME1",
+      "id": "ND",
+      "type": "Number",
+      "name": "Site depth",
+      "args": {
+        "value": 3200
+      }
+    },
+    {
+      "id": "NH",
+      "type": "Number",
+      "name": "Hill height",
+      "args": {
+        "value": 900
+      }
+    },
+    {
+      "id": "MG",
+      "type": "MeshGrid",
+      "name": "Terrain grid",
+      "args": {
+        "plane": {
+          "ref": "PL1"
+        },
+        "width": {
+          "value": 4200,
+          "from": "NW"
+        },
+        "depth": {
+          "value": 3200,
+          "from": "ND"
+        },
+        "cols": 16,
+        "rows": 14
+      }
+    },
+    {
+      "id": "MD",
+      "type": "MeshDisplace",
+      "name": "Landform",
+      "args": {
+        "mesh": {
+          "ref": "MG"
+        },
+        "along": "Z",
+        "amount": {
+          "value": 900,
+          "from": "NH"
+        },
+        "formula": "Math.exp(-((x / 1500) ** 2)) * (0.30 + 0.70 * (y + 1600) / 3200) + 0.10 * Math.cos(x / 430) * (y + 1600) / 3200"
+      }
+    },
+    {
+      "id": "SD",
+      "type": "Subdivide",
+      "name": "Hill",
+      "args": {
+        "mesh": {
+          "ref": "MD"
+        },
+        "on": "On",
+        "levels": 1,
+        "boundary": "Keep sharp",
+        "shading": "Smooth"
+      }
+    },
+    {
+      "id": "NB",
+      "type": "Numbers",
+      "name": "Bay positions",
+      "args": {
+        "values": "-1450, 0, 1450",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PR1",
+      "type": "Point",
+      "name": "Row 1 plan",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "NB"
+        },
+        "y": -830,
+        "z": 0
+      }
+    },
+    {
+      "id": "PR2",
+      "type": "Point",
+      "name": "Row 2 plan",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "NB"
+        },
+        "y": 320,
+        "z": 0
+      }
+    },
+    {
+      "id": "DR1",
+      "type": "Drape",
+      "name": "Row 1 sites",
+      "args": {
+        "points": {
+          "ref": "PR1"
+        },
+        "onto": {
+          "ref": "SD"
+        },
+        "lift": 0,
+        "miss": "Drop them"
+      }
+    },
+    {
+      "id": "DR2",
+      "type": "Drape",
+      "name": "Row 2 sites",
+      "args": {
+        "points": {
+          "ref": "PR2"
+        },
+        "onto": {
+          "ref": "SD"
+        },
+        "lift": 0,
+        "miss": "Drop them"
+      }
+    },
+    {
+      "id": "PD",
+      "type": "Point",
+      "name": "Deck corner",
+      "args": {
+        "x": -460,
+        "y": -380,
+        "z": -620
+      }
+    },
+    {
+      "id": "CD",
+      "type": "Cube",
+      "name": "Deck",
+      "args": {
+        "origin": {
+          "ref": "PD"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 920,
+        "dy": 760,
+        "dz": 620
+      }
+    },
+    {
+      "id": "PP",
+      "type": "Point",
+      "name": "Pool corner",
+      "args": {
+        "x": 200,
+        "y": -250,
+        "z": -95
+      }
+    },
+    {
+      "id": "CP",
+      "type": "Cube",
+      "name": "Pool void",
+      "args": {
+        "origin": {
+          "ref": "PP"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 230,
+        "dy": 520,
+        "dz": 130
+      }
+    },
+    {
+      "id": "BT",
+      "type": "Boolean",
+      "name": "Terrace",
+      "args": {
+        "a": {
+          "ref": "CD"
+        },
+        "b": {
+          "ref": "CP"
+        },
+        "op": "Difference"
+      }
+    },
+    {
+      "id": "PH",
+      "type": "Point",
+      "name": "House corner",
+      "args": {
+        "x": -170,
+        "y": -240,
+        "z": 0
+      }
+    },
+    {
+      "id": "CH",
+      "type": "Cube",
+      "name": "Glass box",
+      "args": {
+        "origin": {
+          "ref": "PH"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 340,
+        "dy": 480,
+        "dz": 330
+      }
+    },
+    {
+      "id": "NEX",
+      "type": "Numbers",
+      "name": "Eaves x",
+      "args": {
+        "values": "-230, 230, 230, -230",
+        "scale": 1
+      }
+    },
+    {
+      "id": "NEY",
+      "type": "Numbers",
+      "name": "Eaves y",
+      "args": {
+        "values": "-300, -300, 300, 300",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PE",
+      "type": "Point",
+      "name": "Eaves corners",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "NEX"
+        },
+        "y": {
+          "value": 0,
+          "from": "NEY"
+        },
+        "z": 330
+      }
+    },
+    {
+      "id": "WE",
+      "type": "Polyline",
+      "name": "Eaves",
+      "args": {
+        "points": {
+          "ref": "PE"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "NRX",
+      "type": "Numbers",
+      "name": "Ridge x",
+      "args": {
+        "values": "-45, 45, 45, -45",
+        "scale": 1
+      }
+    },
+    {
+      "id": "NRY",
+      "type": "Numbers",
+      "name": "Ridge y",
+      "args": {
+        "values": "-190, -190, 190, 190",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PRG",
+      "type": "Point",
+      "name": "Ridge corners",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "NRX"
+        },
+        "y": {
+          "value": 0,
+          "from": "NRY"
+        },
+        "z": 440
+      }
+    },
+    {
+      "id": "WR",
+      "type": "Polyline",
+      "name": "Ridge",
+      "args": {
+        "points": {
+          "ref": "PRG"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "LR",
+      "type": "Loft",
+      "name": "Roof",
+      "args": {
+        "sections": [
+          {
+            "ref": "WE"
+          },
+          {
+            "ref": "WR"
+          }
+        ],
+        "cap": "Solid",
+        "ruled": "Ruled"
+      }
+    },
+    {
+      "id": "PB",
+      "type": "Point",
+      "name": "Post corner",
+      "args": {
+        "x": 432,
+        "y": -372,
+        "z": 0
+      }
+    },
+    {
+      "id": "CB",
+      "type": "Cube",
+      "name": "Post",
+      "args": {
+        "origin": {
+          "ref": "PB"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 26,
+        "dy": 26,
+        "dz": 92
+      }
+    },
+    {
+      "id": "AB",
+      "type": "Array",
+      "name": "Posts",
+      "args": {
+        "source": {
+          "ref": "CB"
+        },
+        "mode": "Rectangular",
+        "countX": 1,
+        "spacingX": 100,
+        "countY": 9,
+        "spacingY": 93,
+        "countZ": 1,
+        "spacingZ": 100
+      }
+    },
+    {
+      "id": "PL2",
+      "type": "Point",
+      "name": "Rail corner",
+      "args": {
+        "x": 424,
+        "y": -378,
+        "z": 90
+      }
+    },
+    {
+      "id": "CR",
+      "type": "Cube",
+      "name": "Rail",
+      "args": {
+        "origin": {
+          "ref": "PL2"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 42,
+        "dy": 756,
+        "dz": 24
+      }
+    },
+    {
+      "id": "PM",
+      "type": "Point",
+      "name": "Mullion corner",
+      "args": {
+        "x": 164,
+        "y": -246,
+        "z": 8
+      }
+    },
+    {
+      "id": "CM",
+      "type": "Cube",
+      "name": "Mullion",
+      "args": {
+        "origin": {
+          "ref": "PM"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 14,
+        "dy": 14,
+        "dz": 316
+      }
+    },
+    {
+      "id": "AM",
+      "type": "Array",
+      "name": "Mullions",
+      "args": {
+        "source": {
+          "ref": "CM"
+        },
+        "mode": "Rectangular",
+        "countX": 1,
+        "spacingX": 100,
+        "countY": 8,
+        "spacingY": 68,
+        "countZ": 1,
+        "spacingZ": 100
+      }
+    },
+    {
+      "id": "JV",
+      "type": "Join",
+      "name": "Villa",
+      "args": {
+        "parts": [
+          {
+            "ref": "BT"
+          },
+          {
+            "ref": "CH"
+          },
+          {
+            "ref": "LR"
+          },
+          {
+            "ref": "AB"
+          },
+          {
+            "ref": "CR"
+          },
+          {
+            "ref": "AM"
+          }
+        ]
+      }
+    },
+    {
+      "id": "NT1",
+      "type": "Numbers",
+      "name": "Row 1 turns",
+      "args": {
+        "values": "0, 16, -12",
+        "scale": 1
+      }
+    },
+    {
+      "id": "NT2",
+      "type": "Numbers",
+      "name": "Row 2 turns",
+      "args": {
+        "values": "9, -20, 24",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PA1",
+      "type": "PlaceAt",
+      "name": "Row 1",
+      "args": {
+        "shape": {
+          "ref": "JV"
+        },
+        "points": {
+          "ref": "DR1"
+        },
+        "angles": {
+          "ref": "NT1"
+        },
+        "turn": 0,
+        "lift": 0
+      }
+    },
+    {
+      "id": "PA2",
+      "type": "PlaceAt",
+      "name": "Row 2",
+      "args": {
+        "shape": {
+          "ref": "JV"
+        },
+        "points": {
+          "ref": "DR2"
+        },
+        "angles": {
+          "ref": "NT2"
+        },
+        "turn": 0,
+        "lift": 0
+      }
+    },
+    {
+      "id": "JT",
+      "type": "Join",
+      "name": "The town",
+      "args": {
+        "parts": [
+          {
+            "ref": "PA1"
+          },
+          {
+            "ref": "PA2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "MS",
       "type": "Measure",
       "name": "Across the site",
       "args": {
         "shape": {
-          "ref": "SC1"
+          "ref": "SD"
         },
         "quantity": "Size X"
       }
     },
     {
-      "id": "EX1",
+      "id": "EX",
       "type": "Expression",
       "name": "In metres",
       "args": {
         "a": {
           "value": 1,
-          "from": "ME1"
+          "from": "MS"
         },
         "b": 1,
         "c": 0,
@@ -72,12 +610,12 @@
       }
     },
     {
-      "id": "PA1",
+      "id": "PN",
       "type": "Panel",
       "name": "Site width",
       "args": {
         "input": {
-          "ref": "EX1"
+          "ref": "EX"
         }
       }
     }
@@ -89,27 +627,187 @@
     ],
     "VZ": [
       30,
-      200
+      210
     ],
     "PL1": [
       330,
       30
     ],
-    "SC1": [
+    "NW": [
+      30,
+      400
+    ],
+    "ND": [
+      30,
+      560
+    ],
+    "NH": [
+      30,
+      720
+    ],
+    "MG": [
+      330,
+      400
+    ],
+    "MD": [
       640,
+      400
+    ],
+    "SD": [
+      950,
+      400
+    ],
+    "NB": [
+      330,
+      780
+    ],
+    "PR1": [
+      640,
+      780
+    ],
+    "PR2": [
+      640,
+      1010
+    ],
+    "DR1": [
+      950,
+      780
+    ],
+    "DR2": [
+      950,
+      1010
+    ],
+    "PD": [
+      1450,
       30
     ],
-    "ME1": [
-      960,
+    "CD": [
+      1750,
       30
     ],
-    "EX1": [
-      1250,
+    "PP": [
+      1450,
+      250
+    ],
+    "CP": [
+      1750,
+      250
+    ],
+    "BT": [
+      2070,
       30
+    ],
+    "PH": [
+      1450,
+      470
+    ],
+    "CH": [
+      1750,
+      470
+    ],
+    "NEX": [
+      1450,
+      690
+    ],
+    "NEY": [
+      1450,
+      850
+    ],
+    "PE": [
+      1750,
+      690
+    ],
+    "WE": [
+      2070,
+      690
+    ],
+    "NRX": [
+      1450,
+      1010
+    ],
+    "NRY": [
+      1450,
+      1170
+    ],
+    "PRG": [
+      1750,
+      1010
+    ],
+    "WR": [
+      2070,
+      1010
+    ],
+    "LR": [
+      2350,
+      690
+    ],
+    "PB": [
+      1450,
+      1330
+    ],
+    "CB": [
+      1750,
+      1330
+    ],
+    "AB": [
+      2070,
+      1330
+    ],
+    "PL2": [
+      1450,
+      1550
+    ],
+    "CR": [
+      1750,
+      1550
+    ],
+    "PM": [
+      1450,
+      1770
+    ],
+    "CM": [
+      1750,
+      1770
+    ],
+    "AM": [
+      2070,
+      1770
+    ],
+    "JV": [
+      2650,
+      30
+    ],
+    "NT1": [
+      2650,
+      780
+    ],
+    "NT2": [
+      2650,
+      940
     ],
     "PA1": [
-      1560,
-      30
+      2970,
+      780
+    ],
+    "PA2": [
+      2970,
+      1010
+    ],
+    "JT": [
+      3290,
+      780
+    ],
+    "MS": [
+      1250,
+      400
+    ],
+    "EX": [
+      1250,
+      560
+    ],
+    "PN": [
+      1250,
+      720
     ]
   }
 }

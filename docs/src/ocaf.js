@@ -10,6 +10,837 @@
 // build() that calls a real kernel - OpenCascade compiled to WebAssembly in the
 // browser, the same OpenCascade natively behind the HTTP kernel.
 
+/* --------------------------------------------------------------- samples
+
+   A whole document, ready to load. Not a feature and not a script: every one
+   of these is the catalogue wired to itself, which is the point of showing it.
+   ------------------------------------------------------------------------ */
+
+//! A hillside town. The hill is a grid displaced by a formula; the plan is
+//! three numbers typed into a list; Drape projects that plan onto the hill;
+//! one villa is built from boxes, a loft and an array, and PlaceAt puts it at
+//! every site, turned by its own angle. Forty-seven nodes and no script.
+export const HILLSIDE_TOWN = {
+  "format": "ocaf-parametric-model",
+  "version": 1,
+  "name": "Hillside Town",
+  "units": "mm",
+  "features": [
+    {
+      "id": "PT1",
+      "type": "Point",
+      "name": "Site origin",
+      "args": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      }
+    },
+    {
+      "id": "VZ",
+      "type": "Vector",
+      "name": "Up",
+      "args": {
+        "dx": 0,
+        "dy": 0,
+        "dz": 1
+      }
+    },
+    {
+      "id": "PL1",
+      "type": "Plane",
+      "name": "Site plane",
+      "args": {
+        "origin": {
+          "ref": "PT1"
+        },
+        "normal": {
+          "ref": "VZ"
+        },
+        "size": 300
+      }
+    },
+    {
+      "id": "NW",
+      "type": "Number",
+      "name": "Site width",
+      "args": {
+        "value": 4200
+      }
+    },
+    {
+      "id": "ND",
+      "type": "Number",
+      "name": "Site depth",
+      "args": {
+        "value": 3200
+      }
+    },
+    {
+      "id": "NH",
+      "type": "Number",
+      "name": "Hill height",
+      "args": {
+        "value": 900
+      }
+    },
+    {
+      "id": "MG",
+      "type": "MeshGrid",
+      "name": "Terrain grid",
+      "args": {
+        "plane": {
+          "ref": "PL1"
+        },
+        "width": {
+          "value": 4200,
+          "from": "NW"
+        },
+        "depth": {
+          "value": 3200,
+          "from": "ND"
+        },
+        "cols": 16,
+        "rows": 14
+      }
+    },
+    {
+      "id": "MD",
+      "type": "MeshDisplace",
+      "name": "Landform",
+      "args": {
+        "mesh": {
+          "ref": "MG"
+        },
+        "along": "Z",
+        "amount": {
+          "value": 900,
+          "from": "NH"
+        },
+        "formula": "Math.exp(-((x / 1500) ** 2)) * (0.30 + 0.70 * (y + 1600) / 3200) + 0.10 * Math.cos(x / 430) * (y + 1600) / 3200"
+      }
+    },
+    {
+      "id": "SD",
+      "type": "Subdivide",
+      "name": "Hill",
+      "args": {
+        "mesh": {
+          "ref": "MD"
+        },
+        "on": "On",
+        "levels": 1,
+        "boundary": "Keep sharp",
+        "shading": "Smooth"
+      }
+    },
+    {
+      "id": "NB",
+      "type": "Numbers",
+      "name": "Bay positions",
+      "args": {
+        "values": "-1450, 0, 1450",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PR1",
+      "type": "Point",
+      "name": "Row 1 plan",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "NB"
+        },
+        "y": -830,
+        "z": 0
+      }
+    },
+    {
+      "id": "PR2",
+      "type": "Point",
+      "name": "Row 2 plan",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "NB"
+        },
+        "y": 320,
+        "z": 0
+      }
+    },
+    {
+      "id": "DR1",
+      "type": "Drape",
+      "name": "Row 1 sites",
+      "args": {
+        "points": {
+          "ref": "PR1"
+        },
+        "onto": {
+          "ref": "SD"
+        },
+        "lift": 0,
+        "miss": "Drop them"
+      }
+    },
+    {
+      "id": "DR2",
+      "type": "Drape",
+      "name": "Row 2 sites",
+      "args": {
+        "points": {
+          "ref": "PR2"
+        },
+        "onto": {
+          "ref": "SD"
+        },
+        "lift": 0,
+        "miss": "Drop them"
+      }
+    },
+    {
+      "id": "PD",
+      "type": "Point",
+      "name": "Deck corner",
+      "args": {
+        "x": -460,
+        "y": -380,
+        "z": -620
+      }
+    },
+    {
+      "id": "CD",
+      "type": "Cube",
+      "name": "Deck",
+      "args": {
+        "origin": {
+          "ref": "PD"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 920,
+        "dy": 760,
+        "dz": 620
+      }
+    },
+    {
+      "id": "PP",
+      "type": "Point",
+      "name": "Pool corner",
+      "args": {
+        "x": 200,
+        "y": -250,
+        "z": -95
+      }
+    },
+    {
+      "id": "CP",
+      "type": "Cube",
+      "name": "Pool void",
+      "args": {
+        "origin": {
+          "ref": "PP"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 230,
+        "dy": 520,
+        "dz": 130
+      }
+    },
+    {
+      "id": "BT",
+      "type": "Boolean",
+      "name": "Terrace",
+      "args": {
+        "a": {
+          "ref": "CD"
+        },
+        "b": {
+          "ref": "CP"
+        },
+        "op": "Difference"
+      }
+    },
+    {
+      "id": "PH",
+      "type": "Point",
+      "name": "House corner",
+      "args": {
+        "x": -170,
+        "y": -240,
+        "z": 0
+      }
+    },
+    {
+      "id": "CH",
+      "type": "Cube",
+      "name": "Glass box",
+      "args": {
+        "origin": {
+          "ref": "PH"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 340,
+        "dy": 480,
+        "dz": 330
+      }
+    },
+    {
+      "id": "NEX",
+      "type": "Numbers",
+      "name": "Eaves x",
+      "args": {
+        "values": "-230, 230, 230, -230",
+        "scale": 1
+      }
+    },
+    {
+      "id": "NEY",
+      "type": "Numbers",
+      "name": "Eaves y",
+      "args": {
+        "values": "-300, -300, 300, 300",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PE",
+      "type": "Point",
+      "name": "Eaves corners",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "NEX"
+        },
+        "y": {
+          "value": 0,
+          "from": "NEY"
+        },
+        "z": 330
+      }
+    },
+    {
+      "id": "WE",
+      "type": "Polyline",
+      "name": "Eaves",
+      "args": {
+        "points": {
+          "ref": "PE"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "NRX",
+      "type": "Numbers",
+      "name": "Ridge x",
+      "args": {
+        "values": "-45, 45, 45, -45",
+        "scale": 1
+      }
+    },
+    {
+      "id": "NRY",
+      "type": "Numbers",
+      "name": "Ridge y",
+      "args": {
+        "values": "-190, -190, 190, 190",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PRG",
+      "type": "Point",
+      "name": "Ridge corners",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "NRX"
+        },
+        "y": {
+          "value": 0,
+          "from": "NRY"
+        },
+        "z": 440
+      }
+    },
+    {
+      "id": "WR",
+      "type": "Polyline",
+      "name": "Ridge",
+      "args": {
+        "points": {
+          "ref": "PRG"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "LR",
+      "type": "Loft",
+      "name": "Roof",
+      "args": {
+        "sections": [
+          {
+            "ref": "WE"
+          },
+          {
+            "ref": "WR"
+          }
+        ],
+        "cap": "Solid",
+        "ruled": "Ruled"
+      }
+    },
+    {
+      "id": "PB",
+      "type": "Point",
+      "name": "Post corner",
+      "args": {
+        "x": 432,
+        "y": -372,
+        "z": 0
+      }
+    },
+    {
+      "id": "CB",
+      "type": "Cube",
+      "name": "Post",
+      "args": {
+        "origin": {
+          "ref": "PB"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 26,
+        "dy": 26,
+        "dz": 92
+      }
+    },
+    {
+      "id": "AB",
+      "type": "Array",
+      "name": "Posts",
+      "args": {
+        "source": {
+          "ref": "CB"
+        },
+        "mode": "Rectangular",
+        "countX": 1,
+        "spacingX": 100,
+        "countY": 9,
+        "spacingY": 93,
+        "countZ": 1,
+        "spacingZ": 100
+      }
+    },
+    {
+      "id": "PL2",
+      "type": "Point",
+      "name": "Rail corner",
+      "args": {
+        "x": 424,
+        "y": -378,
+        "z": 90
+      }
+    },
+    {
+      "id": "CR",
+      "type": "Cube",
+      "name": "Rail",
+      "args": {
+        "origin": {
+          "ref": "PL2"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 42,
+        "dy": 756,
+        "dz": 24
+      }
+    },
+    {
+      "id": "PM",
+      "type": "Point",
+      "name": "Mullion corner",
+      "args": {
+        "x": 164,
+        "y": -246,
+        "z": 8
+      }
+    },
+    {
+      "id": "CM",
+      "type": "Cube",
+      "name": "Mullion",
+      "args": {
+        "origin": {
+          "ref": "PM"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 14,
+        "dy": 14,
+        "dz": 316
+      }
+    },
+    {
+      "id": "AM",
+      "type": "Array",
+      "name": "Mullions",
+      "args": {
+        "source": {
+          "ref": "CM"
+        },
+        "mode": "Rectangular",
+        "countX": 1,
+        "spacingX": 100,
+        "countY": 8,
+        "spacingY": 68,
+        "countZ": 1,
+        "spacingZ": 100
+      }
+    },
+    {
+      "id": "JV",
+      "type": "Join",
+      "name": "Villa",
+      "args": {
+        "parts": [
+          {
+            "ref": "BT"
+          },
+          {
+            "ref": "CH"
+          },
+          {
+            "ref": "LR"
+          },
+          {
+            "ref": "AB"
+          },
+          {
+            "ref": "CR"
+          },
+          {
+            "ref": "AM"
+          }
+        ]
+      }
+    },
+    {
+      "id": "NT1",
+      "type": "Numbers",
+      "name": "Row 1 turns",
+      "args": {
+        "values": "0, 16, -12",
+        "scale": 1
+      }
+    },
+    {
+      "id": "NT2",
+      "type": "Numbers",
+      "name": "Row 2 turns",
+      "args": {
+        "values": "9, -20, 24",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PA1",
+      "type": "PlaceAt",
+      "name": "Row 1",
+      "args": {
+        "shape": {
+          "ref": "JV"
+        },
+        "points": {
+          "ref": "DR1"
+        },
+        "angles": {
+          "ref": "NT1"
+        },
+        "turn": 0,
+        "lift": 0
+      }
+    },
+    {
+      "id": "PA2",
+      "type": "PlaceAt",
+      "name": "Row 2",
+      "args": {
+        "shape": {
+          "ref": "JV"
+        },
+        "points": {
+          "ref": "DR2"
+        },
+        "angles": {
+          "ref": "NT2"
+        },
+        "turn": 0,
+        "lift": 0
+      }
+    },
+    {
+      "id": "JT",
+      "type": "Join",
+      "name": "The town",
+      "args": {
+        "parts": [
+          {
+            "ref": "PA1"
+          },
+          {
+            "ref": "PA2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "MS",
+      "type": "Measure",
+      "name": "Across the site",
+      "args": {
+        "shape": {
+          "ref": "SD"
+        },
+        "quantity": "Size X"
+      }
+    },
+    {
+      "id": "EX",
+      "type": "Expression",
+      "name": "In metres",
+      "args": {
+        "a": {
+          "value": 1,
+          "from": "MS"
+        },
+        "b": 1,
+        "c": 0,
+        "formula": "a / 100"
+      }
+    },
+    {
+      "id": "PN",
+      "type": "Panel",
+      "name": "Site width",
+      "args": {
+        "input": {
+          "ref": "EX"
+        }
+      }
+    }
+  ],
+  "layout": {
+    "PT1": [
+      30,
+      30
+    ],
+    "VZ": [
+      30,
+      210
+    ],
+    "PL1": [
+      330,
+      30
+    ],
+    "NW": [
+      30,
+      400
+    ],
+    "ND": [
+      30,
+      560
+    ],
+    "NH": [
+      30,
+      720
+    ],
+    "MG": [
+      330,
+      400
+    ],
+    "MD": [
+      640,
+      400
+    ],
+    "SD": [
+      950,
+      400
+    ],
+    "NB": [
+      330,
+      780
+    ],
+    "PR1": [
+      640,
+      780
+    ],
+    "PR2": [
+      640,
+      1010
+    ],
+    "DR1": [
+      950,
+      780
+    ],
+    "DR2": [
+      950,
+      1010
+    ],
+    "PD": [
+      1450,
+      30
+    ],
+    "CD": [
+      1750,
+      30
+    ],
+    "PP": [
+      1450,
+      250
+    ],
+    "CP": [
+      1750,
+      250
+    ],
+    "BT": [
+      2070,
+      30
+    ],
+    "PH": [
+      1450,
+      470
+    ],
+    "CH": [
+      1750,
+      470
+    ],
+    "NEX": [
+      1450,
+      690
+    ],
+    "NEY": [
+      1450,
+      850
+    ],
+    "PE": [
+      1750,
+      690
+    ],
+    "WE": [
+      2070,
+      690
+    ],
+    "NRX": [
+      1450,
+      1010
+    ],
+    "NRY": [
+      1450,
+      1170
+    ],
+    "PRG": [
+      1750,
+      1010
+    ],
+    "WR": [
+      2070,
+      1010
+    ],
+    "LR": [
+      2350,
+      690
+    ],
+    "PB": [
+      1450,
+      1330
+    ],
+    "CB": [
+      1750,
+      1330
+    ],
+    "AB": [
+      2070,
+      1330
+    ],
+    "PL2": [
+      1450,
+      1550
+    ],
+    "CR": [
+      1750,
+      1550
+    ],
+    "PM": [
+      1450,
+      1770
+    ],
+    "CM": [
+      1750,
+      1770
+    ],
+    "AM": [
+      2070,
+      1770
+    ],
+    "JV": [
+      2650,
+      30
+    ],
+    "NT1": [
+      2650,
+      780
+    ],
+    "NT2": [
+      2650,
+      940
+    ],
+    "PA1": [
+      2970,
+      780
+    ],
+    "PA2": [
+      2970,
+      1010
+    ],
+    "JT": [
+      3290,
+      780
+    ],
+    "MS": [
+      1250,
+      400
+    ],
+    "EX": [
+      1250,
+      560
+    ],
+    "PN": [
+      1250,
+      720
+    ]
+  }
+};
+
+export const SAMPLES = [
+  { key: "hillside-town", name: "Hillside town",
+    summary: "A landform, six villas terraced across it, and the plan projected onto "
+           + "the hill. 47 nodes, no script.",
+    model: HILLSIDE_TOWN },
+];
+
 /* ------------------------------------------------------------- catalogue */
 
 //! The script a new Script feature starts with: a spiral stair, whose treads,
@@ -439,6 +1270,9 @@ export const KINDS = ["number", "point", "vector", "curve", "plane", "solid", "m
 const ANY = KINDS.slice();
 //! Source the user edits, held as a TDataStd_AsciiString.
 const code = (key, label, def) => ({ key, label, kind: "code", def });
+//! One line of text the user types, held as a TDataStd_AsciiString. Same
+//! storage as code, a different control: a field rather than an editor.
+const text = (key, label, def, hint = "") => ({ key, label, kind: "text", def, hint });
 //! A fixed set of alternatives, held as a TDataStd_Integer index.
 const choice = (key, label, options, def = 0) =>
   ({ key, label, kind: "choice", options, def });
@@ -511,6 +1345,12 @@ export const CATALOGUE = [
            real("b", "B", 1, -10000, 10000, 0.1, ""),
            real("c", "C", 0, -10000, 10000, 0.1, ""),
            code("formula", "Formula", "a * Math.sin(b * i / n) + c")] },
+  { type: "Numbers", guid: "9a1b2c30-0046-4c00-9e00-caf000000046", category: "data",
+    produces: "number",
+    summary: "A list of numbers, typed. Where a Series gives an even run, this gives the "
+           + "ones you actually meant - the turn of each villa, the corners of a rectangle.",
+    args: [text("values", "Values", "0, 10, 20", "separated by commas or spaces"),
+           real("scale", "Scale", 1, -1000, 1000, 0.01, "")] },
   { type: "Panel", guid: "9a1b2c30-0045-4c00-9e00-caf000000045", category: "data",
     produces: "text",
     summary: "Shows what is wired into it, as text, in the node and in the definition "
@@ -557,6 +1397,14 @@ export const CATALOGUE = [
     args: [ref("surface", "Surface", ["plane", "solid"]),
            real("u", "U", 0.5, 0, 1, 0.001, ""), real("v", "V", 0.5, 0, 1, 0.001, ""),
            real("normal", "Normal length", 40, 0, 1000, 1)] },
+  { type: "Drape", guid: "9a1b2c30-0064-4c00-9e00-caf000000064", category: "analysis",
+    produces: "point",
+    summary: "Drops points straight down onto a surface, a solid or a mesh, and hands "
+           + "back where they landed. The move that turns a flat plan into a site plan.",
+    args: [ref("points", "Points", ["point"]),
+           ref("onto", "Onto", ["solid", "plane", "mesh"]),
+           real("lift", "Lift", 0, -2000, 2000, 1),
+           choice("miss", "Points that miss", ["Drop them", "Leave them"], 0)] },
   { type: "Measure", guid: "9a1b2c30-0063-4c00-9e00-caf000000063", category: "analysis",
     produces: "number",
     summary: "A number taken off a shape - its length, its area, its volume, or the "
@@ -717,6 +1565,21 @@ export const CATALOGUE = [
     args: [ref("curve", "Curve", ["curve"]), ref("onto", "Onto", ["plane", "solid"]),
            real("samples", "Samples", 40, 4, 400, 1, ""),
            choice("fit", "Result", ["Smooth", "Segments"], 0)] },
+  { type: "Join", guid: "9a1b2c30-0074-4c00-9e00-caf000000074", category: "operation",
+    produces: "solid",
+    summary: "Gathers several shapes into one without cutting or fusing them - the group "
+           + "of a node editor. What goes downstream as a single thing.",
+    args: [refs("parts", "Parts", ["solid", "curve"], true)] },
+  { type: "PlaceAt", guid: "9a1b2c30-0076-4c00-9e00-caf000000076", category: "operation",
+    produces: "solid",
+    summary: "Puts one shape at every point in a list, turned by an angle taken from "
+           + "another. The shape is built once and the copies are the same shape at a "
+           + "different axis system, which is why a hundred cost about what one does.",
+    args: [ref("shape", "Shape", ["solid", "curve"], true),
+           ref("points", "Points", ["point"]),
+           ref("angles", "Turn each", ["number"]),
+           real("turn", "Turn all", 0, -360, 360, 1, "°"),
+           real("lift", "Lift", 0, -4000, 4000, 1)] },
   { type: "Array", guid: "9a1b2c30-0021-4c00-9e00-caf000000021", category: "operation",
     produces: "solid",
     summary: "Repeats a body in a grid or around an axis. One feature in the tree, "
@@ -871,7 +1734,10 @@ export const F = {
     return label && typeof label.attr.TDataStd_AsciiString === "string"
       ? label.attr.TDataStd_AsciiString : fallback;
   },
-  setCode(f, key, text) { F.argLabel(f, key, true).attr.TDataStd_AsciiString = text; },
+  setCode(f, key, value) { F.argLabel(f, key, true).attr.TDataStd_AsciiString = value; },
+  //! Text and code sit on the same attribute; only the control differs.
+  text(f, key, fallback = "") { return F.code(f, key, fallback); },
+  setText(f, key, value) { F.setCode(f, key, value); },
 
   //! Vertices someone moved by hand: an object of index → [dx, dy, dz], held
   //! as text on the argument's label so it travels in the file and can be read
@@ -1267,8 +2133,11 @@ export class Doc {
   //! solver re-runs this feature and everything downstream of it.
   setCode(f, key, text) {
     const spec = F.spec(f);
-    const arg = spec && spec.args.find(a => a.key === key && a.kind === "code");
-    if (!arg) throw new Error(F.name(f) + " has no code to edit");
+    // Text and code share the attribute and the edit; a one-line field and a
+    // full editor are two controls over one string.
+    const arg = spec && spec.args.find(a => a.key === key &&
+      (a.kind === "code" || a.kind === "text"));
+    if (!arg) throw new Error(F.name(f) + " has no text to edit at '" + key + "'");
     if (typeof text !== "string") throw new Error("the code must be text");
     F.setCode(f, key, text);
     this.log.touch(F.argLabel(f, key));
@@ -1414,7 +2283,7 @@ export class Doc {
       format: "ocaf-tree", version: 1, name: this.title, units: this.units,
       features: this.features().map(f => {
         const spec = F.spec(f);
-        const values = {}, refs = {}, labels = {}, driven = {}, lists = {};
+        const values = {}, refs = {}, labels = {}, driven = {}, lists = {}, texts = {};
         for (const arg of spec.args) {
           const label = F.argLabel(f, arg.key, true);
           labels[arg.key] = label.entry;
@@ -1431,6 +2300,7 @@ export class Doc {
           }
           else if (arg.kind === "choice") values[arg.key] = F.choice(f, arg.key, arg.def);
           else if (arg.kind === "code") { /* published separately, below */ }
+          else if (arg.kind === "text") texts[arg.key] = F.text(f, arg.key, arg.def);
           else if (arg.kind === "edits") lists[arg.key] = F.edits(f, arg.key);
           else if (arg.kind === "refs") lists[arg.key] = F.references(f, arg.key).map(F.id);
           else {
@@ -1442,7 +2312,8 @@ export class Doc {
         const entry = {
           id: F.id(f), name: F.name(f), type: spec.type, category: spec.category,
           produces: spec.produces, entry: f.entry, visible: F.visible(f),
-          revision: F.revision(f), built: !!F.shape(f), values, refs, labels, driven, lists,
+          revision: F.revision(f), built: !!F.shape(f), values, refs, labels, driven,
+          lists, texts,
         };
         // What it computed, summarised: enough for a node to show it and for a
         // Panel to print it, without moving a thousand numbers per redraw.
@@ -1498,6 +2369,7 @@ export class Doc {
             const moves = F.edits(f, arg.key);
             if (Object.keys(moves).length) args[arg.key] = moves;
           }
+          else if (arg.kind === "text") args[arg.key] = F.text(f, arg.key, arg.def);
           else if (arg.kind === "refs") args[arg.key] = F.references(f, arg.key).map(t => ({ ref: F.id(t) }));
           else if (arg.kind === "choice") args[arg.key] = arg.options[F.choice(f, arg.key, arg.def)];
           else if (arg.kind === "code") {
@@ -1541,7 +2413,7 @@ export class Doc {
         }
         const arg = spec.args.find(a => a.key === key);
         if (!arg) throw new Error(spec.type + ' has no argument "' + key + '"');
-        if (arg.kind === "code") {
+        if (arg.kind === "code" || arg.kind === "text") {
           if (typeof value !== "string") throw new Error(key + " of " + entry.id + " must be text");
           F.setCode(f, key, value);
           continue;
@@ -1592,6 +2464,18 @@ export function acceptsFrom(accepts, entry) {
   if (!entry) return false;
   const list = Array.isArray(accepts) ? accepts : String(accepts || "").split(",");
   return list.includes(entry.produces) || list.includes(entry.type);
+}
+
+//! Numbers out of a line someone typed. Commas, spaces or newlines between
+//! them; anything that is not a number is skipped rather than failing the whole
+//! list, because half a list is more use than an error while you are typing.
+export function parseNumbers(source) {
+  return String(source || "").split(/[\s,;]+/)
+    // An empty part is not a zero: splitting " " gives two of them, and a list
+    // of nothing has to read as a list of nothing.
+    .filter(part => part.length)
+    .map(part => Number(part))
+    .filter(Number.isFinite);
 }
 
 export const round = v => Math.round(v * 1e6) / 1e6;
@@ -1681,6 +2565,8 @@ export function schemaJson() {
           return { ...base, default: arg.def };
         if (arg.kind === "edits")
           return { ...base, default: arg.def, summary: arg.summary || "" };
+        if (arg.kind === "text")
+          return { ...base, default: arg.def, hint: arg.hint || "" };
         return { ...base, accepts: arg.accepts.join(","), consumes: arg.consumes };
       }),
     })),

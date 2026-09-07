@@ -2,7 +2,7 @@ import { createWasmKernel } from "./wasm-kernel.js";
 import { createHttpKernel } from "./http-kernel.js";
 import { ENVIRONMENTS, FINISHES, Showroom, findFinish } from "./showroom.js";
 import { Mdl } from "./mdl.js";
-import { acceptsFrom, dataLines } from "./ocaf.js";
+import { acceptsFrom, dataLines, SAMPLES } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
 
 "use strict";
@@ -640,6 +640,26 @@ const ICONS = {
   Boolean: '<circle cx="6" cy="8" r="4.4" fill="none" stroke="currentColor" stroke-width="1.25"/>'
          + '<circle cx="10" cy="8" r="4.4" fill="none" stroke="currentColor" stroke-width="1.25"/>'
          + '<path d="M8 4.1a4.4 4.4 0 000 7.8 4.4 4.4 0 000-7.8z" fill="currentColor" opacity=".35"/>',
+  /* ------------------------------------------------------- the primitives
+     a graph needs before it can compose anything on its own */
+  Numbers: '<path d="M1.8 3.4h12.4M1.8 8h12.4M1.8 12.6h12.4" stroke="currentColor" stroke-width="1" opacity=".3"/>'
+         + '<path d="M3 2.2v2.4M6.4 2.2v2.4M9.8 2.2v2.4M13.2 2.2v2.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+         + '<path d="M3 6.8v2.4M6.4 6.8v2.4M9.8 6.8v2.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+         + '<path d="M3 11.4v2.4M6.4 11.4v2.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>',
+  Join: '<rect x="1.4" y="2.4" width="5.4" height="5.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.15"/>'
+      + '<rect x="9.2" y="2.4" width="5.4" height="5.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.15"/>'
+      + '<rect x="5.3" y="8.4" width="5.4" height="5.4" rx="1" fill="currentColor" opacity=".25"/>'
+      + '<rect x="5.3" y="8.4" width="5.4" height="5.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.15"/>'
+      + '<path d="M4.1 7.8v.8h7.8v-.8" fill="none" stroke="currentColor" stroke-width="1"/>',
+  Drape: '<path d="M1.6 12.4c2.6 0 3.2-5.2 6.4-5.2s3.8 5.2 6.4 5.2" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+       + '<circle cx="4" cy="2.4" r="1.15" fill="currentColor"/><circle cx="8" cy="2.4" r="1.15" fill="currentColor"/><circle cx="12" cy="2.4" r="1.15" fill="currentColor"/>'
+       + '<path d="M4 4.2v3.9M8 4.2v2M12 4.2v3.9" stroke="currentColor" stroke-width="1" stroke-dasharray="1.5 1.5"/>'
+       + '<path d="M2.9 8.9L4 10l1.1-1.1M6.9 7L8 8.1 9.1 7M10.9 8.9L12 10l1.1-1.1" fill="none" stroke="currentColor" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round"/>',
+  PlaceAt: '<path d="M2.2 12.6c2.4 0 3-3.4 5.8-3.4s3.4 3.4 5.8 3.4" fill="none" stroke="currentColor" stroke-width="1.1" opacity=".45"/>'
+         + '<rect x="1.2" y="7.2" width="3.4" height="3.4" rx=".6" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+         + '<rect x="6.3" y="4.6" width="3.4" height="3.4" rx=".6" fill="none" stroke="currentColor" stroke-width="1.2" transform="rotate(16 8 6.3)"/>'
+         + '<rect x="11.4" y="7.2" width="3.4" height="3.4" rx=".6" fill="none" stroke="currentColor" stroke-width="1.2" transform="rotate(-14 13.1 8.9)"/>',
+
   /* --------------------------------------------------------------- mesh */
   MeshBox: '<path d="M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/>'
          + '<path d="M2.4 4.6L8 7.6l5.6-3M8 7.6v6.8M8 1.6v0" stroke="currentColor" stroke-width="1"/>'
@@ -879,6 +899,7 @@ function buildPanel() {
     host.appendChild(arg.kind === "real" ? realField(entry, arg)
                    : arg.kind === "choice" ? choiceField(entry, arg)
                    : arg.kind === "edits" ? editsField(entry, arg)
+                   : arg.kind === "text" ? textField(entry, arg)
                    : refField(entry, arg));
   }
 
@@ -1000,6 +1021,33 @@ function choiceField(entry, arg) {
   const path = document.createElement("div");
   path.className = "attr-path";
   path.innerHTML = (entry.labels[arg.key] || entry.entry) + " · <b>TDataStd_Integer</b>";
+  field.appendChild(path);
+  return field;
+}
+
+//! One line of text: a list of numbers, typed. Applied when you leave the
+//! field, because a half-typed list is not a list.
+function textField(entry, arg) {
+  const field = document.createElement("div");
+  field.className = "field";
+  const value = (entry.texts && entry.texts[arg.key]) || "";
+  field.innerHTML = '<div class="field-head"><label for="t-' + arg.key + '">' +
+    escapeHtml(arg.label) + "</label>" +
+    (arg.hint ? '<span class="kind">' + escapeHtml(arg.hint) + "</span>" : "") + "</div>";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "line";
+  input.id = "t-" + arg.key;
+  input.spellcheck = false;
+  input.value = value;
+  input.addEventListener("change", () =>
+    edit({ op: "code", id: entry.id, key: arg.key, text: input.value }, { keepPanel: true }));
+  field.appendChild(input);
+
+  const path = document.createElement("div");
+  path.className = "attr-path";
+  path.innerHTML = (entry.labels[arg.key] || entry.entry) + " · <b>TDataStd_AsciiString</b>";
   field.appendChild(path);
   return field;
 }
@@ -1600,6 +1648,50 @@ document.getElementById("btn-connect").addEventListener("click", async () => {
   }
 });
 
+/* ------------------------------------------------------------------ samples
+
+   A worked example, loaded whole. It replaces the document, so it takes two
+   clicks: one to open the list, one to choose - and the list says so.
+   -------------------------------------------------------------------------- */
+
+const sampleMenu = document.getElementById("sample-menu");
+
+function buildSampleMenu() {
+  sampleMenu.textContent = "";
+  for (const sample of SAMPLES) {
+    const button = document.createElement("button");
+    button.innerHTML = "<b>" + escapeHtml(sample.name) + "</b><span>" +
+      escapeHtml(sample.summary) + "</span>";
+    button.addEventListener("click", async () => {
+      sampleMenu.hidden = true;
+      state.hidden.clear();
+      state.selected = null;
+      state.edited = null;
+      // Straight down the same channel as everything else, so it lands in the
+      // graph console like any other edit.
+      if (await edit({ op: "model", model: sample.model })) fitView();
+    });
+    sampleMenu.appendChild(button);
+  }
+  const warn = document.createElement("div");
+  warn.className = "warn";
+  warn.textContent = "replaces what is open · copy it out with Model first";
+  sampleMenu.appendChild(warn);
+}
+
+document.getElementById("btn-sample").addEventListener("click", event => {
+  if (!sampleMenu.hidden) { sampleMenu.hidden = true; return; }
+  if (!sampleMenu.childElementCount) buildSampleMenu();
+  const rect = event.currentTarget.getBoundingClientRect();
+  sampleMenu.style.left = Math.min(rect.left, innerWidth - 336) + "px";
+  sampleMenu.style.top = rect.bottom + 8 + "px";
+  sampleMenu.hidden = false;
+});
+addEventListener("pointerdown", event => {
+  if (!sampleMenu.hidden && !sampleMenu.contains(event.target) &&
+      !document.getElementById("btn-sample").contains(event.target)) sampleMenu.hidden = true;
+}, true);
+
 /* --------------------------------------------------------------- node graph
    The specification tree read the other way round. It owns no state of its own
    beyond where the nodes sit, and even that is written into the model file, so
@@ -1926,6 +2018,7 @@ addEventListener("keydown", event => {
   if (event.key === "t" || event.key === "T") toggleTree();
   if (event.key === "g" || event.key === "G") graph.toggle();
   if (event.key === "Escape") {
+    sampleMenu.hidden = true;
     if (staging) return leaveShowroom();
     state.edited = null; buildPanel(); logPop.hidden = true;
   }
