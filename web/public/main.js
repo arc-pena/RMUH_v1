@@ -139,8 +139,10 @@ async function build(prompt) {
     hud.progress(1);
     hud.setState('building', `${code.split('\n').length} lines`);
 
+    stage.beginBuild();
     const result = await execute(code, { world, ui, api });
-
+    const framed = stage.autoFrame();
+    if (framed) hud.log(`reframed · ${framed.reason}`);
     history.push({ prompt, code });
     hud.setState('ready', prompt.slice(0, 60));
     hud.log(`built in ${result.ms.toFixed(0)}ms`, 'good');
@@ -149,7 +151,8 @@ async function build(prompt) {
     hud.setState('error', 'build failed');
     hud.log(err.message || String(err), 'bad');
     // The partial scene stays on screen — half a world beats a black screen,
-    // and the next prompt can repair it.
+    // and the next prompt can repair it. Frame whatever did get built.
+    stage.autoFrame();
     if (code) history.push({ prompt, code });
   } finally {
     hud.progress(null);

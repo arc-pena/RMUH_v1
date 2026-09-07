@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node --watch server.mjs",
-    "test": "node test/e2e.mjs",
+    "test": "node test/e2e.mjs && node artifact/test/framing.mjs",
     "build:artifact": "node artifact/build.mjs"
   },
   "engines": {

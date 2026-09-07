@@ -12,6 +12,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const REVEAL_SECONDS = 0.9; // a build of any size finishes assembling in about this long
 const REVEAL_MS = 260; // per-object pop-in
+const ALREADY_READS = 0.25; // new work filling this much of the frame is left alone
+const FIT_PADDING = 1.4; // a fit leaves margin around the subject, not a tight crop
 
 // ------------------------------------------------------------------- utilities
 
@@ -103,7 +105,8 @@ export function createWorld({ canvas, onLog, onSceneChange }) {
   scene.environment = defaultSky;
 
   const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 4000);
-  camera.position.set(14, 10, 18);
+  const HOME = { position: new THREE.Vector3(18, 12, 22), target: new THREE.Vector3(0, 2, 0) };
+  camera.position.copy(HOME.position);
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
@@ -111,7 +114,7 @@ export function createWorld({ canvas, onLog, onSceneChange }) {
   controls.maxPolarAngle = Math.PI * 0.495;
   controls.minDistance = 0.6;
   controls.maxDistance = 1200;
-  controls.target.set(0, 1, 0);
+  controls.target.copy(HOME.target);
 
   const clock = new THREE.Clock();
 
@@ -129,6 +132,10 @@ export function createWorld({ canvas, onLog, onSceneChange }) {
   const tweens = new Set();
   let groundObject = null;
   let statsDirty = true;
+
+  // Scope of the build currently running: what it added, and whether it took
+  // care of the camera itself. Null between builds.
+  let scope = null;
 
   const log = (message, kind) => onLog?.(String(message), kind);
   const touch = () => {
@@ -239,6 +246,7 @@ export function createWorld({ canvas, onLog, onSceneChange }) {
   // ---- camera framing -----------------------------------------------------
 
   function focus(target, { distance } = {}) {
+    if (scope) scope.framed = true;
     const box = new THREE.Box3();
     const objects = target === null || target === undefined ? [...tracked] : resolve(target);
     if (!objects.length) {
@@ -251,7 +259,9 @@ export function createWorld({ canvas, onLog, onSceneChange }) {
 
     const center = box.getCenter(new THREE.Vector3());
     const radius = Math.max(0.8, box.getBoundingSphere(new THREE.Sphere()).radius);
-    const dist = distance ?? (radius / Math.sin((camera.fov * Math.PI) / 360)) * 0.95;
+    // Fit the bounding sphere to the vertical field, then back off — a subject
+    // touching all four edges reads as a mistake, not as framing.
+    const dist = distance ?? (radius / Math.sin((camera.fov * Math.PI) / 360)) * FIT_PADDING;
 
     const dir = camera.position.clone().sub(controls.target);
     if (dir.lengthSq() < 1e-6) dir.set(1, 0.75, 1);
@@ -316,6 +326,7 @@ export function createWorld({ canvas, onLog, onSceneChange }) {
       registry.set(name, object);
       tracked.add(object);
       scene.add(object);
+      scope?.added.add(object);
       enqueueReveal(object);
       touch();
       return object;
@@ -351,6 +362,11 @@ export function createWorld({ canvas, onLog, onSceneChange }) {
       world.setFog(null);
       world.setBackground(null);
       setLighting();
+      // A new world inherits nothing — least of all the last one's framing.
+      tweens.clear();
+      camera.position.copy(HOME.position);
+      controls.target.copy(HOME.target);
+      if (scope) scope.cleared = true;
       touch();
     },
 
@@ -520,12 +536,59 @@ export function createWorld({ canvas, onLog, onSceneChange }) {
     }
   });
 
+  // A build must never end with nothing new to look at. If the code framed the
+  // camera itself we leave it alone — otherwise we frame whatever it just made.
+  // The only exception is new work that already fills a good part of the frame,
+  // where moving would be churn for its own sake.
+  const frustum = new THREE.Frustum();
+  const projection = new THREE.Matrix4();
+
+  function autoFrame() {
+    const build = scope;
+    scope = null;
+    if (!build || build.framed) return null;
+
+    const objects = [...build.added].filter(
+      (o) => o.parent && !o.isLight && !o.isCamera,
+    );
+    if (!objects.length) return null;
+
+    const box = new THREE.Box3();
+    for (const object of objects) box.expandByObject(object);
+    if (box.isEmpty()) return null;
+
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    camera.updateMatrixWorld();
+    projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(projection);
+
+    const onScreen = frustum.intersectsSphere(sphere);
+    const distance = camera.position.distanceTo(sphere.center);
+    // Angular radius as a fraction of half the vertical field: 1 fills the frame.
+    const coverage = distance > 1e-6 ? Math.atan(sphere.radius / distance) / ((camera.fov * Math.PI) / 360) : Infinity;
+
+    // Coverage is the new work's angular radius over half the vertical field:
+    // 1.0 exactly fills the frame, 0.09 is a thumbnail lost in a wide shot.
+    let reason = null;
+    if (build.cleared) reason = 'new world';
+    else if (!onScreen) reason = 'off screen';
+    else if (coverage < ALREADY_READS) reason = 'too small to see';
+    if (!reason) return null;
+
+    focus(objects);
+    return { reason, coverage };
+  }
+
   return {
     world,
     api,
     onStats(fn) {
       statsListener = fn;
     },
+    beginBuild() {
+      scope = { added: new Set(), framed: false, cleared: false };
+    },
+    autoFrame,
     // A build's own description of the scene, sent back to Claude next turn.
     summary() {
       if (!tracked.size) return 'SCENE: empty.';

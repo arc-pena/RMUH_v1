@@ -104,7 +104,9 @@ async function build(prompt) {
     const { text } = await sample(
       buildInput({ prompt, scene: stage.summary(), history }),
       {
-        modelTier: 'default',
+        // Instruction-following is the whole game here — the brief has a lot of
+        // rules and the model has to read the scene before it acts.
+        modelTier: 'complex',
         // Every build should be a fresh one; "make it taller" twice in a row
         // must not replay the first answer.
         cache: false,
@@ -130,7 +132,10 @@ async function build(prompt) {
     hud.setState('building', `${code.split('\n').length} lines`);
     dropPreview();
 
+    stage.beginBuild();
     const result = await execute(code, { world, ui, api });
+    const framed = stage.autoFrame();
+    if (framed) hud.log(`reframed · ${framed.reason}`);
     history.push({ prompt, code });
 
     hud.setState('ready', prompt.slice(0, 58));
@@ -142,7 +147,8 @@ async function build(prompt) {
     hud.setState('error', error?.code === 'cancelled' ? 'stopped' : 'build failed');
     hud.log(describe(error), error?.code === 'cancelled' ? 'warn' : 'bad');
     // The partial scene stays on screen — half a world beats a black screen,
-    // and the next prompt can repair it.
+    // and the next prompt can repair it. Frame whatever did get built.
+    stage.autoFrame();
     if (code) history.push({ prompt, code });
     if (isTerminal(error?.code)) disable(describe(error));
   } finally {

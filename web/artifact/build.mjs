@@ -21,6 +21,7 @@ const result = await build({
   format: 'iife',
   target: ['es2022'],
   legalComments: 'none',
+  loader: { '.md': 'text' },
   write: false,
 });
 
