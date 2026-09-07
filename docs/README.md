@@ -139,6 +139,7 @@ go through; nothing else may touch the kernel.
 | | |
 |---|---|
 | `add` `delete` `rename` | features |
+| `vertex` | one vertex of a mesh, moved by an offset — what a handle writes |
 | `set` | one number — a catalogue argument, or a parameter a script declared |
 | `connect` `disconnect` | one reference: one wire |
 | `code` | the source of a written feature |
@@ -197,6 +198,65 @@ what it is.
 target's surfaces, and re-fits. An exact projected curve wants
 `BRepProj_Projection`, which this kernel does not carry either. The nearest
 point is exact at every sample, and the sample count is a parameter.
+
+## Polymesh
+
+A different kind of geometry from everything above. A B-Rep has a surface under
+every face and OpenCascade owns it; a polymesh is a list of points and a list of
+faces of any number of sides, and nothing owns it but `wasm-kernel.js`. That is
+what makes it something you can shove a vertex around in, and what makes
+Catmull–Clark possible at all.
+
+A mesh is a **data** result, not a shape: a flat `TDataStd_RealArray` of
+vertices beside a `TDataStd_IntegerArray` packed `[sides, i, j, …]`. So it
+travels in the model file, it has no B-Rep behind it, and it is drawn from its
+own polygons — n-gons fanned into triangles for display only, with every
+polygon edge sent as a line so the cage reads as the cage.
+
+| | |
+|---|---|
+| `MeshBox` `MeshGrid` | cages to start from, divided as finely as you like |
+| `MeshFromShape` | tessellates a solid and welds it, so anything the B-Rep side builds crosses over |
+| `EditMesh` | the mesh with vertices moved by hand |
+| `Subdivide` | Catmull–Clark, 1–4 levels, on or off, boundary sharp or smooth |
+| `Weld` | merges vertices closer than a distance and drops what collapses |
+| `FillHoles` | chains the open edges into loops and closes each one |
+| `MeshTransform` `MeshDisplace` | move, turn, scale; or push every vertex along a direction by a formula over its own position |
+
+### Editing by hand is still parametric
+
+Select an `EditMesh`, click a cage vertex, drag an axis. What that writes is
+not a position — it is an **offset** from wherever the mesh upstream put that
+vertex:
+
+```json
+{ "op": "vertex", "id": "ED1", "index": 12, "x": 4, "y": 0, "z": -2 }
+```
+
+and it lands in the model file under `moves`. So the edit survives a change
+upstream, reads as text, can be typed into the panel or the graph console
+instead of dragged, and is undone by setting it back to zero. The handles show
+the cage even when the cage is consumed and only the subdivided result is
+visible — which is the whole point of a cage.
+
+While a mesh is being edited by hand the viewport belongs to its handles: a
+click that misses one drops the vertex rather than walking off to whatever
+solid was behind it. Esc leaves.
+
+### Catmull–Clark
+
+Written out rather than linked in — OpenSubdiv is not in this WebAssembly build
+and would not fit beside it. The standard rules, for faces of any number of
+sides: a face point is the average of its vertices; an edge point the average
+of its two ends and the two face points beside it, or the midpoint on an open
+edge; a vertex moves to `(F + 2R + (n−3)V) / n`, or `(E₁ + 6V + E₂) / 8` on the
+boundary. Every face becomes one quad per corner, so a cube at level 1 is 24
+quads and 26 vertices, and level 2 is 96.
+
+`Subdivide` is refused before it starts if the level asked for would come out
+past about 150k faces — the same rule the fillet radius follows: judge it
+against the geometry rather than find out afterwards. `Weld` is refused the
+same way if the distance is more than a quarter of the mesh.
 
 ## The node graph
 
@@ -277,6 +337,7 @@ reproducible from `docs/src/`.
 | `src/mdl.js` | the model description language: every edit, and the one channel they go through |
 | `src/graph.js` | the node editor — its own window, or a floating one |
 | `test/components.test.mjs` | the data half of the catalogue against a real kernel |
+| `test/mesh.test.mjs` | polymesh, subdivision, welding, filling, and the hand edits |
 | `src/showroom.js` | the PlayCanvas stage: finishes, environments, procedural lighting |
 | `src/app.js` | tree, viewport, definition panel, regeneration log |
 | `build.py` | assembles the single file |
@@ -287,6 +348,7 @@ reproducible from `docs/src/`.
 node docs/test/kernel.test.mjs
 node docs/test/mdl.test.mjs
 node docs/test/components.test.mjs
+node docs/test/mesh.test.mjs
 ```
 
 The first builds the model, edits it, checks that only the downstream functions
@@ -296,4 +358,6 @@ and recorded rather than swallowed, and that the file the graph writes rebuilds
 the part and its layout. The third builds a definition out of the data
 components — a series into a point into a spline into divisions into a panel —
 and checks the arithmetic, the measurements, the list rule, and that only the
-functions downstream of an edit re-run.
+functions downstream of an edit re-run. The fourth checks Catmull–Clark against
+its known answers, that a hand edit is an offset that survives the file, and
+that welding and filling do what they say.

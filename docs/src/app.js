@@ -154,12 +154,15 @@ function placeCamera() {
   const el = renderer.domElement;
 
   el.addEventListener("pointerdown", event => {
-    mode = (event.shiftKey || event.button === 1 || event.button === 2) ? "pan" : "orbit";
+    // An axis of the handle takes the drag before the camera does.
+    if (event.button === 0 && !event.shiftKey && grabGizmo(event)) mode = "gizmo";
+    else mode = (event.shiftKey || event.button === 1 || event.button === 2) ? "pan" : "orbit";
     lastX = event.clientX; lastY = event.clientY; moved = 0;
     el.setPointerCapture(event.pointerId);
   });
   el.addEventListener("pointermove", event => {
     if (!mode) return;
+    if (mode === "gizmo") { dragGizmo(event); return; }
     const dx = event.clientX - lastX, dy = event.clientY - lastY;
     lastX = event.clientX; lastY = event.clientY; moved += Math.abs(dx) + Math.abs(dy);
     if (mode === "orbit") {
@@ -175,14 +178,22 @@ function placeCamera() {
     placeCamera(); draw();
   });
   el.addEventListener("pointerup", event => {
-    if (mode === "orbit" && moved < 4) pick(event);
+    if (mode === "gizmo") dropGizmo();
+    else if (mode === "orbit" && moved < 4 && !pickVertex(event)) {
+      // While a mesh is being edited by hand, the viewport belongs to its
+      // handles: a click that misses one drops the vertex, it does not walk off
+      // to whatever solid happened to be behind it. Esc, or the tree, leaves.
+      if (handEditing()) { meshEdit.vertex = -1; refreshMeshEdit(); buildPanel(); }
+      else pick(event);
+    }
     mode = null;
   });
-  el.addEventListener("pointercancel", () => { mode = null; });
+  el.addEventListener("pointercancel", () => { meshEdit.axis = null; mode = null; });
   el.addEventListener("contextmenu", event => event.preventDefault());
   el.addEventListener("wheel", event => {
     event.preventDefault();
     view.distance = Math.max(20, Math.min(8000, view.distance * (1 + Math.sign(event.deltaY) * 0.12)));
+    if (meshEdit.gizmo) refreshMeshEdit();
     placeCamera(); draw();
   }, { passive: false });
 })();
@@ -312,6 +323,7 @@ async function syncShapes() {
 
   applyVisibility();
   paintSelection();
+  refreshMeshEdit();
   draw();
   if (staging && showroom.ready) showroom.setScene(state.tree.features, streams);
 }
@@ -347,7 +359,185 @@ function paintSelection() {
   draw();
 }
 
+/* ==========================================================================
+   Editing a mesh by hand.
+
+   A feature that holds hand edits - EditMesh - shows its cage vertices as
+   handles. Click one, drag an axis, and the move is written into the model
+   file as {"12": [4, 0, -2]}: an offset from wherever the mesh upstream put
+   that vertex, not a position. So the edit survives a change upstream, reads
+   as text, and can be typed instead of dragged.
+   ========================================================================== */
+
+const meshEdit = {
+  id: null,        // the feature holding the edits
+  vertex: -1,      // which vertex is selected
+  dots: null,      // the handles
+  gizmo: null,     // the three axes on the selected one
+  axis: null,      // the one being dragged
+  from: null,      // where the drag started, along that axis
+  before: null,    // the offset the vertex had when the drag started
+};
+
+//! The feature being edited by hand, if the one on the panel holds hand edits.
+function handEditing() {
+  const entry = feature(state.edited);
+  if (!entry) return null;
+  const spec = schemaType(entry.type);
+  return spec && spec.args.some(a => a.kind === "edits") ? entry : null;
+}
+
+const AXES = [
+  { key: "x", dir: new THREE.Vector3(1, 0, 0), color: 0xd0473f },
+  { key: "y", dir: new THREE.Vector3(0, 1, 0), color: 0x3f9e4d },
+  { key: "z", dir: new THREE.Vector3(0, 0, 1), color: 0x2f7fd0 },
+];
+
+function clearMeshEdit() {
+  for (const key of ["dots", "gizmo"]) {
+    if (!meshEdit[key]) continue;
+    world.remove(meshEdit[key]);
+    disposeGroup(meshEdit[key]);
+    meshEdit[key] = null;
+  }
+}
+
+//! The cage of whatever is being edited, as clickable dots, plus the axes on
+//! the one that is selected. Rebuilt whenever the mesh or the selection moves.
+function refreshMeshEdit() {
+  const entry = handEditing();
+  clearMeshEdit();
+  if (!entry) { meshEdit.id = null; meshEdit.vertex = -1; draw(); return; }
+  if (meshEdit.id !== entry.id) { meshEdit.id = entry.id; meshEdit.vertex = -1; }
+
+  const stream = streams.get(entry.id);
+  const vertices = stream && stream.vertices;
+  if (!vertices || !vertices.length) { draw(); return; }
+  if (meshEdit.vertex >= vertices.length / 3) meshEdit.vertex = -1;
+
+  const dots = new THREE.Points(
+    new THREE.BufferGeometry().setAttribute("position",
+      new THREE.Float32BufferAttribute(vertices, 3)),
+    new THREE.PointsMaterial({ color: THEME.accent, size: 8, sizeAttenuation: false,
+                               transparent: true, opacity: 0.95, depthTest: false }));
+  dots.renderOrder = 5;
+  dots.userData.handles = true;
+  const group = new THREE.Group();
+  group.add(dots);
+  world.add(group);
+  meshEdit.dots = group;
+
+  if (meshEdit.vertex >= 0) {
+    const at = new THREE.Vector3(vertices[meshEdit.vertex * 3],
+      vertices[meshEdit.vertex * 3 + 1], vertices[meshEdit.vertex * 3 + 2]);
+    meshEdit.gizmo = buildGizmo(at);
+    world.add(meshEdit.gizmo);
+  }
+  draw();
+}
+
+//! Three arrows. Sized against the camera distance so they stay the same size
+//! on screen however far out you are.
+function buildGizmo(at) {
+  const group = new THREE.Group();
+  group.position.copy(at);
+  const span = view.distance * 0.09;
+  for (const axis of AXES) {
+    const material = new THREE.MeshBasicMaterial({ color: axis.color, depthTest: false,
+                                                   transparent: true, opacity: 0.95 });
+    const shaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(span * 0.022, span * 0.022, span, 8), material);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(span * 0.07, span * 0.2, 12), material);
+    // The cylinder is built along Y; each axis turns it onto its own.
+    const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.dir);
+    shaft.quaternion.copy(turn);
+    tip.quaternion.copy(turn);
+    shaft.position.copy(axis.dir).multiplyScalar(span * 0.5);
+    tip.position.copy(axis.dir).multiplyScalar(span * 1.1);
+    for (const part of [shaft, tip]) {
+      part.userData.axis = axis.key;
+      part.renderOrder = 6;
+      group.add(part);
+    }
+  }
+  return group;
+}
+
 const raycaster = new THREE.Raycaster();
+
+//! Where a ray comes closest to an axis through a point - the whole of what
+//! dragging one arrow means.
+function alongAxis(ray, origin, dir) {
+  const w = new THREE.Vector3().subVectors(origin, ray.origin);
+  const a = dir.dot(dir), b = dir.dot(ray.direction), c = ray.direction.dot(ray.direction);
+  const d = dir.dot(w), e = ray.direction.dot(w);
+  const denominator = a * c - b * b;
+  if (Math.abs(denominator) < 1e-9) return 0;
+  return (b * e - c * d) / denominator;
+}
+
+function rayFrom(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1), camera);
+  return raycaster;
+}
+
+//! An arrow under the pointer starts a drag; nothing else here does.
+function grabGizmo(event) {
+  if (!meshEdit.gizmo) return null;
+  const hits = rayFrom(event).intersectObjects(meshEdit.gizmo.children, false);
+  if (!hits.length) return null;
+  const axis = AXES.find(a => a.key === hits[0].object.userData.axis);
+  const entry = feature(meshEdit.id);
+  const moves = (entry && entry.lists && entry.lists.moves) || {};
+  meshEdit.axis = axis;
+  meshEdit.from = alongAxis(raycaster.ray, meshEdit.gizmo.position, axis.dir);
+  meshEdit.before = (moves[meshEdit.vertex] || [0, 0, 0]).slice();
+  return axis;
+}
+
+//! Live while the arrow is held: the handle follows, and the mesh is not
+//! rebuilt until it is let go - one edit for the drag, not one per frame.
+function dragGizmo(event) {
+  const axis = meshEdit.axis;
+  if (!axis) return;
+  const now = alongAxis(rayFrom(event).ray, meshEdit.gizmo.position, axis.dir);
+  const step = now - meshEdit.from;
+  meshEdit.from = now;
+  meshEdit.gizmo.position.addScaledVector(axis.dir, step);
+  const scale = (feature(meshEdit.id) || {}).values;
+  const factor = scale && Number.isFinite(scale.scale) && Math.abs(scale.scale) > 1e-6
+    ? scale.scale : 1;
+  const which = { x: 0, y: 1, z: 2 }[axis.key];
+  meshEdit.before[which] += step / factor;
+  draw();
+}
+
+function dropGizmo() {
+  if (!meshEdit.axis) return;
+  // A hand drag is not worth six decimal places; the file stays readable.
+  const offset = meshEdit.before.map(v => Math.round(v * 1000) / 1000);
+  meshEdit.axis = null;
+  edit({ op: "vertex", id: meshEdit.id, index: meshEdit.vertex,
+         x: offset[0], y: offset[1], z: offset[2] });
+}
+
+//! A handle under the pointer selects that vertex. The threshold is in pixels,
+//! so a vertex is as easy to hit far away as up close.
+function pickVertex(event) {
+  if (!meshEdit.dots) return false;
+  const cast = rayFrom(event);
+  cast.params.Points.threshold = view.distance * 0.012;
+  const hits = cast.intersectObject(meshEdit.dots.children[0], false);
+  if (!hits.length) return false;
+  meshEdit.vertex = hits[0].index;
+  refreshMeshEdit();
+  buildPanel();
+  return true;
+}
+
 function pick(event) {
   const rect = renderer.domElement.getBoundingClientRect();
   raycaster.setFromCamera(new THREE.Vector2(
@@ -450,6 +640,38 @@ const ICONS = {
   Boolean: '<circle cx="6" cy="8" r="4.4" fill="none" stroke="currentColor" stroke-width="1.25"/>'
          + '<circle cx="10" cy="8" r="4.4" fill="none" stroke="currentColor" stroke-width="1.25"/>'
          + '<path d="M8 4.1a4.4 4.4 0 000 7.8 4.4 4.4 0 000-7.8z" fill="currentColor" opacity=".35"/>',
+  /* --------------------------------------------------------------- mesh */
+  MeshBox: '<path d="M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/>'
+         + '<path d="M2.4 4.6L8 7.6l5.6-3M8 7.6v6.8M8 1.6v0" stroke="currentColor" stroke-width="1"/>'
+         + '<path d="M5.2 3.1v7.6M10.8 3.1v7.6M2.4 8h11.2" stroke="currentColor" stroke-width=".75" opacity=".55"/>',
+  MeshGrid: '<path d="M1.6 10.4L6 5.6h8.4L10 10.4z" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/>'
+          + '<path d="M4.1 8h8.4M7.5 5.6L5.1 10.4M10.3 5.6L7.9 10.4" stroke="currentColor" stroke-width=".8" opacity=".7"/>',
+  MeshFromShape: '<path d="M2.2 4.6L6.4 2.2l4.2 2.4v4.8L6.4 11.8 2.2 9.4z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>'
+               + '<path d="M8.4 12.6h5.4M11.6 10.4l2.2 2.2-2.2 2.2" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>',
+  EditMesh: '<path d="M2.2 11.4L6 5.2l3 3.2 2.4-3.4" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>'
+          + '<rect x="1" y="10.2" width="2.4" height="2.4" fill="currentColor"/>'
+          + '<rect x="4.8" y="4" width="2.4" height="2.4" fill="currentColor"/>'
+          + '<rect x="7.8" y="7.2" width="2.4" height="2.4" fill="currentColor"/>'
+          + '<rect x="10.4" y="3" width="2.4" height="2.4" fill="currentColor"/>'
+          + '<path d="M13.6 4.2v4M11.6 6.2h4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" opacity=".6"/>',
+  Subdivide: '<path d="M2.4 13.2V6.4L8 3.4l5.6 3v6.8" fill="none" stroke="currentColor" stroke-width="1.05" stroke-linejoin="round" opacity=".45"/>'
+           + '<path d="M3.6 12.6c0-4 1.8-6.2 4.4-6.2s4.4 2.2 4.4 6.2" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
+           + '<circle cx="2.4" cy="13.2" r="1.1" fill="currentColor" opacity=".55"/><circle cx="8" cy="3.4" r="1.1" fill="currentColor" opacity=".55"/>'
+           + '<circle cx="13.6" cy="13.2" r="1.1" fill="currentColor" opacity=".55"/>',
+  Weld: '<circle cx="5.4" cy="8" r="2.8" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+      + '<circle cx="10.6" cy="8" r="2.8" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+      + '<path d="M7.1 8h1.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>'
+      + '<path d="M4.4 3.6l1.4 1.4M11.6 3.6l-1.4 1.4" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity=".55"/>',
+  FillHoles: '<path d="M1.8 4.2h12.4v7.6H1.8z" fill="none" stroke="currentColor" stroke-width="1.15"/>'
+           + '<path d="M6 5.6h4.4l1.2 2.4-1.6 2.4H6.4L5 8z" fill="currentColor" opacity=".35"/>'
+           + '<path d="M6 5.6h4.4l1.2 2.4-1.6 2.4H6.4L5 8z" fill="none" stroke="currentColor" stroke-width="1.05" stroke-linejoin="round"/>',
+  MeshTransform: '<path d="M2.4 9.6L6 6.4l3.4 3 3.6-3.4" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>'
+               + '<path d="M8 14.2V11M6.5 12.5L8 11l1.5 1.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>'
+               + '<path d="M8 1.8v3.4M6.5 3.3L8 1.8l1.5 1.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>',
+  MeshDisplace: '<path d="M1.8 11.2h12.4" stroke="currentColor" stroke-width="1.1" opacity=".45"/>'
+              + '<path d="M1.8 8.4c2 0 2-4.4 4.1-4.4s2.1 4.4 4.2 4.4 2.1-3 4.1-3" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
+              + '<path d="M3.6 11.2V9.4M7 11.2V6.6M10.4 11.2V9M13.6 11.2V7" stroke="currentColor" stroke-width=".85" opacity=".6"/>',
+
   Project: '<path d="M3 4.4C5 4.4 5 1.8 8 1.8s3 2.6 5 2.6" fill="none" stroke="currentColor" stroke-width="1.2"/>'
          + '<path d="M1.6 12.4h12.8" stroke="currentColor" stroke-width="1.2"/>'
          + '<path d="M3 6v4.6M8 3.4v7M13 6v4.6" stroke="currentColor" stroke-width="1" stroke-dasharray="1.6 1.8" opacity=".7"/>',
@@ -528,12 +750,18 @@ function buildTree() {
   // rather than build have no place in a part body.
   const sets = [
     { name: "Datums", features: state.tree.features.filter(f => f.category === "datum") },
-    { name: "Parameters", features: state.tree.features.filter(f => f.category === "data") },
+    { name: "Parameters", optional: true,
+      features: state.tree.features.filter(f => f.category === "data") },
+    { name: "Meshes", optional: true,
+      features: state.tree.features.filter(f => f.category === "mesh") },
     { name: "PartBody", features: state.tree.features.filter(f =>
-        f.category !== "datum" && f.category !== "data") },
+        f.category !== "datum" && f.category !== "data" && f.category !== "mesh") },
   ];
 
   for (const set of sets) {
+    // Datums and PartBody are always there, the way CATIA has them. The sets
+    // that only exist when something is in them do not announce themselves.
+    if (!set.features.length && set.optional) continue;
     const header = document.createElement("li");
     header.className = "set-label";
     header.textContent = set.name;
@@ -646,6 +874,7 @@ function buildPanel() {
     if (arg.kind === "code") continue;   // the editor goes below the parameters
     host.appendChild(arg.kind === "real" ? realField(entry, arg)
                    : arg.kind === "choice" ? choiceField(entry, arg)
+                   : arg.kind === "edits" ? editsField(entry, arg)
                    : refField(entry, arg));
   }
 
@@ -665,7 +894,10 @@ function buildPanel() {
 
   const actions = document.createElement("div");
   actions.className = "actions";
-  if (entry.category !== "datum" && !entry.consumedBy) {
+  // The shortcut is only a shortcut when the operation would take this feature.
+  const filletSpec = schemaType("Fillet");
+  const filletArg = filletSpec && filletSpec.args.find(a => a.kind === "ref" && a.consumes);
+  if (!entry.consumedBy && filletArg && acceptsFrom(filletArg.accepts, entry)) {
     const fillet = document.createElement("button");
     fillet.className = "btn primary";
     fillet.innerHTML = svg(ICONS.Fillet) + "<span>Apply fillet</span>";
@@ -768,6 +1000,74 @@ function choiceField(entry, arg) {
   return field;
 }
 
+//! The hand edits, both ways round: the vertex under the handle can be typed
+//! as three numbers, and the whole set can be read and cleared. Dragging in the
+//! viewport and typing here write the same line of JSON.
+function editsField(entry, arg) {
+  const field = document.createElement("div");
+  field.className = "field";
+  const moves = (entry.lists && entry.lists[arg.key]) || {};
+  const count = Object.keys(moves).length;
+  field.innerHTML = '<div class="field-head"><label>' + arg.label + "</label>" +
+    '<span class="kind">' + (count ? count + (count === 1 ? " vertex" : " vertices") : "none") +
+    "</span></div>";
+
+  const hint = document.createElement("div");
+  hint.className = "attr-path";
+  hint.style.marginTop = "0";
+  hint.textContent = meshEdit.id === entry.id
+    ? (meshEdit.vertex >= 0 ? "vertex " + meshEdit.vertex + " · drag an axis, or type below"
+                            : "click a handle in the viewport · Esc to leave")
+    : "open this feature to show its handles";
+  field.appendChild(hint);
+
+  if (meshEdit.id === entry.id && meshEdit.vertex >= 0) {
+    const at = meshEdit.vertex;
+    const offset = moves[at] || [0, 0, 0];
+    const row = document.createElement("div");
+    row.className = "triple";
+    ["X", "Y", "Z"].forEach((axis, i) => {
+      const cell = document.createElement("label");
+      cell.innerHTML = "<span>" + axis + "</span>";
+      const input = document.createElement("input");
+      input.type = "number";
+      input.step = "0.5";
+      input.value = round(offset[i]);
+      input.addEventListener("change", () => {
+        const next = offset.slice();
+        next[i] = Number(input.value) || 0;
+        edit({ op: "vertex", id: entry.id, index: at, x: next[0], y: next[1], z: next[2] });
+      });
+      cell.appendChild(input);
+      row.appendChild(cell);
+    });
+    field.appendChild(row);
+  }
+
+  if (count) {
+    const actions = document.createElement("div");
+    actions.className = "wired";
+    actions.innerHTML = "<span>" + count + " moved, in the model file under <b>" +
+      escapeHtml(arg.key) + "</b></span>";
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.textContent = "Clear all";
+    clear.addEventListener("click", async () => {
+      // One vertex at a time, so every undo is one edit in the console too.
+      for (const index of Object.keys(moves))
+        await edit({ op: "vertex", id: entry.id, index: Number(index), x: 0, y: 0, z: 0 });
+    });
+    actions.appendChild(clear);
+    field.appendChild(actions);
+  }
+
+  const path = document.createElement("div");
+  path.className = "attr-path";
+  path.innerHTML = (entry.labels[arg.key] || entry.entry) + " · <b>TDataStd_AsciiString</b>";
+  field.appendChild(path);
+  return field;
+}
+
 //! The readout. Long lists are shown to a limit with a count, because the
 //! point is to see the shape of the data, not to scroll through it.
 function dataField(entry) {
@@ -775,9 +1075,10 @@ function dataField(entry) {
   field.className = "field";
   const data = entry.data;
   field.innerHTML = '<div class="field-head"><label>' +
-    (entry.type === "Panel" ? "Watching" : "Computed") + "</label>" +
-    '<span class="kind">' + data.count + " " + data.kind + (data.count === 1 ? "" : "s") +
-    "</span></div>";
+    (entry.type === "Panel" ? "Watching" : data.kind === "mesh" ? "Mesh" : "Computed") +
+    "</label><span class=\"kind\">" +
+    (data.kind === "mesh" ? data.faces + (data.faces === 1 ? " face" : " faces")
+      : data.count + " " + data.kind + (data.count === 1 ? "" : "s")) + "</span></div>";
   const box = document.createElement("div");
   box.className = "readout";
   box.textContent = data.preview || "—";
@@ -1156,6 +1457,7 @@ function select(id, openDefinition) {
     ? "<b>" + escapeHtml(entry.name) + "</b> · " + entry.entry + " · " + entry.type
     : "click a body · double-click to edit it";
   buildTree(); buildPanel(); refreshToolbar(); paintSelection();
+  refreshMeshEdit();
   if (graph.showing) graph.update();
   if (staging) refreshStageSelection();
 }

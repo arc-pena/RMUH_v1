@@ -137,6 +137,18 @@ export const MDL_OPS = [
       return await ctx.kernel.loadModel(model);
     }),
 
+  modelOp("vertex", ["id", "index", "x", "y", "z"],
+    "Move one vertex of a mesh, by an offset from where the mesh upstream put it. "
+    + "This is what dragging a handle in the viewport writes; an offset of zero puts "
+    + "the vertex back and forgets the edit.",
+    { op: "vertex", id: "ED1", index: 12, x: 4, y: 0, z: -2 },
+    (ctx, edit) => {
+      if (!Number.isInteger(edit.index) || edit.index < 0)
+        throw new Error('"index" must be a vertex number');
+      return ctx.kernel.moveVertex(needText(edit, "id"), edit.index,
+        [needNumber(edit, "x"), needNumber(edit, "y"), needNumber(edit, "z")]);
+    }),
+
   viewOp("move", ["id", "x", "y"],
     "Put a node somewhere on the graph canvas. Layout is view state, so no function "
     + "re-executes - but it is written into the same file, under \"layout\".",

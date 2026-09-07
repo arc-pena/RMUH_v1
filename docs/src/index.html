@@ -338,6 +338,11 @@ input[type="number"]:disabled { opacity: .7; }
 }
 
 select.many { margin-top: 4px; }
+/* Three numbers side by side: the offset on the vertex under the handle. */
+.triple { display: flex; gap: 6px; margin-top: 7px; }
+.triple label { flex: 1; display: flex; align-items: center; gap: 5px; min-width: 0; }
+.triple span { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.triple input { width: 100%; min-width: 0; }
 .attr-path { margin-top: 6px; font-family: var(--mono); font-size: 9px; color: var(--ink-3); }
 .attr-path b { color: var(--ink-2); font-weight: 500; }
 .notice {

@@ -428,8 +428,14 @@ const ref = (key, label, accepts, consumes = false) =>
 const refs = (key, label, accepts, consumes = false) =>
   ({ key, label, kind: "refs", accepts, consumes });
 
+//! Vertices someone moved by hand, as JSON on a label of its own:
+//! {"12":[4,0,-2]} is vertex 12, pushed four along X and two down. Written by
+//! dragging a handle in the viewport, and just as well by typing it into the
+//! model file - which is the point.
+const edits = (key, label, summary) => ({ key, label, kind: "edits", def: "{}", summary });
+
 //! What a feature hands downstream. An input accepts a set of these.
-export const KINDS = ["number", "point", "vector", "curve", "plane", "solid", "text"];
+export const KINDS = ["number", "point", "vector", "curve", "plane", "solid", "mesh", "text"];
 const ANY = KINDS.slice();
 //! Source the user edits, held as a TDataStd_AsciiString.
 const code = (key, label, def) => ({ key, label, kind: "code", def });
@@ -555,7 +561,7 @@ export const CATALOGUE = [
     produces: "number",
     summary: "A number taken off a shape - its length, its area, its volume, or the "
            + "size of its bounding box - to be wired back into the model.",
-    args: [ref("shape", "Shape", ["curve", "plane", "solid", "point"]),
+    args: [ref("shape", "Shape", ["curve", "plane", "solid", "point", "mesh"]),
            choice("quantity", "Quantity",
                   ["Length", "Area", "Volume", "Size X", "Size Y", "Size Z", "Diagonal"], 0)] },
 
@@ -588,6 +594,86 @@ export const CATALOGUE = [
            + "shell taken in bands with a gap between each, after Heydar Aliyev. The "
            + "driver surface is never built - only the bands cut from it.",
     args: [code("code", "Code", HEYDAR)] },
+
+  /* --------------------------------------------------------------- mesh
+     A polymesh: vertices, and faces of any number of sides. Not a B-Rep -
+     there is no surface under it, only the polygons - which is why it can be
+     pushed around by hand and subdivided into something smooth. */
+  { type: "MeshBox", guid: "9a1b2c30-0080-4c00-9e00-caf000000080", category: "mesh",
+    produces: "mesh",
+    summary: "A box as a polymesh, divided as finely as you like. The starting point "
+           + "for pushing vertices around, and for subdividing.",
+    args: [ref("origin", "Corner point", ["point"]), ref("plane", "Placement plane", ["plane"]),
+           real("dx", "Length X", 120, 1, 4000, 1), real("dy", "Length Y", 120, 1, 4000, 1),
+           real("dz", "Length Z", 120, 1, 4000, 1),
+           real("segX", "Divisions X", 1, 1, 40, 1, ""),
+           real("segY", "Divisions Y", 1, 1, 40, 1, ""),
+           real("segZ", "Divisions Z", 1, 1, 40, 1, "")] },
+  { type: "MeshGrid", guid: "9a1b2c30-0081-4c00-9e00-caf000000081", category: "mesh",
+    produces: "mesh",
+    summary: "A flat grid of quads on a plane - a surface to push into shape.",
+    args: [ref("plane", "Plane", ["plane"]),
+           real("width", "Width", 400, 1, 8000, 5), real("depth", "Depth", 400, 1, 8000, 5),
+           real("cols", "Columns", 6, 1, 120, 1, ""), real("rows", "Rows", 6, 1, 120, 1, "")] },
+  { type: "MeshFromShape", guid: "9a1b2c30-0082-4c00-9e00-caf000000082", category: "mesh",
+    produces: "mesh",
+    summary: "Turns a solid into a polymesh by tessellating it, so anything the B-Rep "
+           + "side builds can be welded, subdivided and pushed around by hand.",
+    args: [ref("shape", "Shape", ["solid", "plane"], true),
+           real("quality", "Tessellation", 1, 0.05, 8, 0.05, ""),
+           choice("weld", "Vertices", ["Weld", "Leave as tessellated"], 0)] },
+  { type: "EditMesh", guid: "9a1b2c30-0083-4c00-9e00-caf000000083", category: "mesh",
+    produces: "mesh",
+    summary: "The mesh, with vertices moved by hand. Select it, drag a handle in the "
+           + "viewport, and the move is written into the model file as an offset - so "
+           + "the same edit can be typed, computed or undone like any other.",
+    args: [ref("mesh", "Mesh", ["mesh"], true),
+           edits("moves", "Moved vertices",
+                 "vertex index → offset, as JSON: {\"12\": [4, 0, -2]}"),
+           real("scale", "Move scale", 1, -8, 8, 0.05, "")] },
+  { type: "Subdivide", guid: "9a1b2c30-0084-4c00-9e00-caf000000084", category: "mesh",
+    produces: "mesh",
+    summary: "Catmull-Clark subdivision. Every face becomes quads and the mesh pulls "
+           + "towards a smooth surface. Switch it off to see and edit the cage.",
+    args: [ref("mesh", "Mesh", ["mesh"], true),
+           choice("on", "Subdivision", ["On", "Off"], 0),
+           real("levels", "Levels", 2, 1, 4, 1, ""),
+           choice("boundary", "Open edges", ["Keep sharp", "Smooth"], 0),
+           choice("shading", "Shading", ["Smooth", "Faceted"], 0)] },
+  { type: "Weld", guid: "9a1b2c30-0085-4c00-9e00-caf000000085", category: "mesh",
+    produces: "mesh",
+    summary: "Merges vertices closer together than a distance, and drops the faces that "
+           + "collapse when they do. What makes a tessellation into a mesh.",
+    args: [ref("mesh", "Mesh", ["mesh"], true),
+           real("tolerance", "Distance", 0.05, 0.0001, 100, 0.0001),
+           choice("degenerate", "Collapsed faces", ["Remove", "Keep"], 0)] },
+  { type: "FillHoles", guid: "9a1b2c30-0086-4c00-9e00-caf000000086", category: "mesh",
+    produces: "mesh",
+    summary: "Walks the open edges, chains them into loops, and closes each one. Weld "
+           + "first if the hole is only two vertices sitting on top of each other.",
+    args: [ref("mesh", "Mesh", ["mesh"], true),
+           real("maxEdges", "Largest hole", 64, 3, 4000, 1, ""),
+           choice("fill", "Fill with", ["One n-gon", "Fan from the middle"], 0)] },
+  { type: "MeshTransform", guid: "9a1b2c30-0087-4c00-9e00-caf000000087", category: "mesh",
+    produces: "mesh",
+    summary: "Moves, turns and scales a mesh. Every number takes a wire, so this is "
+           + "where a mesh is placed by arithmetic rather than by hand.",
+    args: [ref("mesh", "Mesh", ["mesh"], true),
+           real("mx", "Move X", 0, -8000, 8000, 1), real("my", "Move Y", 0, -8000, 8000, 1),
+           real("mz", "Move Z", 0, -8000, 8000, 1),
+           real("rx", "Turn about X", 0, -360, 360, 1, "°"),
+           real("ry", "Turn about Y", 0, -360, 360, 1, "°"),
+           real("rz", "Turn about Z", 0, -360, 360, 1, "°"),
+           real("scale", "Scale", 1, 0.01, 20, 0.01, "")] },
+  { type: "MeshDisplace", guid: "9a1b2c30-0088-4c00-9e00-caf000000088", category: "mesh",
+    produces: "mesh",
+    summary: "Pushes every vertex along a direction by a formula over its own position. "
+           + "The mathematical half of editing a mesh, next to the handles.",
+    args: [ref("mesh", "Mesh", ["mesh"], true),
+           choice("along", "Along", ["Vertex normal", "X", "Y", "Z"], 0),
+           real("amount", "Amount", 20, -2000, 2000, 0.5),
+           code("formula", "Formula",
+                "Math.sin(x * 0.02) * Math.cos(y * 0.02)")] },
 
   /* --------------------------------------------------------- operations */
   { type: "Extrude", guid: "9a1b2c30-0070-4c00-9e00-caf000000070", category: "operation",
@@ -647,6 +733,7 @@ export const CATEGORIES = [
   { key: "data",      label: "numbers" },
   { key: "curve",     label: "curves" },
   { key: "body",      label: "solids" },
+  { key: "mesh",      label: "mesh" },
   { key: "analysis",  label: "analysis" },
   { key: "operation", label: "operations" },
 ];
@@ -773,6 +860,37 @@ export const F = {
   },
   setCode(f, key, text) { F.argLabel(f, key, true).attr.TDataStd_AsciiString = text; },
 
+  //! Vertices someone moved by hand: an object of index → [dx, dy, dz], held
+  //! as text on the argument's label so it travels in the file and can be read
+  //! and written there.
+  edits(f, key) {
+    const label = F.argLabel(f, key);
+    const text = label && label.attr.TDataStd_AsciiString;
+    if (typeof text !== "string" || !text.trim()) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch (e) { return {}; }
+  },
+  setEdits(f, key, moves) {
+    const clean = {};
+    for (const [index, offset] of Object.entries(moves || {})) {
+      const at = Math.round(Number(index));
+      if (!Number.isInteger(at) || at < 0) continue;
+      if (!Array.isArray(offset) || offset.length !== 3 || !offset.every(Number.isFinite)) continue;
+      // A vertex put back where it started is not an edit; forget it.
+      if (offset.every(v => Math.abs(v) < 1e-9)) continue;
+      clean[at] = offset.map(round);
+    }
+    F.argLabel(f, key, true).attr.TDataStd_AsciiString = JSON.stringify(clean);
+    return clean;
+  },
+  moveVertex(f, key, index, offset) {
+    const moves = F.edits(f, key);
+    if (!offset) delete moves[index]; else moves[index] = offset;
+    return F.setEdits(f, key, moves);
+  },
+
   appearance(f) {
     const label = f.findChild(APPEARANCE_TAG);
     if (!label || typeof label.attr.TDataStd_AsciiString !== "string") return null;
@@ -884,9 +1002,15 @@ export const F = {
     const kind = label.attr.TDataStd_AsciiString;
     return {
       kind,
-      stride: kind === "point" || kind === "vector" ? 3 : 1,
+      stride: kind === "point" || kind === "vector" || kind === "mesh" ? 3 : 1,
       values: label.attr.TDataStd_RealArray || [],
       lines: label.attr.TDataStd_ExtStringArray || [],
+      // A polymesh keeps its faces here, packed as [sides, i, i, …, sides, …],
+      // which is a TDataStd_IntegerArray and nothing more exotic.
+      faces: label.attr.TDataStd_IntegerArray || [],
+      // Whether the normals should be averaged across a face's edges. A
+      // property of the mesh, not of the viewer, so it travels with it.
+      smooth: label.attr.TDataStd_Integer === 1,
     };
   },
   setData(f, data) {
@@ -895,11 +1019,14 @@ export const F = {
       label.attr.TDataStd_AsciiString = "";
       label.attr.TDataStd_RealArray = [];
       label.attr.TDataStd_ExtStringArray = [];
+      label.attr.TDataStd_IntegerArray = [];
       return label;
     }
     label.attr.TDataStd_AsciiString = data.kind;
     label.attr.TDataStd_RealArray = (data.values || []).map(round);
     label.attr.TDataStd_ExtStringArray = data.lines || [];
+    label.attr.TDataStd_IntegerArray = data.faces || [];
+    label.attr.TDataStd_Integer = data.smooth ? 1 : 0;
     return label;
   },
   //! Points and vectors read back as triples, which is how every driver wants
@@ -1291,6 +1418,7 @@ export class Doc {
           }
           else if (arg.kind === "choice") values[arg.key] = F.choice(f, arg.key, arg.def);
           else if (arg.kind === "code") { /* published separately, below */ }
+          else if (arg.kind === "edits") lists[arg.key] = F.edits(f, arg.key);
           else if (arg.kind === "refs") lists[arg.key] = F.references(f, arg.key).map(F.id);
           else {
             const target = F.reference(f, arg.key);
@@ -1313,7 +1441,10 @@ export class Doc {
                  : data.values.length / data.stride,
             preview: previewData(data),
           };
+          if (data.kind === "mesh") entry.data.faces = meshFaces(data).length;
         }
+        // A polymesh has no B-Rep behind it, and is drawn from its own polygons.
+        if (data && data.kind === "mesh") entry.built = true;
         // A script publishes its source and the parameters it declared, so the
         // panel can draw an editor and a slider per parameter without knowing
         // anything about what the script builds.
@@ -1349,6 +1480,10 @@ export class Doc {
             args[arg.key] = label.attr.TDF_Reference
               ? { value: literal, from: F.id(label.attr.TDF_Reference) }
               : literal;
+          }
+          else if (arg.kind === "edits") {
+            const moves = F.edits(f, arg.key);
+            if (Object.keys(moves).length) args[arg.key] = moves;
           }
           else if (arg.kind === "refs") args[arg.key] = F.references(f, arg.key).map(t => ({ ref: F.id(t) }));
           else if (arg.kind === "choice") args[arg.key] = arg.options[F.choice(f, arg.key, arg.def)];
@@ -1408,6 +1543,10 @@ export class Doc {
             if (!source) throw new Error(entry.id + "." + key + " is driven by an unknown feature");
             F.setReference(f, key, source);
           }
+        } else if (arg.kind === "edits") {
+          if (!value || typeof value !== "object" || Array.isArray(value))
+            throw new Error(key + " of " + entry.id + " must be an object of index → offset");
+          F.setEdits(f, key, value);
         } else if (arg.kind === "refs") {
           const list = Array.isArray(value) ? value : [value];
           F.setReferences(f, key, list.map(item => {
@@ -1446,8 +1585,35 @@ export const round = v => Math.round(v * 1e6) / 1e6;
 
 //! What a Panel prints and a node shows under its header. Long lists are cut
 //! off with a count, because the point is to see the shape of the data.
+//! The faces of a packed mesh, back as lists of vertex indices.
+export function meshFaces(data) {
+  const out = [];
+  const packed = (data && data.faces) || [];
+  for (let i = 0; i < packed.length; ) {
+    const sides = packed[i++];
+    if (!(sides > 0) || i + sides > packed.length) break;
+    out.push(packed.slice(i, i + sides));
+    i += sides;
+  }
+  return out;
+}
+
+//! How many faces of each number of sides - the one line that says whether a
+//! mesh is quads, triangles, or something a subdivision will not enjoy.
+export function meshTally(data) {
+  const tally = new Map();
+  for (const face of meshFaces(data)) tally.set(face.length, (tally.get(face.length) || 0) + 1);
+  const name = { 3: "tris", 4: "quads", 5: "pentagons", 6: "hexagons" };
+  return [...tally].sort((a, b) => a[0] - b[0])
+    .map(([sides, n]) => n + " " + (name[sides] || sides + "-gons")).join(" · ");
+}
+
 export function previewData(data, limit = 6) {
   if (!data) return "";
+  if (data.kind === "mesh") {
+    const tally = meshTally(data);
+    return (data.values.length / 3) + " vertices · " + (tally || "no faces");
+  }
   if (data.lines.length)
     return data.lines.slice(0, limit).join(" · ")
          + (data.lines.length > limit ? " … +" + (data.lines.length - limit) : "");
@@ -1500,6 +1666,8 @@ export function schemaJson() {
           return { ...base, default: arg.def, options: arg.options };
         if (arg.kind === "code")
           return { ...base, default: arg.def };
+        if (arg.kind === "edits")
+          return { ...base, default: arg.def, summary: arg.summary || "" };
         return { ...base, accepts: arg.accepts.join(","), consumes: arg.consumes };
       }),
     })),

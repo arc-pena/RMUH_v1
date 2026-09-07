@@ -21,7 +21,7 @@
 // A feature that fails keeps its last good shape and records the message, so
 // one bad radius never takes the model, or the page, down with it.
 
-import { CATALOGUE, Doc, Driver, F, clampTo, dataLines, kernelMessage, schemaJson,
+import { CATALOGUE, Doc, Driver, F, clampTo, dataLines, kernelMessage, meshFaces, schemaJson,
          typeSpec } from "./ocaf.js";
 
 const CONFUSION = 1e-7;
@@ -1108,11 +1108,16 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     precondition: f => {
       const source = F.reference(f, "shape");
       if (!source) return "nothing to measure";
+      const data = F.data(source);
+      if (data && data.kind === "mesh") return null;      // a mesh has no B-Rep
       if (!F.shape(source)) return F.name(source) + " has not been built";
       return null;
     },
     build: f => {
-      const shape = F.shape(F.reference(f, "shape"));
+      const source = F.reference(f, "shape");
+      const meshData = F.data(source);
+      if (meshData && meshData.kind === "mesh") return { data: numbers([measureMesh(f, meshData)]) };
+      const shape = F.shape(source);
       const quantity = Feature_choice(f, "quantity");
       if (quantity <= 2) {
         const props = new oc.GProp_GProps();
@@ -1128,6 +1133,640 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       return { data: numbers([quantity === 6 ? box.diagonal : box.size[quantity - 3]]) };
     },
   };
+
+  /* ==========================================================================
+     Polymesh.
+
+     A different kind of geometry from everything above it. A B-Rep has a
+     surface under every face and OpenCascade owns it; a polymesh is a list of
+     points and a list of faces of any number of sides, and nothing owns it but
+     this file. That is what makes it something you can shove a vertex around
+     in, and what makes Catmull-Clark possible in the first place.
+
+     A mesh travels as { points: [[x,y,z], …], faces: [[i, j, k, …], …] }, and
+     is stored as a flat TDataStd_RealArray beside a TDataStd_IntegerArray
+     packed [sides, i, j, …].
+     ========================================================================== */
+
+  const packMesh = mesh => ({
+    kind: "mesh",
+    values: mesh.points.flat(),
+    faces: mesh.faces.flatMap(face => [face.length, ...face]),
+  });
+
+  //! The mesh arriving on an input, unpacked. Anything that is not a mesh -
+  //! a list of points, say - is refused by name rather than half-read.
+  function meshFrom(source, what) {
+    if (!source) throw new Error("no " + what + " is wired in");
+    const data = F.data(source);
+    if (!data || data.kind !== "mesh")
+      throw new Error(F.name(source) + " is not a mesh");
+    const points = F.triples(data);
+    return { points, faces: meshFaces(data) };
+  }
+
+  const meshCounts = mesh => mesh.points.length + " vertices, " + mesh.faces.length + " faces";
+
+  //! A guard every mesh driver runs before it hands anything on. A mesh with a
+  //! face pointing at a vertex that is not there will take the renderer down
+  //! two features later, where nothing explains it.
+  function checkMesh(mesh, what) {
+    if (!mesh.points.length) throw new Error("the " + what + " has no vertices");
+    for (const face of mesh.faces)
+      for (const index of face)
+        if (!Number.isInteger(index) || index < 0 || index >= mesh.points.length)
+          throw new Error("the " + what + " has a face pointing at vertex " + index
+            + ", and there are only " + mesh.points.length);
+    if (mesh.points.length > 400000)
+      throw new Error(mesh.points.length + " vertices is more than this kernel will carry");
+    return mesh;
+  }
+
+  const vsub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const vadd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  const vmul = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+  const centroid = list => vmul(list.reduce(vadd, [0, 0, 0]), 1 / Math.max(1, list.length));
+
+  //! Newell's normal: right for an n-gon, and right for one that is not quite
+  //! flat, which after a few hand edits none of them are.
+  function faceNormal(points, face) {
+    let n = [0, 0, 0];
+    for (let i = 0; i < face.length; i++) {
+      const a = points[face[i]], b = points[face[(i + 1) % face.length]];
+      n = [n[0] + (a[1] - b[1]) * (a[2] + b[2]),
+           n[1] + (a[2] - b[2]) * (a[0] + b[0]),
+           n[2] + (a[0] - b[0]) * (a[1] + b[1])];
+    }
+    return V.norm(n) || [0, 0, 1];
+  }
+
+  const faceArea = (points, face) => {
+    let n = [0, 0, 0];
+    for (let i = 0; i < face.length; i++) {
+      const a = points[face[i]], b = points[face[(i + 1) % face.length]];
+      n = [n[0] + (a[1] * b[2] - a[2] * b[1]),
+           n[1] + (a[2] * b[0] - a[0] * b[2]),
+           n[2] + (a[0] * b[1] - a[1] * b[0])];
+    }
+    return 0.5 * Math.hypot(n[0], n[1], n[2]);
+  };
+
+  //! Signed volume by the divergence theorem, fanning each face from its first
+  //! vertex. Only means anything on a mesh that is actually closed.
+  const meshVolume = mesh => {
+    let total = 0;
+    for (const face of mesh.faces)
+      for (let i = 1; i + 1 < face.length; i++) {
+        const [a, b, c] = [mesh.points[face[0]], mesh.points[face[i]], mesh.points[face[i + 1]]];
+        total += (a[0] * (b[1] * c[2] - b[2] * c[1])
+                - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6;
+      }
+    return Math.abs(total);
+  };
+
+  //! Averaged face normals, weighted by nothing - the mesh is a cage, and a
+  //! cage's normals only have to be good enough to light it.
+  function vertexNormals(mesh) {
+    const normals = mesh.points.map(() => [0, 0, 0]);
+    for (const face of mesh.faces) {
+      const n = faceNormal(mesh.points, face);
+      for (const index of face) normals[index] = vadd(normals[index], n);
+    }
+    return normals.map(n => V.norm(n) || [0, 0, 1]);
+  }
+
+  /* ------------------------------------------------------- the half-edges */
+
+  //! Every directed edge in the mesh, and the face it belongs to. An edge whose
+  //! reverse is missing is an open edge: the boundary of a hole, or of a sheet.
+  function edgeMap(mesh) {
+    const used = new Map();                 // "a,b" -> face index
+    const key = (a, b) => a + "," + b;
+    mesh.faces.forEach((face, at) => {
+      for (let i = 0; i < face.length; i++)
+        used.set(key(face[i], face[(i + 1) % face.length]), at);
+    });
+    const open = [];
+    for (const [pair] of used) {
+      const [a, b] = pair.split(",").map(Number);
+      if (!used.has(key(b, a))) open.push([a, b]);
+    }
+    return { used, open, isOpen: (a, b) => !used.has(key(b, a)) || !used.has(key(a, b)) };
+  }
+
+  /* --------------------------------------------------------- Catmull-Clark */
+
+  //! One level of Catmull-Clark, for faces of any number of sides.
+  //!
+  //!   face point    the average of the face's vertices
+  //!   edge point    the average of its two ends and the two face points
+  //!                 beside it - or, on an open edge, the midpoint
+  //!   vertex point  (F + 2R + (n-3)V) / n, where F is the average of the
+  //!                 touching face points, R of the touching edge midpoints
+  //!                 and n the valence - or, on the boundary, (E1 + 6V + E2)/8
+  //!
+  //! Every face then becomes one quad per corner. \p sharpBoundary keeps an
+  //! open edge where it is instead of letting it creep inwards.
+  function catmullClark(mesh, sharpBoundary) {
+    const { points, faces } = mesh;
+    const facePoints = faces.map(face => centroid(face.map(i => points[i])));
+
+    // Every undirected edge once, with the faces on either side of it.
+    const edges = new Map();
+    const key = (a, b) => (a < b ? a + "," + b : b + "," + a);
+    faces.forEach((face, at) => {
+      for (let i = 0; i < face.length; i++) {
+        const a = face[i], b = face[(i + 1) % face.length];
+        const k = key(a, b);
+        if (!edges.has(k)) edges.set(k, { a: Math.min(a, b), b: Math.max(a, b), faces: [] });
+        edges.get(k).faces.push(at);
+      }
+    });
+
+    const out = [];
+    const facePointIndex = facePoints.map(p => (out.push(p), out.length - 1));
+    const edgePointIndex = new Map();
+    for (const [k, edge] of edges) {
+      const mid = vmul(vadd(points[edge.a], points[edge.b]), 0.5);
+      const open = edge.faces.length < 2;
+      const p = open ? mid
+        : vmul(vadd(vadd(points[edge.a], points[edge.b]),
+                    vadd(facePoints[edge.faces[0]], facePoints[edge.faces[1]])), 0.25);
+      out.push(p);
+      edgePointIndex.set(k, out.length - 1);
+    }
+
+    // What each original vertex touches, and whether it sits on an open edge.
+    const touchingFaces = points.map(() => []);
+    const touchingEdges = points.map(() => []);
+    faces.forEach((face, at) => { for (const i of face) touchingFaces[i].push(at); });
+    for (const [, edge] of edges) {
+      touchingEdges[edge.a].push(edge);
+      touchingEdges[edge.b].push(edge);
+    }
+
+    const movedIndex = points.map((v, i) => {
+      const boundary = touchingEdges[i].filter(e => e.faces.length < 2);
+      let moved;
+      if (boundary.length >= 2) {
+        // On the boundary the surface is a curve, and it is subdivided as one.
+        if (sharpBoundary) moved = v;
+        else {
+          const ends = boundary.slice(0, 2).map(e =>
+            vmul(vadd(points[e.a], points[e.b]), 0.5));
+          moved = vmul(vadd(vadd(ends[0], ends[1]), vmul(v, 6)), 1 / 8);
+        }
+      } else {
+        const n = touchingEdges[i].length;
+        if (n < 3) moved = v;
+        else {
+          const Fp = centroid(touchingFaces[i].map(at => facePoints[at]));
+          const R = centroid(touchingEdges[i].map(e =>
+            vmul(vadd(points[e.a], points[e.b]), 0.5)));
+          moved = vmul(vadd(vadd(Fp, vmul(R, 2)), vmul(v, n - 3)), 1 / n);
+        }
+      }
+      out.push(moved);
+      return out.length - 1;
+    });
+
+    const newFaces = [];
+    faces.forEach((face, at) => {
+      for (let i = 0; i < face.length; i++) {
+        const prev = face[(i - 1 + face.length) % face.length];
+        const here = face[i];
+        const next = face[(i + 1) % face.length];
+        newFaces.push([
+          movedIndex[here],
+          edgePointIndex.get(key(here, next)),
+          facePointIndex[at],
+          edgePointIndex.get(key(prev, here)),
+        ]);
+      }
+    });
+    return { points: out, faces: newFaces };
+  }
+
+  /* ----------------------------------------------------------------- weld */
+
+  //! Merges vertices that sit within \p tolerance of each other by rounding them
+  //! into a grid and keeping the first of each cell. The neighbouring cells are
+  //! checked too, so two points either side of a cell wall still meet.
+  function weldMesh(mesh, tolerance, dropDegenerate) {
+    const size = Math.max(1e-9, tolerance);
+    const cells = new Map();
+    const remap = new Array(mesh.points.length);
+    const points = [];
+
+    mesh.points.forEach((p, i) => {
+      const c = p.map(v => Math.floor(v / size));
+      let found = -1;
+      for (let dx = -1; dx <= 1 && found < 0; dx++)
+        for (let dy = -1; dy <= 1 && found < 0; dy++)
+          for (let dz = -1; dz <= 1 && found < 0; dz++) {
+            const bucket = cells.get((c[0] + dx) + "," + (c[1] + dy) + "," + (c[2] + dz));
+            if (!bucket) continue;
+            for (const candidate of bucket)
+              if (length(vsub(points[candidate], p)) <= tolerance) { found = candidate; break; }
+          }
+      if (found < 0) {
+        points.push(p);
+        found = points.length - 1;
+        const k = c.join(",");
+        if (!cells.has(k)) cells.set(k, []);
+        cells.get(k).push(found);
+      }
+      remap[i] = found;
+    });
+
+    const faces = [];
+    for (const face of mesh.faces) {
+      // A run of the same vertex is one vertex now; a face left with fewer than
+      // three has collapsed.
+      const walked = [];
+      for (const i of face) {
+        const to = remap[i];
+        if (!walked.length || walked[walked.length - 1] !== to) walked.push(to);
+      }
+      while (walked.length > 1 && walked[0] === walked[walked.length - 1]) walked.pop();
+      if (walked.length >= 3 || !dropDegenerate) faces.push(walked);
+    }
+    return { points, faces: faces.filter(face => face.length >= 3),
+             merged: mesh.points.length - points.length,
+             dropped: mesh.faces.length - faces.filter(face => face.length >= 3).length };
+  }
+
+  /* ------------------------------------------------------------ hole fill */
+
+  //! Chains the open edges into loops and closes each one. A loop is walked by
+  //! following the open edge that leaves the vertex the last one arrived at, so
+  //! a hole with a pinch in it comes out as two loops rather than one bad face.
+  function fillHoles(mesh, maxEdges, fan) {
+    const { open } = edgeMap(mesh);
+    const leaving = new Map();
+    for (const [a, b] of open) {
+      if (!leaving.has(a)) leaving.set(a, []);
+      leaving.get(a).push(b);
+    }
+    const points = mesh.points.slice();
+    const faces = mesh.faces.slice();
+    const walked = new Set();
+    let filled = 0, skipped = 0;
+
+    for (const [start] of leaving) {
+      let here = start;
+      const loop = [];
+      while (leaving.has(here)) {
+        const next = (leaving.get(here) || []).find(to => !walked.has(here + "," + to));
+        if (next === undefined) break;
+        walked.add(here + "," + next);
+        loop.push(here);
+        here = next;
+        if (here === start) break;
+        if (loop.length > maxEdges) break;
+      }
+      if (loop.length < 3 || here !== start) { if (loop.length) skipped++; continue; }
+      if (loop.length > maxEdges) { skipped++; continue; }
+
+      // The loop runs the way the open edges do, so the patch faces the other
+      // way - reversed, it agrees with the faces around it.
+      const ring = loop.slice().reverse();
+      if (fan && ring.length > 4) {
+        points.push(centroid(ring.map(i => points[i])));
+        const middle = points.length - 1;
+        for (let i = 0; i < ring.length; i++)
+          faces.push([middle, ring[i], ring[(i + 1) % ring.length]]);
+      } else {
+        faces.push(ring);
+      }
+      filled++;
+    }
+    return { points, faces, filled, skipped };
+  }
+
+  /* --------------------------------------------------------- mesh sources */
+
+  //! A box as a cage of quads. Each face is a grid, and the grids share their
+  //! edges, so the box welds to itself without being welded.
+  function boxMesh(dx, dy, dz, segX, segY, segZ, place) {
+    const points = [];
+    const index = new Map();
+    const at = (i, j, k) => {
+      const key = i + "," + j + "," + k;
+      if (!index.has(key)) {
+        points.push(place([dx * i / segX, dy * j / segY, dz * k / segZ]));
+        index.set(key, points.length - 1);
+      }
+      return index.get(key);
+    };
+    const faces = [];
+    const quad = (a, b, c, d) => faces.push([a, b, c, d]);
+    for (let i = 0; i < segX; i++) for (let j = 0; j < segY; j++) {
+      quad(at(i, j, 0), at(i, j + 1, 0), at(i + 1, j + 1, 0), at(i + 1, j, 0));
+      quad(at(i, j, segZ), at(i + 1, j, segZ), at(i + 1, j + 1, segZ), at(i, j + 1, segZ));
+    }
+    for (let i = 0; i < segX; i++) for (let k = 0; k < segZ; k++) {
+      quad(at(i, 0, k), at(i + 1, 0, k), at(i + 1, 0, k + 1), at(i, 0, k + 1));
+      quad(at(i, segY, k), at(i, segY, k + 1), at(i + 1, segY, k + 1), at(i + 1, segY, k));
+    }
+    for (let j = 0; j < segY; j++) for (let k = 0; k < segZ; k++) {
+      quad(at(0, j, k), at(0, j, k + 1), at(0, j + 1, k + 1), at(0, j + 1, k));
+      quad(at(segX, j, k), at(segX, j + 1, k), at(segX, j + 1, k + 1), at(segX, j, k + 1));
+    }
+    return { points, faces };
+  }
+
+  //! The axis system a mesh source is laid out on: the plane gives the
+  //! orientation, the point the position, and the same fallback as everywhere
+  //! else when either is missing.
+  function meshFrame(originFeature, planeFeature) {
+    const at = readPoint(originFeature) || [0, 0, 0];
+    const axis = planeAxis(planeFeature);
+    if (!axis) return p => vadd(at, p);
+    const o = axis.Location(), z = axis.Direction(), x = axis.XDirection(), y = axis.YDirection();
+    const O = [o.X(), o.Y(), o.Z()], X = [x.X(), x.Y(), x.Z()];
+    const Y = [y.X(), y.Y(), y.Z()], Z = [z.X(), z.Y(), z.Z()];
+    // The plane orients; the point positions, measured from the plane's origin.
+    const shift = originFeature ? vsub(at, O) : [0, 0, 0];
+    return p => vadd(vadd(O, shift),
+      vadd(vadd(vmul(X, p[0]), vmul(Y, p[1])), vmul(Z, p[2])));
+  }
+
+  builders.MeshBox = {
+    precondition: f => {
+      for (const key of ["dx", "dy", "dz"])
+        if (F.real(f, key, 120) <= CONFUSION) return "every side must be longer than nothing";
+      return null;
+    },
+    build: f => {
+      const seg = key => Math.max(1, Math.round(F.real(f, key, 1)));
+      const place = meshFrame(F.reference(f, "origin"), F.reference(f, "plane"));
+      const mesh = boxMesh(F.real(f, "dx", 120), F.real(f, "dy", 120), F.real(f, "dz", 120),
+                           seg("segX"), seg("segY"), seg("segZ"), place);
+      return { data: packMesh(checkMesh(mesh, "box")) };
+    },
+  };
+
+  builders.MeshGrid = {
+    precondition: f => {
+      if (F.real(f, "width", 400) <= CONFUSION || F.real(f, "depth", 400) <= CONFUSION)
+        return "the grid must have a size";
+      return null;
+    },
+    build: f => {
+      const cols = Math.max(1, Math.round(F.real(f, "cols", 6)));
+      const rows = Math.max(1, Math.round(F.real(f, "rows", 6)));
+      const w = F.real(f, "width", 400), d = F.real(f, "depth", 400);
+      const place = meshFrame(null, F.reference(f, "plane"));
+      const points = [], faces = [];
+      for (let j = 0; j <= rows; j++)
+        for (let i = 0; i <= cols; i++)
+          points.push(place([-w / 2 + w * i / cols, -d / 2 + d * j / rows, 0]));
+      const at = (i, j) => j * (cols + 1) + i;
+      for (let j = 0; j < rows; j++)
+        for (let i = 0; i < cols; i++)
+          faces.push([at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]);
+      return { data: packMesh(checkMesh({ points, faces }, "grid")) };
+    },
+  };
+
+  builders.MeshFromShape = {
+    precondition: f => {
+      const source = F.reference(f, "shape");
+      if (!source) return "nothing is wired in to tessellate";
+      if (!F.shape(source)) return F.name(source) + " has not been built";
+      if (countSubShapes(F.shape(source), FACE) === 0)
+        return F.name(source) + " has no faces to tessellate";
+      return null;
+    },
+    //! OpenCascade tessellates per face and gives every face its own copy of
+    //! the shared vertices, so the result is a pile of triangles rather than a
+    //! mesh. Welding is what turns it into one, and is on by default.
+    build: f => {
+      const shape = F.shape(F.reference(f, "shape"));
+      const quality = Math.max(0.05, F.real(f, "quality", 1));
+      const stream = tessellate(shape, deflectionFor(shape) / quality);
+      if (!stream.positions || !stream.index || !stream.index.length)
+        throw new Error("the tessellation came back empty");
+      const points = [];
+      for (let i = 0; i + 2 < stream.positions.length; i += 3)
+        points.push([stream.positions[i], stream.positions[i + 1], stream.positions[i + 2]]);
+      const faces = [];
+      for (let i = 0; i + 2 < stream.index.length; i += 3)
+        faces.push([stream.index[i], stream.index[i + 1], stream.index[i + 2]]);
+      let mesh = { points, faces };
+      if (Feature_choice(f, "weld") === 0) {
+        const box = extents(shape);
+        mesh = weldMesh(mesh, Math.max(1e-4, (box ? box.diagonal : 100) * 1e-5), true);
+      }
+      return { data: packMesh(checkMesh(mesh, "tessellation")) };
+    },
+  };
+
+  /* ----------------------------------------------------- mesh operations */
+
+  builders.EditMesh = {
+    precondition: f => F.reference(f, "mesh") ? null : "no mesh to edit",
+    //! The hand edits, applied. An offset for a vertex that is no longer there -
+    //! because something upstream changed the topology - is left alone rather
+    //! than thrown away, so putting the upstream back puts the edit back.
+    build: f => {
+      const mesh = meshFrom(F.reference(f, "mesh"), "mesh");
+      const moves = F.edits(f, "moves");
+      const scale = F.real(f, "scale", 1);
+      const points = mesh.points.map(p => p.slice());
+      let applied = 0, stale = 0;
+      for (const [index, offset] of Object.entries(moves)) {
+        const at = Number(index);
+        if (!(at >= 0 && at < points.length)) { stale++; continue; }
+        points[at] = vadd(points[at], vmul(offset, scale));
+        applied++;
+      }
+      if (stale && !applied)
+        throw new Error(stale + " moved vertices are no longer in this mesh - "
+          + "the mesh upstream has " + points.length);
+      return { data: packMesh(checkMesh({ points, faces: mesh.faces }, "mesh")) };
+    },
+  };
+
+  builders.Subdivide = {
+    precondition: f => {
+      const source = F.reference(f, "mesh");
+      if (!source) return "no mesh to subdivide";
+      if (Feature_choice(f, "on") === 1) return null;
+      const data = F.data(source);
+      const faces = data ? meshFaces(data).length : 0;
+      const levels = Math.max(1, Math.round(F.real(f, "levels", 2)));
+      // Every level multiplies the face count by the number of corners. Four
+      // levels of a thousand quads is a quarter of a million faces, and the
+      // level after that is where the tab stops responding.
+      const after = faces * Math.pow(4, levels);
+      if (after > 150000)
+        return "level " + levels + " of this mesh would be about "
+          + Math.round(after / 1000) + "k faces; use fewer levels or a coarser cage";
+      return null;
+    },
+    build: f => {
+      let mesh = meshFrom(F.reference(f, "mesh"), "mesh");
+      if (Feature_choice(f, "on") === 0) {
+        const levels = Math.max(1, Math.round(F.real(f, "levels", 2)));
+        const sharp = Feature_choice(f, "boundary") === 0;
+        for (let i = 0; i < levels; i++) mesh = catmullClark(mesh, sharp);
+      }
+      const data = packMesh(checkMesh(mesh, "mesh"));
+      data.smooth = Feature_choice(f, "shading") === 0;
+      return { data };
+    },
+  };
+
+  builders.Weld = {
+    //! The same rule the fillet radius follows: judge it against the geometry
+    //! before the operation runs, not by whether the result looks empty
+    //! afterwards. A tolerance past a quarter of the mesh is never a weld.
+    precondition: f => {
+      const source = F.reference(f, "mesh");
+      if (!source) return "no mesh to weld";
+      const data = F.data(source);
+      if (!data || data.kind !== "mesh") return F.name(source) + " is not a mesh";
+      const points = F.triples(data);
+      if (!points.length) return F.name(source) + " has no vertices";
+      const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      for (const p of points)
+        for (let i = 0; i < 3; i++) { lo[i] = Math.min(lo[i], p[i]); hi[i] = Math.max(hi[i], p[i]); }
+      const diagonal = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+      const tolerance = F.real(f, "tolerance", 0.05);
+      if (diagonal > CONFUSION && tolerance >= diagonal / 4)
+        return "welding at " + trim(tolerance) + " mm would take most of a mesh only "
+          + trim(diagonal) + " mm across; the limit here is " + trim(diagonal / 4) + " mm";
+      return null;
+    },
+    build: f => {
+      const mesh = meshFrom(F.reference(f, "mesh"), "mesh");
+      const welded = weldMesh(mesh, Math.max(1e-6, F.real(f, "tolerance", 0.05)),
+                              Feature_choice(f, "degenerate") === 0);
+      if (!welded.faces.length && mesh.faces.length)
+        throw new Error("that distance welds the whole mesh into nothing");
+      return { data: packMesh(checkMesh(welded, "mesh")) };
+    },
+  };
+
+  builders.FillHoles = {
+    precondition: f => F.reference(f, "mesh") ? null : "no mesh to fill",
+    build: f => {
+      const mesh = meshFrom(F.reference(f, "mesh"), "mesh");
+      const filled = fillHoles(mesh, Math.max(3, Math.round(F.real(f, "maxEdges", 64))),
+                               Feature_choice(f, "fill") === 1);
+      return { data: packMesh(checkMesh(filled, "mesh")) };
+    },
+  };
+
+  builders.MeshTransform = {
+    precondition: f => {
+      if (!F.reference(f, "mesh")) return "no mesh to move";
+      if (Math.abs(F.real(f, "scale", 1)) < 1e-6) return "a scale of zero leaves nothing";
+      return null;
+    },
+    build: f => {
+      const mesh = meshFrom(F.reference(f, "mesh"), "mesh");
+      const scale = F.real(f, "scale", 1);
+      const move = [F.real(f, "mx", 0), F.real(f, "my", 0), F.real(f, "mz", 0)];
+      const [rx, ry, rz] = ["rx", "ry", "rz"].map(k => F.real(f, k, 0) * Math.PI / 180);
+      const turn = (p, angle, i, j) => {
+        const c = Math.cos(angle), s = Math.sin(angle);
+        const out = p.slice();
+        out[i] = p[i] * c - p[j] * s;
+        out[j] = p[i] * s + p[j] * c;
+        return out;
+      };
+      // About the mesh's own middle, so turning it does not fling it away.
+      const middle = centroid(mesh.points);
+      const points = mesh.points.map(p => {
+        let q = vmul(vsub(p, middle), scale);
+        q = turn(q, rx, 1, 2);
+        q = turn(q, ry, 2, 0);
+        q = turn(q, rz, 0, 1);
+        return vadd(vadd(q, middle), move);
+      });
+      return { data: packMesh(checkMesh({ points, faces: mesh.faces }, "mesh")) };
+    },
+  };
+
+  builders.MeshDisplace = {
+    precondition: f => {
+      if (!F.reference(f, "mesh")) return "no mesh to displace";
+      const source = F.code(f, "formula", "").trim();
+      if (!source) return "there is no formula";
+      try { compileDisplacement(source); } catch (err) { return err.message; }
+      return null;
+    },
+    build: f => {
+      const mesh = meshFrom(F.reference(f, "mesh"), "mesh");
+      const evaluate = compileDisplacement(F.code(f, "formula", "").trim());
+      const amount = F.real(f, "amount", 20);
+      const along = Feature_choice(f, "along");
+      const normals = along === 0 ? vertexNormals(mesh) : null;
+      const axis = [null, [1, 0, 0], [0, 1, 0], [0, 0, 1]][along] || [0, 0, 1];
+      const n = mesh.points.length;
+      const points = mesh.points.map((p, i) => {
+        const k = evaluate(p[0], p[1], p[2], i, n);
+        if (!Number.isFinite(k))
+          throw new Error("the formula gave " + k + " at vertex " + i);
+        return vadd(p, vmul(normals ? normals[i] : axis, k * amount));
+      });
+      return { data: packMesh(checkMesh({ points, faces: mesh.faces }, "mesh")) };
+    },
+  };
+
+  //! One expression over a vertex's own position, and where it sits in the list.
+  //! Compiled the same guarded way the written features are.
+  const displacementCache = new Map();
+  function compileDisplacement(source) {
+    if (displacementCache.has(source)) return displacementCache.get(source);
+    let fn;
+    try {
+      fn = new Function("x", "y", "z", "i", "n", "Math",
+        '"use strict"; return (' + source + ");");
+    } catch (err) {
+      throw new Error("the formula will not compile: " + (err.message || err));
+    }
+    const wrapped = (x, y, z, i, n) => {
+      const v = fn(x, y, z, i, n, Math);
+      if (typeof v !== "number") throw new Error("the formula gave " + typeof v + ", not a number");
+      return v;
+    };
+    if (displacementCache.size > 60) displacementCache.clear();
+    displacementCache.set(source, wrapped);
+    return wrapped;
+  }
+
+  //! The same seven quantities off a polymesh. Length is the total length of
+  //! its edges, area the sum of its polygons, volume the divergence-theorem
+  //! answer - which only means something on a mesh that is closed.
+  function measureMesh(f, data) {
+    const mesh = { points: F.triples(data), faces: meshFaces(data) };
+    const quantity = Feature_choice(f, "quantity");
+    if (quantity === 0) {
+      let total = 0;
+      const seen = new Set();
+      for (const face of mesh.faces)
+        for (let i = 0; i < face.length; i++) {
+          const a = face[i], b = face[(i + 1) % face.length];
+          const key = a < b ? a + "," + b : b + "," + a;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          total += length(vsub(mesh.points[a], mesh.points[b]));
+        }
+      return total;
+    }
+    if (quantity === 1) return mesh.faces.reduce((n, face) => n + faceArea(mesh.points, face), 0);
+    if (quantity === 2) return meshVolume(mesh);
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (const p of mesh.points)
+      for (let i = 0; i < 3; i++) { lo[i] = Math.min(lo[i], p[i]); hi[i] = Math.max(hi[i], p[i]); }
+    const size = [0, 1, 2].map(i => (Number.isFinite(hi[i] - lo[i]) ? hi[i] - lo[i] : 0));
+    return quantity === 6 ? Math.hypot(...size) : size[quantity - 3];
+  }
 
   /* --------------------------------------------------------- operations */
 
@@ -1259,6 +1898,54 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   const readInts = (ptr, size) =>
     size ? Array.from(new Uint32Array(oc.wasmMemory.buffer, ptr, size)) : [];
 
+  //! Polymesh in, the same vertex stream out. Faces of any number of sides are
+  //! fanned into triangles for drawing only - the mesh itself keeps its n-gons,
+  //! and every edge of every polygon is sent as a line so the cage reads as the
+  //! cage rather than as the triangles it was drawn with.
+  //!
+  //! The unsplit vertices go too, under `vertices`: those are the ones a handle
+  //! can be put on, and their positions in that list are the indices a hand edit
+  //! is written against.
+  function streamMesh(data) {
+    const points = F.triples(data);
+    const faces = meshFaces(data);
+    const out = { shape: "mesh", vertices: points.flat(), faceCount: faces.length };
+
+    const smooth = data.smooth === true;
+    const normals = smooth ? vertexNormals({ points, faces }) : null;
+    const positions = [], normalOut = [], index = [];
+    for (const face of faces) {
+      const n = smooth ? null : faceNormal(points, face);
+      // Flat shading needs its own copy of each corner; smooth shading could
+      // share them, but a fan is written the same way either way.
+      const base = positions.length / 3;
+      for (const at of face) {
+        positions.push(points[at][0], points[at][1], points[at][2]);
+        const vn = smooth ? normals[at] : n;
+        normalOut.push(vn[0], vn[1], vn[2]);
+      }
+      for (let i = 1; i + 1 < face.length; i++) index.push(base, base + i, base + i + 1);
+    }
+    out.positions = positions;
+    out.normals = normalOut;
+    out.index = index;
+    out.triangles = index.length / 3;
+
+    const seen = new Set();
+    const edges = [];
+    for (const face of faces)
+      for (let i = 0; i < face.length; i++) {
+        const a = face[i], b = face[(i + 1) % face.length];
+        const key = a < b ? a + "," + b : b + "," + a;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        edges.push(points[a][0], points[a][1], points[a][2],
+                   points[b][0], points[b][1], points[b][2]);
+      }
+    out.edges = edges;
+    return out;
+  }
+
   //! B-Rep in, vertex stream out - the whole contract with the viewer.
   //! The enum arrives as "TopAbs_SOLID" and the native kernel reports "solid",
   //! so a client reads one vocabulary whichever kernel answered.
@@ -1331,6 +2018,20 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
 
     //! Editing a script is an edit of the document, undone and redone and saved
     //! like any other.
+    //! One vertex, moved. The offset lands on whichever argument of the feature
+    //! holds hand edits, so a feature that has none refuses it by name.
+    async moveVertex(id, index, offset) {
+      const f = doc.find(id);
+      if (!f) throw new Error("no feature '" + id + "'");
+      const arg = F.spec(f).args.find(a => a.kind === "edits");
+      if (!arg) throw new Error(F.name(f) + " does not hold hand edits - put an "
+        + "EditMesh after it and move the vertex there");
+      const zero = !offset || offset.every(v => Math.abs(v) < 1e-9);
+      F.moveVertex(f, arg.key, index, zero ? null : offset);
+      doc.log.touch(F.argLabel(f, arg.key, true));
+      return state(doc.recompute(false));
+    },
+
     async setCode(id, key, text) {
       const f = doc.find(id);
       if (!f) throw new Error("no feature '" + id + "'");
@@ -1401,7 +2102,19 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         // exchange file.
         if (shape && countSubShapes(shape, SOLID) > 0) parts.push({ f, shape });
       }
-      if (!parts.length) throw new Error("there is nothing solid in the scene to export");
+      if (!parts.length) {
+        // A polymesh is not a solid and STEP does not carry one. Say which
+        // rather than "nothing to export" when the scene is plainly full.
+        const meshes = doc.features().filter(f => {
+          const data = F.data(f);
+          return F.visible(f) && data && data.kind === "mesh";
+        });
+        if (meshes.length)
+          throw new Error("STEP carries solids, and everything visible here is a polymesh - "
+            + meshes.map(F.name).join(", ") + ". Put a MeshFromShape the other way round, or "
+            + "export the mesh from the showroom instead.");
+        throw new Error("there is nothing solid in the scene to export");
+      }
 
       const writer = new oc.STEPControl_Writer();
       if (oc.Interface_Static)
@@ -1433,15 +2146,18 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         if (!f) continue;
         const spec = F.spec(f);
         const shape = F.shape(f);
+        const data = F.data(f);
         let mesh = {};
         try {
-          mesh = tessellate(shape, 0);
+          // A polymesh is drawn from its own polygons; there is no B-Rep under
+          // it to tessellate.
+          mesh = data && data.kind === "mesh" ? streamMesh(data) : tessellate(shape, 0);
         } catch (err) {
           mesh = { meshError: describeError(err) };
         }
         features.push({
           id, type: spec.type, name: F.name(f), revision: F.revision(f),
-          built: !!shape, visible: F.visible(f), ...mesh,
+          built: !!shape || !!(data && data.kind === "mesh"), visible: F.visible(f), ...mesh,
         });
       }
       return { ok: true, features };

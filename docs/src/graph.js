@@ -22,7 +22,7 @@ const GRAPH_CSS = `
   --g-ink: #15212b; --g-ink-2: #4a5b69; --g-ink-3: #7d8d99;
   --g-accent: #0a6cb0; --g-accent-soft: rgba(10,108,176,.13); --g-accent-ink: #fff;
   --g-datum: #b07408; --g-good: #1c7a52; --g-bad: #bb3a2c; --g-bad-soft: rgba(187,58,44,.13);
-  --g-wire: #8ea0ad; --g-num: #7a56c4; --g-crv: #1c7a52;
+  --g-wire: #8ea0ad; --g-num: #7a56c4; --g-crv: #1c7a52; --g-msh: #b06a13;
   --g-shadow: 0 1px 2px rgba(16,28,38,.10), 0 8px 26px rgba(16,28,38,.13);
   --g-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --g-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -34,7 +34,7 @@ const GRAPH_CSS = `
   --g-ink: #e6eef4; --g-ink-2: #a6b6c2; --g-ink-3: #74858f;
   --g-accent: #4aa8ea; --g-accent-soft: rgba(74,168,234,.20); --g-accent-ink: #06131d;
   --g-datum: #e0a33c; --g-good: #4fb98a; --g-bad: #e2705f; --g-bad-soft: rgba(226,112,95,.17);
-  --g-wire: #4d616f; --g-num: #a98cf0; --g-crv: #4fb98a;
+  --g-wire: #4d616f; --g-num: #a98cf0; --g-crv: #4fb98a; --g-msh: #e0a33c;
   --g-shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px rgba(0,0,0,.45);
 }
 .g-root, .g-root * { box-sizing: border-box; }
@@ -179,11 +179,13 @@ const GRAPH_CSS = `
 .g-port[data-kind="number"] { background: var(--g-num); }
 .g-port[data-kind="point"], .g-port[data-kind="vector"] { background: var(--g-datum); }
 .g-port[data-kind="curve"] { background: var(--g-crv); }
+.g-port[data-kind="mesh"] { background: var(--g-msh); }
 .g-port[data-kind="text"] { background: var(--g-ink-3); }
 .g-port.slack { background: transparent; border-color: var(--g-wire); }
 .g-wires path.number { stroke: var(--g-num); }
 .g-wires path.point, .g-wires path.vector { stroke: var(--g-datum); }
 .g-wires path.curve { stroke: var(--g-crv); }
+.g-wires path.mesh { stroke: var(--g-msh); }
 .g-port.hot { background: var(--g-good); transform: scale(1.35); }
 .g-port:hover { background: var(--g-accent); }
 .g-node .g-head .g-port.out { right: -7px; }
@@ -293,6 +295,13 @@ const gsvg = body => '<svg viewBox="0 0 16 16" aria-hidden="true">' + body + "</
 const gesc = s => String(s).replace(/[&<>"]/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const gnum = v => Math.round(v * 1e6) / 1e6;
+
+//! What a node shows it computed. A mesh already counts itself in its preview,
+//! so it is not counted twice.
+const gDataLine = data => data.kind === "mesh"
+  ? gesc(data.preview)
+  : '<span class="g-count">' + data.count + " " + gesc(data.kind) +
+    (data.count === 1 ? "" : "s") + " · </span>" + gesc(data.preview);
 
 const NODE_W = 216, NODE_W_DATUM = 190, COL_GAP = 92, ROW_GAP = 22;
 
@@ -850,6 +859,7 @@ export class GraphEditor {
       if (arg.kind === "code" || !this.applies(entry, arg)) continue;
       rows += arg.kind === "refs" ? (entry.lists[arg.key] || []).length + 1
             : arg.kind === "real" ? 2 : 1;
+      if (arg.kind === "edits") rows += 1;
     }
     return rows + (entry.params ? Math.min(entry.params.length, 7) + 1 : 0)
          + (entry.code !== undefined ? 1 : 0) + (entry.data ? 2 : 0);
@@ -902,6 +912,22 @@ export class GraphEditor {
       else body.appendChild(this.realRow(entry, arg, arg.key, entry.values[arg.key], ports));
     }
 
+    // Hand edits are a store, not a control: the node says how many there are
+    // and sends you to the viewport, where the handles live.
+    for (const arg of (spec ? spec.args : [])) {
+      if (arg.kind !== "edits") continue;
+      const moves = (entry.lists && entry.lists[arg.key]) || {};
+      const count = Object.keys(moves).length;
+      const strip = doc.createElement("div");
+      strip.className = "g-code";
+      strip.dataset.edits = arg.key;
+      strip.innerHTML = "<span>" + gesc(arg.label.toLowerCase()) + " · " +
+        (count || "none") + "</span><span>open ›</span>";
+      strip.title = "Open it in the viewport to drag a handle";
+      strip.addEventListener("click", () => this.openDefinition(entry.id));
+      body.appendChild(strip);
+    }
+
     if (entry.code !== undefined) {
       const strip = doc.createElement("div");
       strip.className = "g-code";
@@ -936,9 +962,7 @@ export class GraphEditor {
     const readout = doc.createElement("div");
     readout.className = "g-data";
     readout.hidden = !entry.data;
-    if (entry.data) readout.innerHTML = '<span class="g-count">' + entry.data.count + " " +
-      gesc(entry.data.kind) + (entry.data.count === 1 ? "" : "s") + " · </span>" +
-      gesc(entry.data.preview);
+    if (entry.data) readout.innerHTML = gDataLine(entry.data);
     readout.addEventListener("pointerdown", event => event.stopPropagation());
     el.appendChild(readout);
     record.readout = readout;
@@ -1137,11 +1161,15 @@ export class GraphEditor {
         port.classList.toggle("wired", !!target);
         port.classList.toggle("slack", !target);
       }
+      for (const strip of node.el.querySelectorAll("[data-edits]")) {
+        const moves = (entry.lists && entry.lists[strip.dataset.edits]) || {};
+        const count = Object.keys(moves).length;
+        strip.firstElementChild.textContent =
+          strip.firstElementChild.textContent.split(" · ")[0] + " · " + (count || "none");
+      }
       if (node.readout) {
         node.readout.hidden = !entry.data;
-        if (entry.data) node.readout.innerHTML = '<span class="g-count">' + entry.data.count +
-          " " + gesc(entry.data.kind) + (entry.data.count === 1 ? "" : "s") + " · </span>" +
-          gesc(entry.data.preview);
+        if (entry.data) node.readout.innerHTML = gDataLine(entry.data);
       }
     }
     this.drawWires();
