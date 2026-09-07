@@ -1,0 +1,115 @@
+{
+  "format": "ocaf-parametric-model",
+  "version": 1,
+  "name": "Hillside Town",
+  "units": "mm",
+  "features": [
+    {
+      "id": "PT1",
+      "type": "Point",
+      "name": "Site origin",
+      "args": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      }
+    },
+    {
+      "id": "VZ",
+      "type": "Vector",
+      "name": "Up",
+      "args": {
+        "dx": 0,
+        "dy": 0,
+        "dz": 1
+      }
+    },
+    {
+      "id": "PL1",
+      "type": "Plane",
+      "name": "Site plane",
+      "args": {
+        "origin": {
+          "ref": "PT1"
+        },
+        "normal": {
+          "ref": "VZ"
+        },
+        "size": 400
+      }
+    },
+    {
+      "id": "SC1",
+      "type": "Script",
+      "name": "Hillside Town",
+      "args": {
+        "code": "({\n  params: [\n    /* ------------------------------------------------------------- the hill */\n    { key: \"siteX\",     label: \"Site width\",          def: 4200, min: 1500, max: 12000, step: 100 },\n    { key: \"siteY\",     label: \"Site depth\",          def: 3000, min: 1000, max: 9000,  step: 100 },\n    { key: \"peak\",      label: \"Hill height\",         def: 1150, min: 100,  max: 4000,  step: 25 },\n    { key: \"crest\",     label: \"Crest across\",        def: 0.55, min: 0,    max: 1,     step: 0.01, unit: \"\" },\n    { key: \"shoulder\",  label: \"Crest width\",         def: 0.46, min: 0.15, max: 1.2,   step: 0.01, unit: \"\" },\n    { key: \"fold\",      label: \"Side folds\",          def: 0.16, min: 0,    max: 0.6,   step: 0.01, unit: \"\" },\n    { key: \"sections\",  label: \"Terrain sections\",    def: 16,   min: 4,    max: 36,    step: 1, unit: \"\" },\n    { key: \"samples\",   label: \"Points per section\",  def: 26,   min: 6,    max: 60,    step: 2, unit: \"\" },\n    { key: \"ground\",    label: \"Ground\",              options: [\"On\", \"Off\"], def: 0 },\n\n    /* ------------------------------------------------------------- the plan */\n    { key: \"rows\",      label: \"Terrace rows\",        def: 2,    min: 1,    max: 3,     step: 1, unit: \"\" },\n    { key: \"bay\",       label: \"Bay spacing\",         def: 1150, min: 300,  max: 4000,  step: 25 },\n    { key: \"setback\",   label: \"Front set-back\",      def: 620,  min: 0,    max: 3000,  step: 20 },\n    { key: \"rowStep\",   label: \"Row set-back\",        def: 900,  min: 150,  max: 3000,  step: 20 },\n\n    /* ------------------------------------------------------------ the villa */\n    { key: \"villaX\",    label: \"Villa depth\",         def: 330,  min: 120,  max: 1200,  step: 10 },\n    { key: \"villaY\",    label: \"Villa width\",         def: 460,  min: 120,  max: 1600,  step: 10 },\n    { key: \"storey\",    label: \"Floor to floor\",      def: 165,  min: 80,   max: 400,   step: 5 },\n    { key: \"storeys\",   label: \"Storeys\",             def: 2,    min: 1,    max: 4,     step: 1, unit: \"\" },\n    { key: \"eaves\",     label: \"Slab overhang\",       def: 42,   min: 0,    max: 200,   step: 2 },\n    { key: \"roofRise\",  label: \"Roof rise\",           def: 95,   min: 0,    max: 400,   step: 5 },\n    { key: \"mullion\",   label: \"Mullion spacing\",     def: 62,   min: 20,   max: 400,   step: 2 },\n    { key: \"deck\",      label: \"Deck margin\",         def: 250,  min: 40,   max: 1200,  step: 10 },\n    { key: \"pool\",      label: \"Pool length\",         def: 0.62, min: 0,    max: 0.92,  step: 0.01, unit: \"\" },\n    { key: \"rail\",      label: \"Balustrade height\",   def: 56,   min: 20,   max: 160,   step: 1 },\n    { key: \"postBay\",   label: \"Post spacing\",        def: 78,   min: 25,   max: 400,   step: 2 },\n\n    /* --------------------------------------------------- each villa, by hand\n       Turn is added to the rule, so zero leaves the villa facing straight down\n       the slope. Push slides it along that same line in plan, and it climbs or\n       drops because the hill is asked again where it lands.                  */\n    { key: \"turn1\", label: \"Villa 1 · turn\", def:   0, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push1\", label: \"Villa 1 · push\", def:   0, min: -1500, max: 1500, step: 10 },\n    { key: \"turn2\", label: \"Villa 2 · turn\", def:  14, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push2\", label: \"Villa 2 · push\", def: 120, min: -1500, max: 1500, step: 10 },\n    { key: \"turn3\", label: \"Villa 3 · turn\", def: -12, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push3\", label: \"Villa 3 · push\", def:   0, min: -1500, max: 1500, step: 10 },\n    { key: \"turn4\", label: \"Villa 4 · turn\", def:  22, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push4\", label: \"Villa 4 · push\", def: -90, min: -1500, max: 1500, step: 10 },\n    { key: \"turn5\", label: \"Villa 5 · turn\", def:  -8, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push5\", label: \"Villa 5 · push\", def:   0, min: -1500, max: 1500, step: 10 },\n    { key: \"turn6\", label: \"Villa 6 · turn\", def:  18, min: -180, max: 180, step: 1, unit: \"°\" },\n    { key: \"push6\", label: \"Villa 6 · push\", def: 150, min: -1500, max: 1500, step: 10 },\n  ],\n\n  build(p, k) {\n    /* ======================================================================\n       A hillside town, in four moves.\n\n         1  the hill      one function, z = H(x, y). Nothing else on this site\n                          holds a height; everything asks it.\n         2  the ground    that function lofted into a solid, section by section\n         3  the plan      six centre points drawn flat on the site, in 2D, with\n                          no idea that there is a hill at all\n         4  the town      each centre dropped onto the hill, turned to face\n                          downhill, and a villa put there\n\n       Which is how a hillside is actually laid out: you draw the plan on the\n       survey, and the survey tells you what happens to it.\n       ====================================================================== */\n\n    const VILLAS = 6;\n    const smooth = t => t * t * (3 - 2 * t);\n    const clamp = (t, lo, hi) => Math.max(lo, Math.min(hi, t));\n\n    /* ---------------------------------------------------------- 1 · the hill\n\n       x runs across the slope, y up it. The shore is at y = 0 and the ridge at\n       the back; a gaussian across x gives the crest its shoulder, and a cosine\n       folds the flanks into spurs and gullies.                              */\n\n    const hill = (x, y) => {\n      const u = clamp(x / p.siteX, 0, 1), v = clamp(y / p.siteY, 0, 1);\n      const rise = smooth(v);\n      const along = Math.exp(-Math.pow((u - p.crest) / p.shoulder, 2));\n      const folds = Math.cos(u * Math.PI * 4) * p.fold * v;\n      return p.peak * rise * (0.30 + 0.70 * along + folds);\n    };\n\n    //! Which way the water runs, in degrees. A villa faces this by default,\n    //! and a per-villa turn is added to it.\n    const aspect = (x, y) => {\n      const e = Math.max(1, p.siteX * 0.004);\n      const dx = hill(x + e, y) - hill(x - e, y);\n      const dy = hill(x, y + e) - hill(x, y - e);\n      if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return -90;\n      return Math.atan2(-dy, -dx) * 180 / Math.PI;\n    };\n\n    /* -------------------------------------------------------- 2 · the ground\n\n       One closed section per station up the slope: the ground line across the\n       site, then straight down and back, so the profile encloses something.\n       Lofted through, they are a solid with a landscape on top.             */\n\n    const parts = [];\n    const base = p.peak * 0.12 + 60;\n    const samples = Math.max(6, Math.round(p.samples));\n    const sections = Math.max(3, Math.round(p.sections));\n\n    if (p.ground === 0) {\n      const profiles = [];\n      for (let j = 0; j <= sections; j++) {\n        const y = p.siteY * j / sections;\n        const line = [];\n        for (let i = 0; i <= samples; i++) {\n          const x = p.siteX * i / samples;\n          line.push([x, y, hill(x, y)]);\n        }\n        line.push([p.siteX, y, -base], [0, y, -base]);\n        profiles.push(k.polyline(line, { closed: true }));\n      }\n      parts.push(k.loft(profiles, { solid: true, ruled: true }));\n    }\n\n    /* ---------------------------------------------------------- 3 · the plan\n\n       Flat. Two dimensions. The villas sit on terrace rows set back up the\n       slope, evenly spaced along each row, centred on the site. This is the\n       only place the layout is decided, and it never mentions z.            */\n\n    const rows = clamp(Math.round(p.rows), 1, 3);\n    const perRow = Math.ceil(VILLAS / rows);\n    const plan = i => {\n      const row = Math.floor(i / perRow), col = i % perRow;\n      const x = p.siteX / 2 + (col - (perRow - 1) / 2) * p.bay;\n      const y = p.setback + row * p.rowStep;\n      return [x, y];\n    };\n\n    /* --------------------------------------------------------- 4 · the villa\n\n       Built once, at the origin, facing +X. Six copies are placed by moving\n       and turning that one shape - the same trick the Array feature uses, and\n       the reason six villas cost about what one does.                       */\n\n    const deckX = p.villaX + 2 * p.deck;\n    const deckY = p.villaY + 2 * p.deck;\n    const box = (dx, dy, dz, at) =>\n      k.box(dx, dy, dz, { at, axis: [0, 0, 1], xdir: [1, 0, 0] });\n\n    const villa = (() => {\n      const bits = [];\n\n      // The terrace, on a plinth that reaches down into the hill whatever the\n      // slope does under it. The pool is cut out of the downhill margin.\n      const plinth = Math.max(260, p.peak * 0.6);\n      let terrace = box(deckX, deckY, plinth, [-deckX / 2, -deckY / 2, -plinth]);\n      if (p.pool > 0.03) {\n        const poolY = deckY * p.pool, poolX = p.deck * 0.6, poolD = Math.max(20, p.deck * 0.3);\n        terrace = k.cut(terrace, box(poolX, poolY, poolD * 3,\n          [p.villaX / 2 + (p.deck - poolX) / 2, -poolY / 2, -poolD]));\n      }\n      bits.push(terrace);\n\n      // Slabs and glass. The slab oversails on every side, the glass is set\n      // back behind its edge, and the mullions run up the view face.\n      const levels = clamp(Math.round(p.storeys), 1, 4);\n      const slab = Math.max(6, p.storey * 0.085);\n      const overX = p.villaX + 2 * p.eaves, overY = p.villaY + 2 * p.eaves;\n      const inset = slab * 0.6;\n      const glassX = p.villaX - 2 * inset, glassY = p.villaY - 2 * inset;\n      const bays = Math.max(1, Math.round(glassY / p.mullion));\n      const post = Math.max(3, p.rail * 0.085);\n\n      for (let i = 0; i <= levels; i++)\n        bits.push(box(overX, overY, slab, [-overX / 2, -overY / 2, i * p.storey]));\n\n      for (let i = 0; i < levels; i++) {\n        const z = i * p.storey + slab;\n        const h = p.storey - slab;\n        bits.push(box(glassX, glassY, h, [-glassX / 2, -glassY / 2, z]));\n        // Mullions up the view face and both flanks - the three sides that are\n        // glass. The back is where the hill is.\n        const rib = post * 1.3;\n        for (let m = 0; m <= bays; m++) {\n          const y = -glassY / 2 + glassY * m / bays;\n          bits.push(box(rib, rib, h, [glassX / 2 - post, y - rib / 2, z]));\n        }\n        const deep = Math.max(1, Math.round(glassX / p.mullion));\n        for (let m = 0; m <= deep; m++) {\n          const x = -glassX / 2 + glassX * m / deep;\n          bits.push(box(rib, rib, h, [x - rib / 2, glassY / 2 - post, z]));\n          bits.push(box(rib, rib, h, [x - rib / 2, -glassY / 2 + post - rib, z]));\n        }\n      }\n\n      // The roof: the eaves rectangle lofted up to a short ridge, so it hips\n      // in on all four sides. Rise to nothing and it is a flat roof instead.\n      const top = levels * p.storey + slab;\n      if (p.roofRise > 2) {\n        bits.push(k.loft([\n          k.rectangle(overX, overY, { at: [0, 0, top], axis: [0, 0, 1], xdir: [1, 0, 0] }),\n          k.rectangle(overX * 0.16, overY * 0.66,\n            { at: [0, 0, top + p.roofRise], axis: [0, 0, 1], xdir: [1, 0, 0] }),\n        ], { solid: true, ruled: true }));\n      } else {\n        bits.push(box(overX, overY, slab, [-overX / 2, -overY / 2, top]));\n      }\n\n      // Balustrade round three sides of the deck: the view, and both flanks.\n      // The uphill side is where you arrive, so it is left open.\n      const runs = [\n        [[deckX / 2 - post, -deckY / 2 + post], [deckX / 2 - post, deckY / 2 - post]],\n        [[-deckX / 2 + post, deckY / 2 - post], [deckX / 2 - post, deckY / 2 - post]],\n        [[-deckX / 2 + post, -deckY / 2 + post], [deckX / 2 - post, -deckY / 2 + post]],\n      ];\n      for (const [a, b] of runs) {\n        const span = Math.hypot(b[0] - a[0], b[1] - a[1]);\n        const n = Math.max(1, Math.round(span / p.postBay));\n        for (let i = 0; i <= n; i++) {\n          const t = i / n;\n          const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;\n          bits.push(box(post, post, p.rail, [x - post / 2, y - post / 2, 0]));\n        }\n        bits.push(k.beam([a[0], a[1], p.rail], [b[0], b[1], p.rail], post * 2.2, post * 1.1));\n      }\n\n      return k.compound(bits);\n    })();\n\n    /* ----------------------------------------------------------- the town\n\n       Each centre point, projected. The hill is asked for its height there and\n       for which way it falls; the villa is turned to face that, plus whatever\n       this one has been turned by hand; and push slides it along the same line\n       in plan, so a villa pushed downhill really does come down the hill.   */\n\n    for (let i = 0; i < VILLAS; i++) {\n      const [x0, y0] = plan(i);\n      const facing = aspect(x0, y0);\n      const rad = facing * Math.PI / 180;\n      const push = p[\"push\" + (i + 1)] || 0;\n      const x = clamp(x0 + Math.cos(rad) * push, deckX * 0.5, p.siteX - deckX * 0.5);\n      const y = clamp(y0 + Math.sin(rad) * push, deckY * 0.5, p.siteY - deckY * 0.5);\n      const turned = k.rotate(villa, facing + (p[\"turn\" + (i + 1)] || 0),\n                              { at: [0, 0, 0], axis: [0, 0, 1] });\n      parts.push(k.move(turned, [x, y, hill(x, y)]));\n    }\n\n    return k.compound(parts);\n  },\n})\n"
+      }
+    },
+    {
+      "id": "ME1",
+      "type": "Measure",
+      "name": "Across the site",
+      "args": {
+        "shape": {
+          "ref": "SC1"
+        },
+        "quantity": "Size X"
+      }
+    },
+    {
+      "id": "EX1",
+      "type": "Expression",
+      "name": "In metres",
+      "args": {
+        "a": {
+          "value": 1,
+          "from": "ME1"
+        },
+        "b": 1,
+        "c": 0,
+        "formula": "a / 100"
+      }
+    },
+    {
+      "id": "PA1",
+      "type": "Panel",
+      "name": "Site width",
+      "args": {
+        "input": {
+          "ref": "EX1"
+        }
+      }
+    }
+  ],
+  "layout": {
+    "PT1": [
+      30,
+      30
+    ],
+    "VZ": [
+      30,
+      200
+    ],
+    "PL1": [
+      330,
+      30
+    ],
+    "SC1": [
+      640,
+      30
+    ],
+    "ME1": [
+      960,
+      30
+    ],
+    "EX1": [
+      1250,
+      30
+    ],
+    "PA1": [
+      1560,
+      30
+    ]
+  }
+}
