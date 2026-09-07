@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node --watch server.mjs",
-    "test": "node test/e2e.mjs"
+    "test": "node test/e2e.mjs",
+    "build:artifact": "node artifact/build.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -17,6 +18,7 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "playwright": "^1.63.0"
   }
 }

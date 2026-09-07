@@ -135,3 +135,34 @@ external dependencies at runtime.
   error shows in red in the HUD and the next prompt can repair it.
 - `EFFORT=medium` is a latency choice, not a quality ceiling. Raise it for more
   elaborate scenes and expect longer waits.
+
+## The artifact build
+
+`web/` above is the local version — it needs a server because the API key has to
+live somewhere. `artifact/` is the same engine with the server removed: one
+self-contained HTML file that runs as a published Artifact on claude.ai and asks
+Claude from inside the page, on the viewer's own account, through the `sample`
+capability.
+
+```bash
+npm run build:artifact     # → artifact/viewport-zero.html
+```
+
+What changes, and why:
+
+| | local (`public/`) | artifact (`artifact/`) |
+|---|---|---|
+| model call | `server.mjs` → Messages API | `claude.use('sample')` in the page |
+| credentials | your key, server-side | the viewer's own Claude account |
+| narration | streamed thinking summary | `world.log()` calls read out of the code as it is written |
+| three.js | served from `node_modules` | compiled into the file by esbuild |
+| opening state | empty grid | a seeded scene, so the first frame shows the product |
+
+The `sample` capability returns no reasoning stream, so the HUD narrates from the
+code instead: `engine.js` scans the incoming source for `world.log('…')` string
+literals and surfaces each one the moment it is written, then drops those preview
+lines when execution starts so the real calls replace them in true order. It is a
+closer account of the build than a summary would have been.
+
+`build.mjs` bundles `src/` and all of three.js into one IIFE and inlines it into
+`template.html`. The published file is generated — build it, don't edit it.

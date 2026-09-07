@@ -157,10 +157,6 @@ async function build(prompt) {
     input.disabled = false;
     button.disabled = false;
     input.focus();
-
-// Console escape hatch: `world` and `ui` are the same objects generated code
-// gets, so anything a prompt can do can also be done by hand from devtools.
-Object.assign(window, { world, ui, api, stage });
     setTimeout(() => {
       codeStream.hidden = true;
     }, 1400);
