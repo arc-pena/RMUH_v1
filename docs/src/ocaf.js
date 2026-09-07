@@ -654,6 +654,19 @@ export const CATALOGUE = [
     args: [ref("mesh", "Mesh", ["mesh"], true),
            real("maxEdges", "Largest hole", 64, 3, 4000, 1, ""),
            choice("fill", "Fill with", ["One n-gon", "Fan from the middle"], 0)] },
+  { type: "MeshMerge", guid: "9a1b2c30-0089-4c00-9e00-caf000000089", category: "mesh",
+    produces: "mesh",
+    summary: "Amalgamates two cages: finds the faces where they run into each other, "
+           + "removes them, and bridges the openings left behind with quads. Not a CSG "
+           + "boolean - it keeps the quad topology a subdivision needs.",
+    args: [ref("a", "Mesh A", ["mesh"], true), ref("b", "Mesh B", ["mesh"], true),
+           choice("mode", "Remove the faces", ["Inside the other", "Facing, within a distance"], 0),
+           when(real("distance", "Distance", 40, 0.1, 2000, 0.5), "mode", 1),
+           when(real("facing", "How square on", 0.35, 0, 1, 0.01, ""), "mode", 1),
+           choice("bridge", "Openings", ["Bridge them", "Leave them open"], 0),
+           choice("flip", "Bridge direction", ["As found", "Reversed"], 0),
+           real("twist", "Twist", 0, -64, 64, 1, ""),
+           real("weld", "Weld after", 0.05, 0, 200, 0.01)] },
   { type: "MeshTransform", guid: "9a1b2c30-0087-4c00-9e00-caf000000087", category: "mesh",
     produces: "mesh",
     summary: "Moves, turns and scales a mesh. Every number takes a wire, so this is "

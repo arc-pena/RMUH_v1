@@ -1402,18 +1402,18 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   //! Chains the open edges into loops and closes each one. A loop is walked by
   //! following the open edge that leaves the vertex the last one arrived at, so
   //! a hole with a pinch in it comes out as two loops rather than one bad face.
-  function fillHoles(mesh, maxEdges, fan) {
+  //! Every closed run of open edges. A hole with a pinch in it comes out as two
+  //! loops rather than one bad face, because the walk follows the open edge
+  //! leaving the vertex it just arrived at and never uses one twice.
+  function boundaryLoops(mesh, maxEdges = 100000) {
     const { open } = edgeMap(mesh);
     const leaving = new Map();
     for (const [a, b] of open) {
       if (!leaving.has(a)) leaving.set(a, []);
       leaving.get(a).push(b);
     }
-    const points = mesh.points.slice();
-    const faces = mesh.faces.slice();
     const walked = new Set();
-    let filled = 0, skipped = 0;
-
+    const loops = [], abandoned = [];
     for (const [start] of leaving) {
       let here = start;
       const loop = [];
@@ -1423,12 +1423,20 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         walked.add(here + "," + next);
         loop.push(here);
         here = next;
-        if (here === start) break;
-        if (loop.length > maxEdges) break;
+        if (here === start || loop.length > maxEdges) break;
       }
-      if (loop.length < 3 || here !== start) { if (loop.length) skipped++; continue; }
-      if (loop.length > maxEdges) { skipped++; continue; }
+      if (loop.length >= 3 && here === start && loop.length <= maxEdges) loops.push(loop);
+      else if (loop.length) abandoned.push(loop);
+    }
+    return { loops, abandoned };
+  }
 
+  function fillHoles(mesh, maxEdges, fan) {
+    const points = mesh.points.slice();
+    const faces = mesh.faces.slice();
+    const { loops, abandoned } = boundaryLoops(mesh, maxEdges);
+
+    for (const loop of loops) {
       // The loop runs the way the open edges do, so the patch faces the other
       // way - reversed, it agrees with the faces around it.
       const ring = loop.slice().reverse();
@@ -1440,9 +1448,8 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       } else {
         faces.push(ring);
       }
-      filled++;
     }
-    return { points, faces, filled, skipped };
+    return { points, faces, filled: loops.length, skipped: abandoned.length };
   }
 
   /* --------------------------------------------------------- mesh sources */
@@ -1658,6 +1665,244 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       const filled = fillHoles(mesh, Math.max(3, Math.round(F.real(f, "maxEdges", 64))),
                                Feature_choice(f, "fill") === 1);
       return { data: packMesh(checkMesh(filled, "mesh")) };
+    },
+  };
+
+  /* ----------------------------------------------------------- amalgamate
+
+     What a subdivision workflow actually wants when two cages meet. A CSG
+     boolean would cut them against each other exactly and hand back a seam of
+     triangles, which is right for a solid and useless as a cage: Catmull-Clark
+     wants quads, and a triangle fan round the join pinches under it. So this
+     does what a modeller does by hand - throws away the faces where the two
+     run into each other, and bridges the openings left behind.
+
+     For an exact boolean, do it on the B-Rep side and come back: Boolean, then
+     MeshFromShape. That gives the right solid and a tessellation of it.
+     ------------------------------------------------------------------------ */
+
+  //! Every triangle of a mesh, for ray casting. Faces are fanned, which is
+  //! exact for a convex n-gon and close enough for a cage's slightly bent ones.
+  function trianglesOf(mesh) {
+    const out = [];
+    for (const face of mesh.faces)
+      for (let i = 1; i + 1 < face.length; i++)
+        out.push([mesh.points[face[0]], mesh.points[face[i]], mesh.points[face[i + 1]]]);
+    return out;
+  }
+
+  //! Moller-Trumbore. Returns the distance along the ray, or null.
+  function rayHitsTriangle(from, dir, [a, b, c]) {
+    const e1 = vsub(b, a), e2 = vsub(c, a);
+    const h = V.cross(dir, e2);
+    const det = e1[0] * h[0] + e1[1] * h[1] + e1[2] * h[2];
+    if (Math.abs(det) < 1e-12) return null;                 // parallel
+    const inv = 1 / det;
+    const s = vsub(from, a);
+    const u = inv * (s[0] * h[0] + s[1] * h[1] + s[2] * h[2]);
+    if (u < 0 || u > 1) return null;
+    const q = V.cross(s, e1);
+    const v = inv * (dir[0] * q[0] + dir[1] * q[1] + dir[2] * q[2]);
+    if (v < 0 || u + v > 1) return null;
+    const t = inv * (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]);
+    return t > 1e-9 ? t : null;
+  }
+
+  // A direction chosen to line up with nothing: an axis-aligned ray through an
+  // axis-aligned cage hits edges, and an edge hit is counted twice or not at all.
+  const ODD_RAY = V.norm([0.5773502692, 0.3313007813, 0.7457221543]);
+
+  //! Odd number of crossings, so it is inside. Only worth using on a mesh that
+  //! is closed; on an open one it answers something, but not this question.
+  function insideMesh(point, triangles) {
+    let crossings = 0;
+    for (const triangle of triangles)
+      if (rayHitsTriangle(point, ODD_RAY, triangle) !== null) crossings++;
+    return (crossings & 1) === 1;
+  }
+
+  //! The distance from a point to the nearest triangle of a mesh, and the
+  //! direction to it. Brute force over the triangles: a cage is a few hundred.
+  function nearestOn(point, triangles) {
+    let best = Infinity, at = null;
+    for (const [a, b, c] of triangles) {
+      const n = V.norm(V.cross(vsub(b, a), vsub(c, a)));
+      if (!n) continue;
+      const away = vsub(point, a);
+      const off = away[0] * n[0] + away[1] * n[1] + away[2] * n[2];
+      // The foot of the perpendicular, clamped back into the triangle by
+      // falling to the nearest corner when it lands outside.
+      const foot = vsub(point, vmul(n, off));
+      const inside = [[a, b], [b, c], [c, a]].every(([p, q]) => {
+        const edge = vsub(q, p), to = vsub(foot, p);
+        const cross = V.cross(edge, to);
+        return cross[0] * n[0] + cross[1] * n[1] + cross[2] * n[2] >= -1e-9;
+      });
+      const candidates = inside ? [foot] : [a, b, c];
+      for (const candidate of candidates) {
+        const d = length(vsub(point, candidate));
+        if (d < best) { best = d; at = candidate; }
+      }
+    }
+    return { distance: best, at };
+  }
+
+  //! Two open loops, sewn together. Equal lengths give quads all the way round;
+  //! unequal ones walk both loops in step and drop in a triangle wherever one
+  //! side has to catch up, which is what a bridge between mismatched loops is.
+  function bridgeLoops(A, B) {
+    const n = A.length, m = B.length;
+    const faces = [];
+    let i = 0, j = 0;
+    while (i < n || j < m) {
+      const ta = i < n ? (i + 1) / n : Infinity;
+      const tb = j < m ? (j + 1) / m : Infinity;
+      // Wound against the loops, not with them. A boundary loop follows the
+      // free directed edges of the faces around it, so a bridge that runs the
+      // same way leaves the edge free a second time and the rim stays open.
+      if (i < n && j < m && Math.abs(ta - tb) < 1e-9) {
+        faces.push([A[(i + 1) % n], A[i], B[j], B[(j + 1) % m]]);
+        i++; j++;
+      } else if (ta < tb) {
+        faces.push([A[(i + 1) % n], A[i], B[j % m]]);
+        i++;
+      } else {
+        faces.push([A[i % n], B[j], B[(j + 1) % m]]);
+        j++;
+      }
+    }
+    return faces;
+  }
+
+  //! Which vertex of B to start at so the bridge does not come out twisted:
+  //! the rotation that puts the two loops closest to each other overall.
+  function alignLoops(points, A, B) {
+    let best = 0, shortest = Infinity;
+    for (let k = 0; k < B.length; k++) {
+      let total = 0;
+      for (let i = 0; i < A.length; i++) {
+        const b = B[(k + Math.round(i * B.length / A.length)) % B.length];
+        total += length(vsub(points[A[i]], points[b]));
+        if (total >= shortest) break;
+      }
+      if (total < shortest) { shortest = total; best = k; }
+    }
+    return best;
+  }
+
+  const rotated = (loop, by) =>
+    loop.map((_, i) => loop[(((i + by) % loop.length) + loop.length) % loop.length]);
+
+  builders.MeshMerge = {
+    precondition: f => {
+      for (const key of ["a", "b"]) {
+        const source = F.reference(f, key);
+        if (!source) return "both meshes are needed - " + key.toUpperCase() + " is empty";
+        const data = F.data(source);
+        if (!data || data.kind !== "mesh") return F.name(source) + " is not a mesh";
+        if (!data.values.length) return F.name(source) + " has no vertices";
+      }
+      const size = ["a", "b"].reduce((n, key) =>
+        n + meshFaces(F.data(F.reference(f, key))).length, 0);
+      // Both tests are brute force over the other mesh's triangles. Two cages
+      // are a few hundred faces; two tessellations are a hundred thousand, and
+      // that is a different algorithm, not a slower one.
+      if (size > 6000)
+        return size + " faces is more than this merge will walk - it compares every "
+          + "face against the whole of the other mesh. Merge the cages, then subdivide.";
+      return null;
+    },
+
+    build: f => {
+      const A = meshFrom(F.reference(f, "a"), "mesh A");
+      const B = meshFrom(F.reference(f, "b"), "mesh B");
+      const mode = Feature_choice(f, "mode");
+
+      // One mesh, B's indices moved up behind A's.
+      const shift = A.points.length;
+      const points = A.points.concat(B.points);
+      const faces = A.faces.concat(B.faces.map(face => face.map(i => i + shift)));
+      const fromA = faces.map((_, at) => at < A.faces.length);
+
+      const trianglesA = trianglesOf(A), trianglesB = trianglesOf(B);
+      const distance = F.real(f, "distance", 40);
+      const squareOn = F.real(f, "facing", 0.35);
+
+      //! Whether a face is in the way of the other mesh: either its middle is
+      //! inside it, or it is close to it and pointing at it.
+      const inTheWay = (face, mine, theirs, triangles) => {
+        const middle = centroid(face.map(i => points[i]));
+        if (mode === 0) return insideMesh(middle, triangles);
+        const near = nearestOn(middle, triangles);
+        if (!(near.distance <= distance) || !near.at) return false;
+        const towards = V.norm(vsub(near.at, middle));
+        if (!towards) return true;
+        const n = faceNormal(points, face);
+        return n[0] * towards[0] + n[1] * towards[1] + n[2] * towards[2] >= squareOn;
+      };
+
+      const doomed = faces.map((face, at) =>
+        inTheWay(face, at, null, fromA[at] ? trianglesB : trianglesA));
+      const removed = doomed.filter(Boolean).length;
+      if (!removed)
+        throw new Error(mode === 0
+          ? "neither cage reaches inside the other, so nothing was removed - move them "
+            + "together, or switch to facing within a distance"
+          : "no face is within " + trim(distance) + " mm of the other cage and pointing at it");
+      if (removed === faces.length)
+        throw new Error("that would remove every face of both cages");
+
+      // The vertices the removed faces touched: only the loops around those are
+      // the ones this operation made, and only those get bridged.
+      const touched = new Set();
+      faces.forEach((face, at) => { if (doomed[at]) for (const i of face) touched.add(i); });
+
+      const kept = faces.filter((_, at) => !doomed[at]);
+      const keptFromA = faces.map((_, at) => at).filter(at => !doomed[at]).map(at => fromA[at]);
+      let merged = { points, faces: kept };
+
+      if (Feature_choice(f, "bridge") === 0) {
+        const { loops } = boundaryLoops(merged, 4000);
+        // A loop belongs to whichever cage its vertices came from, and it is one
+        // of ours only if the faces we removed were the ones that opened it.
+        const ours = loops.filter(loop => loop.every(i => touched.has(i)));
+        const sideA = ours.filter(loop => loop[0] < shift);
+        const sideB = ours.filter(loop => loop[0] >= shift);
+        if (!sideA.length || !sideB.length)
+          throw new Error("removing those faces left " + sideA.length + " opening"
+            + (sideA.length === 1 ? "" : "s") + " on A and " + sideB.length + " on B, "
+            + "so there is nothing to bridge across - try the other way of choosing faces");
+
+        const flip = Feature_choice(f, "flip") === 1;
+        const twist = Math.round(F.real(f, "twist", 0));
+        const spare = sideB.slice();
+        const bridged = [];
+        for (const loop of sideA) {
+          // Each opening on A joins the nearest one left on B.
+          const middle = centroid(loop.map(i => points[i]));
+          let best = 0, shortest = Infinity;
+          spare.forEach((other, at) => {
+            const d = length(vsub(middle, centroid(other.map(i => points[i]))));
+            if (d < shortest) { shortest = d; best = at; }
+          });
+          if (!spare.length) break;
+          const partner = spare.splice(best, 1)[0];
+          // The two loops run the way their own faces wind, which is opposite
+          // across the join; one is turned round so the bridge does not knot.
+          const facing = flip ? partner.slice() : partner.slice().reverse();
+          const aligned = rotated(facing, alignLoops(points, loop, facing) + twist);
+          bridged.push(...bridgeLoops(loop, aligned));
+        }
+        if (!bridged.length)
+          throw new Error("the openings could not be bridged");
+        merged = { points, faces: kept.concat(bridged) };
+      }
+
+      const weld = F.real(f, "weld", 0.05);
+      if (weld > 1e-9) merged = weldMesh(merged, weld, true);
+      // A merge that leaves nothing standing is a mistake, not a result.
+      if (!merged.faces.length) throw new Error("nothing was left of either cage");
+      return { data: packMesh(checkMesh(merged, "merged mesh")) };
     },
   };
 

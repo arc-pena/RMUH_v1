@@ -231,5 +231,76 @@ await mdl.run({ op: "set", id: weld.id, key: "tolerance", value: 100 });
 check("welding everything into nothing is refused, not shipped",
       !!(await at(weld.id)).error, "(none)");
 
+console.log("12. amalgamating two cages");
+const cageA = await mdl.run({ op: "add", type: "MeshBox", name: "A" });
+const cageB = await mdl.run({ op: "add", type: "MeshBox", name: "B" });
+for (const id of [cageA.id, cageB.id])
+  for (const key of ["segX", "segY", "segZ"]) await mdl.run({ op: "set", id, key, value: 2 });
+const placed = await mdl.run({ op: "add", type: "MeshTransform", name: "Placed" });
+await mdl.run({ op: "connect", id: placed.id, key: "mesh", from: cageB.id });
+await mdl.run({ op: "set", id: placed.id, key: "mx", value: 100 });
+
+const join = await mdl.run({ op: "add", type: "MeshMerge", name: "Joined" });
+await mdl.run({ op: "connect", id: join.id, key: "a", from: cageA.id });
+await mdl.run({ op: "connect", id: join.id, key: "b", from: placed.id });
+entry = await at(join.id);
+check("the two cages became one", !entry.error && entry.data.count === 52, entry.error);
+check("and it is still all quads", /^52 vertices . 48 quads$/.test(entry.data.preview),
+      entry.data.preview);
+
+// The test that matters: a bridge wound the same way as the loops it joins
+// leaves the rim open, and nothing downstream says so until the subdivision
+// tears. Filling the holes of a closed mesh must add nothing at all.
+const closed = await mdl.run({ op: "add", type: "FillHoles", name: "Check" });
+await mdl.run({ op: "connect", id: closed.id, key: "mesh", from: join.id });
+check("the openings really were sewn shut",
+      (await at(closed.id)).data.faces === entry.data.faces,
+      (await at(closed.id)).data.preview);
+
+const joinVolume = await mdl.run({ op: "add", type: "Measure", name: "Union" });
+await mdl.run({ op: "connect", id: joinVolume.id, key: "shape", from: join.id });
+await mdl.run({ op: "set", id: joinVolume.id, key: "quantity", value: 2 });
+check("and it encloses the union of the two boxes",
+      Number((await at(joinVolume.id)).data.preview) === 2 * 120 ** 3 - 20 * 120 * 120,
+      (await at(joinVolume.id)).data.preview);
+
+const joinSub = await mdl.run({ op: "add", type: "Subdivide", name: "Both" });
+await mdl.run({ op: "connect", id: joinSub.id, key: "mesh", from: join.id });
+await mdl.run({ op: "set", id: joinSub.id, key: "levels", value: 2 });
+check("and it subdivides as one piece", !(await at(joinSub.id)).error,
+      (await at(joinSub.id)).error);
+
+console.log("13. openings that do not match");
+await mdl.run({ op: "set", id: cageB.id, key: "segY", value: 1 });
+await mdl.run({ op: "set", id: cageB.id, key: "segZ", value: 1 });
+await mdl.run({ op: "set", id: placed.id, key: "mx", value: 110 });
+entry = await at(join.id);
+check("eight against four bridges with quads and triangles",
+      /4 tris/.test(entry.data.preview) && /quads/.test(entry.data.preview),
+      entry.error || entry.data.preview);
+check("and the result is still closed",
+      (await at(closed.id)).data.faces === entry.data.faces,
+      (await at(closed.id)).data.preview);
+check("and still subdivides to quads",
+      /^\d+ vertices . \d+ quads$/.test((await at(joinSub.id)).data.preview),
+      (await at(joinSub.id)).error || (await at(joinSub.id)).data.preview);
+
+console.log("14. what it refuses");
+await mdl.run({ op: "set", id: placed.id, key: "mx", value: 400 });
+check("cages that never meet are refused with the reason",
+      /nothing was removed/.test((await at(join.id)).error || ""), (await at(join.id)).error);
+await mdl.run({ op: "set", id: join.id, key: "mode", value: 1 });         // facing
+await mdl.run({ op: "set", id: join.id, key: "distance", value: 400 });
+check("facing within a distance reaches them", !(await at(join.id)).error,
+      (await at(join.id)).error);
+await mdl.run({ op: "set", id: join.id, key: "mode", value: 0 });
+await mdl.run({ op: "set", id: placed.id, key: "mx", value: 100 });
+
+for (const key of ["segX", "segY", "segZ"])
+  await mdl.run({ op: "set", id: cageA.id, key, value: 40 });
+check("a cage too dense to walk face-against-face is refused before it starts",
+      /more than this merge will walk/.test((await at(join.id)).error || ""),
+      (await at(join.id)).error);
+
 console.log(failures ? "\n" + failures + " FAILED" : "\nall good");
 process.exit(failures ? 1 : 0);

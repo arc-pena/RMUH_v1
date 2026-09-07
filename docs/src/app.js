@@ -665,6 +665,10 @@ const ICONS = {
   FillHoles: '<path d="M1.8 4.2h12.4v7.6H1.8z" fill="none" stroke="currentColor" stroke-width="1.15"/>'
            + '<path d="M6 5.6h4.4l1.2 2.4-1.6 2.4H6.4L5 8z" fill="currentColor" opacity=".35"/>'
            + '<path d="M6 5.6h4.4l1.2 2.4-1.6 2.4H6.4L5 8z" fill="none" stroke="currentColor" stroke-width="1.05" stroke-linejoin="round"/>',
+  MeshMerge: '<path d="M2 5.4h4.6v5.2H2z" fill="none" stroke="currentColor" stroke-width="1.15"/>'
+           + '<path d="M9.4 5.4H14v5.2H9.4z" fill="none" stroke="currentColor" stroke-width="1.15"/>'
+           + '<path d="M6.6 5.4h2.8v5.2H6.6z" fill="none" stroke="currentColor" stroke-width="1.05" stroke-dasharray="1.7 1.5" opacity=".85"/>'
+           + '<path d="M6.6 7.4h2.8M6.6 8.8h2.8" stroke="currentColor" stroke-width=".8" opacity=".45"/>',
   MeshTransform: '<path d="M2.4 9.6L6 6.4l3.4 3 3.6-3.4" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>'
                + '<path d="M8 14.2V11M6.5 12.5L8 11l1.5 1.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>'
                + '<path d="M8 1.8v3.4M6.5 3.3L8 1.8l1.5 1.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>',

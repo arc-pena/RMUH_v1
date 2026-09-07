@@ -221,6 +221,7 @@ polygon edge sent as a line so the cage reads as the cage.
 | `Subdivide` | Catmull–Clark, 1–4 levels, on or off, boundary sharp or smooth |
 | `Weld` | merges vertices closer than a distance and drops what collapses |
 | `FillHoles` | chains the open edges into loops and closes each one |
+| `MeshMerge` | amalgamates two cages: removes the faces where they meet and bridges the openings |
 | `MeshTransform` `MeshDisplace` | move, turn, scale; or push every vertex along a direction by a formula over its own position |
 
 ### Editing by hand is still parametric
@@ -242,6 +243,44 @@ visible — which is the whole point of a cage.
 While a mesh is being edited by hand the viewport belongs to its handles: a
 click that misses one drops the vertex rather than walking off to whatever
 solid was behind it. Esc leaves.
+
+### Merging two cages is not a boolean
+
+`MeshMerge` is the operation a subdivision workflow actually wants when two
+cages meet, and it is deliberately not CSG. A boolean would cut the two against
+each other exactly and hand back a seam of triangles — right for a solid,
+useless as a cage, because Catmull–Clark wants quads and a triangle fan round
+the join pinches under it. So `MeshMerge` does what a modeller does by hand:
+
+1. finds the faces that are in the way — either **inside the other** mesh (a
+   ray cast from each face's middle, odd crossings means inside) or **facing it
+   within a distance** (nearest point on the other surface, and the face's
+   normal pointing at it);
+2. removes them, leaving an opening in each cage;
+3. walks the open edges into loops, pairs each opening on A with the nearest
+   one left on B, rotates one until the two line up, and **bridges** them.
+
+Equal loops give quads all the way round. Unequal ones walk both loops in step
+and drop in a triangle wherever one side has to catch up — eight against four
+is four quads and four triangles, and one level of subdivision turns them all
+into quads anyway. `Twist` steps the pairing round by hand and `Bridge
+direction` reverses it, because a bridge between two loops is never quite
+automatic.
+
+The bridge is wound *against* the loops it joins, not with them: a boundary
+loop follows the free directed edges of the faces around it, so a bridge that
+runs the same way leaves each edge free a second time and the rim silently
+stays open. The test for that is the one that matters — filling the holes of
+the merged mesh must add nothing at all.
+
+It is refused before it starts if the two cages together are more than about
+6,000 faces: every face is compared against the whole of the other mesh, which
+is nothing for two cages and a different algorithm entirely for two
+tessellations. Merge the cages, then subdivide.
+
+**If you want a true boolean**, do it on the B-Rep side and come back:
+`Boolean` → `MeshFromShape` → `Weld`. That gives the exact solid and a
+tessellation of it — a good mesh to look at, and a poor one to subdivide.
 
 ### Catmull–Clark
 
