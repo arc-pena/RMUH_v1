@@ -1,4 +1,6 @@
 import { acceptsFrom } from "./ocaf.js";
+import { SKETCH_CLICKS, nextSketchId, readSketch, sketchElement,
+         sketchRelation } from "./sketch.js";
 
 // The model description language.
 //
@@ -63,6 +65,18 @@ export async function defaultRefs(ctx, type) {
     if (target) refs[arg.key] = target.id;
   }
   return refs;
+}
+
+//! The drawing on a sketch, as it stands. The small sketch edits read it,
+//! change one thing and write the whole of it back, because the drawing is one
+//! string on one label - which is what makes the same edit arrive identically
+//! from a click, from the console, or from outside the page.
+async function drawingOf(ctx, id) {
+  const answer = await ctx.kernel.tree();
+  const entry = ((answer.tree || answer).features || []).find(f => f.id === id);
+  if (!entry) throw new Error("there is no feature '" + id + "'");
+  if (!entry.sketch) throw new Error(entry.name + " is not a sketch");
+  return readSketch(entry.sketch.drawing);
 }
 
 export const MDL_OPS = [
@@ -147,6 +161,57 @@ export const MDL_OPS = [
         throw new Error('"index" must be a vertex number');
       return ctx.kernel.moveVertex(needText(edit, "id"), edit.index,
         [needNumber(edit, "x"), needNumber(edit, "y"), needNumber(edit, "z")]);
+    }),
+
+  modelOp("sketch", ["id", "drawing"],
+    "Replace the whole drawing on a sketch. The three below are small edits of the "
+    + "same text; this one writes it wholesale.",
+    { op: "sketch", id: "SK1",
+      drawing: { elements: [{ id: "e1", type: "circle", c: [0, 0], r: 60 }], constraints: [] } },
+    (ctx, edit) => ctx.kernel.setSketch(needText(edit, "id"), null, edit.drawing)),
+
+  modelOp("draw", ["id", "type", "at", "as?"],
+    "Draw one element on a sketch. at is the clicks that would have made it, in the "
+    + "plane's own coordinates - a line takes two, an arc takes centre, start and how "
+    + "far round. This is what clicking in the sketcher writes.",
+    { op: "draw", id: "SK1", type: "line", at: [[0, 0], [120, 0]] },
+    async (ctx, edit) => {
+      const type = needText(edit, "type");
+      const clicks = Array.isArray(edit.at) ? edit.at : [];
+      const wanted = SKETCH_CLICKS[type];
+      if (wanted === undefined) throw new Error('there is no sketch element called "' + type + '"');
+      if (clicks.length < Math.max(2, wanted))
+        throw new Error(type + " needs " + (wanted || "at least two") + " points in \"at\"");
+      const drawing = await drawingOf(ctx, needText(edit, "id"));
+      const id = typeof edit.as === "string" && edit.as ? edit.as : nextSketchId(drawing);
+      drawing.elements.push(sketchElement(type, id, clicks));
+      return ctx.kernel.setSketch(edit.id, null, drawing);
+    }),
+
+  modelOp("erase", ["id", "element"],
+    "Take one element off a sketch, and any relation that named it.",
+    { op: "erase", id: "SK1", element: "e3" },
+    async (ctx, edit) => {
+      const gone = needText(edit, "element");
+      const drawing = await drawingOf(ctx, needText(edit, "id"));
+      drawing.elements = drawing.elements.filter(el => el.id !== gone);
+      drawing.constraints = drawing.constraints.filter(
+        c => !c.of.some(name => String(name).split(".")[0] === gone));
+      return ctx.kernel.setSketch(edit.id, null, drawing);
+    }),
+
+  modelOp("relate", ["id", "type", "of"],
+    "Put a relation on a sketch: horizontal, vertical, parallel, perpendicular, tangent "
+    + "or coincident. of names the elements it governs, or their ends as \"e1.b\".",
+    { op: "relate", id: "SK1", type: "perpendicular", of: ["e1", "e2"] },
+    async (ctx, edit) => {
+      const relation = sketchRelation(needText(edit, "type"),
+        Array.isArray(edit.of) ? edit.of : [edit.of]);
+      const drawing = await drawingOf(ctx, needText(edit, "id"));
+      const already = JSON.stringify(relation);
+      if (!drawing.constraints.some(c => JSON.stringify(c) === already))
+        drawing.constraints.push(relation);
+      return ctx.kernel.setSketch(edit.id, null, drawing);
     }),
 
   viewOp("move", ["id", "x", "y"],

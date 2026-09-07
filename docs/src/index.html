@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>OCAF Feature Modeller</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -134,6 +135,34 @@ button, input, select { font: inherit; color: inherit; }
 #rail::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 #rail [data-group] { display: grid; grid-template-columns: repeat(2, 34px); gap: 2px; }
 #rail hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 4px; }
+
+/* ------------------------------------------------------------ the sketcher */
+/* The sketch rail stands exactly where the tool rail does, because it is the
+   same rail: while a sketch is open, drawing is the only thing to do. */
+#sketch-rail {
+  left: var(--edge); top: 50%; transform: translateY(-50%);
+  padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  z-index: 4; max-height: calc(100vh - 120px); overflow-y: auto; scrollbar-width: thin;
+}
+#sketch-rail [data-group] { display: grid; grid-template-columns: repeat(2, 34px); gap: 2px; }
+/* display: flex beats the browser's own [hidden] rule, so say it here: the two
+   rails swap places, and neither may be half on screen. */
+#rail[hidden], #sketch-rail[hidden], #sketch-bar[hidden] { display: none; }
+#sketch-rail hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 4px; }
+#sketch-rail .tool.on { background: var(--accent); color: #fff; }
+#sketch-bar {
+  /* Below the chip, not over it: the toolbar is still the way out. */
+  left: 50%; top: calc(var(--edge) + 46px); transform: translateX(-50%);
+  z-index: 4; padding: 6px 8px 6px 12px;
+  display: flex; align-items: center; gap: 12px; font-size: 11.5px;
+}
+#sketch-bar .sk-name { font-weight: 600; color: var(--ink); }
+#sketch-bar .sk-hint { color: var(--ink-3); font-family: var(--mono); font-size: 10px; }
+#sketch-bar .sk-exit {
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2);
+  color: var(--ink); font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
+}
+#sketch-bar .sk-exit:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
 .tool {
   position: relative;
   width: 34px; height: 34px; padding: 0;
@@ -295,6 +324,23 @@ select {
 .editor .hint { margin-top: 7px; font-size: 11px; color: var(--ink-3); }
 .editor .row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
 .editor .row .spacer { flex: 1; }
+/* the drawing, in the panel: the way in to the sketcher, and the JSON that is
+   the drawing itself rather than a report of it */
+.field .row-btn {
+  width: 100%; margin: 4px 0 6px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2);
+  color: var(--ink); font: inherit; font-size: 11px; padding: 5px 8px; cursor: pointer;
+}
+.field .row-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.field textarea.code {
+  width: 100%; resize: vertical;
+  background: var(--panel-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px;
+  font-family: var(--mono); font-size: 10px; line-height: 1.55;
+  white-space: pre; overflow-wrap: normal; overflow-x: auto;
+}
+.field textarea.code:focus { border-color: var(--accent); outline: none; }
+
 .params-head {
   padding: 10px 12px 0; font-size: 9.5px; font-weight: 600;
   letter-spacing: .11em; text-transform: uppercase; color: var(--ink-3);
@@ -571,6 +617,19 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
 </aside>
 
 <nav class="float fades" id="rail"></nav>
+
+<!-- The sketcher's rail. Same place, same shape: while a sketch is open the
+     modelling tools have nothing to add, so they step aside for the ones that
+     draw. -->
+<nav class="float fades" id="sketch-rail" hidden></nav>
+
+<!-- What the sketcher is doing, along the top: which sketch, what is being
+     drawn, and the way out. -->
+<div class="float fades" id="sketch-bar" hidden>
+  <span class="sk-name" id="sketch-who">Sketch</span>
+  <span class="sk-hint" id="sketch-hint">click to draw</span>
+  <button class="sk-exit" id="sketch-done">Done</button>
+</div>
 
 <aside class="float fades" id="def-panel" hidden>
   <div class="panel-head">

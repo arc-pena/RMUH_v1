@@ -346,6 +346,9 @@ export class GraphEditor {
     this.icons = options.icons || {};
     this.openDefinition = options.openDefinition || (() => {});
     this.onOpen = options.onOpen || (() => {});
+    // Pressing Draw on a sketch node opens the sketcher in the main window -
+    // the graph may be on another screen, and the drawing is not.
+    this.onSketch = options.onSketch || (() => {});
     this.onClose = options.onClose || (() => {});
 
     this.layout = new Map();                   // feature id -> { x, y }
@@ -863,6 +866,9 @@ export class GraphEditor {
       rows += arg.kind === "refs" ? (entry.lists[arg.key] || []).length + 1
             : arg.kind === "real" ? 2 : 1;
       if (arg.kind === "edits" || arg.kind === "text") rows += 1;
+      // A drawing needs three: the label, the summary - which wraps once a
+      // sketch has relations as well as loops - and the button.
+      if (arg.kind === "sketch") rows += 3;
     }
     return rows + (entry.params ? Math.min(entry.params.length, 7) + 1 : 0)
          + (entry.code !== undefined ? 1 : 0) + (entry.data ? 2 : 0);
@@ -912,6 +918,7 @@ export class GraphEditor {
       if (arg.kind === "ref" || arg.kind === "refs")
         body.appendChild(this.refRow(entry, arg, ports));
       else if (arg.kind === "text") body.appendChild(this.textRow(entry, arg));
+      else if (arg.kind === "sketch") body.appendChild(this.sketchRow(entry, arg));
       else if (arg.kind === "choice") body.appendChild(this.choiceRow(entry, arg));
       else body.appendChild(this.realRow(entry, arg, arg.key, entry.values[arg.key], ports));
     }
@@ -1114,6 +1121,32 @@ export class GraphEditor {
       this.mdl.run({ op: "code", id: entry.id, key: arg.key, text: input.value },
                    { keepPanel: true }).catch(() => {}));
     row.appendChild(input);
+    return row;
+  }
+
+  //! A drawing on a node. The node shows what is in it and opens the sketcher;
+  //! the drawing itself is JSON on the same label the model file carries, so
+  //! the node, the tree and the file are three windows onto one string.
+  sketchRow(entry, arg) {
+    const doc = this.doc;
+    const row = doc.createElement("div");
+    row.className = "g-row";
+    row.style.display = "block";
+    const summary = (entry.sketch && entry.sketch.summary) || "empty";
+    row.innerHTML = '<span class="g-lab" style="display:block;margin-bottom:2px">' +
+      gesc(arg.label) + '</span><span class="g-val" style="display:block;margin-bottom:3px">' +
+      gesc(summary) + "</span>";
+    const draw = doc.createElement("button");
+    draw.className = "g-line";
+    draw.type = "button";
+    draw.textContent = "Draw…";
+    draw.style.cursor = "pointer";
+    draw.addEventListener("pointerdown", event => event.stopPropagation());
+    draw.addEventListener("click", () => {
+      this.mdl.run({ op: "select", id: entry.id }, { keepPanel: true }).catch(() => {});
+      this.onSketch(entry.id);
+    });
+    row.appendChild(draw);
     return row;
   }
 

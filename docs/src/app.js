@@ -4,6 +4,8 @@ import { ENVIRONMENTS, FINISHES, Showroom, findFinish } from "./showroom.js";
 import { Mdl } from "./mdl.js";
 import { acceptsFrom, dataLines, SAMPLES } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
+import { SKETCH_CLICKS, SKETCH_RELATIONS, SKETCH_TYPES, nextSketchId, readSketch,
+         sketchElement, sketchHandles, sketchOutline } from "./sketch.js";
 
 "use strict";
 
@@ -156,13 +158,23 @@ function placeCamera() {
   el.addEventListener("pointerdown", event => {
     // An axis of the handle takes the drag before the camera does.
     if (event.button === 0 && !event.shiftKey && grabGizmo(event)) mode = "gizmo";
+    // A sketch is looked at square on, and stays that way: the drag that would
+    // orbit pans instead, because a drawing seen at an angle cannot be drawn on.
+    else if (sketching()) mode = event.button === 0 && !event.shiftKey ? "draw" : "pan";
     else mode = (event.shiftKey || event.button === 1 || event.button === 2) ? "pan" : "orbit";
     lastX = event.clientX; lastY = event.clientY; moved = 0;
     el.setPointerCapture(event.pointerId);
   });
   el.addEventListener("pointermove", event => {
+    if (sketching()) {
+      const uv = sketchAt(event);
+      if (uv && (sketcher.clicks.length || sketcher.hover)) { sketcher.hover = uv; refreshSketch(); }
+      else sketcher.hover = uv;
+    }
     if (!mode) return;
     if (mode === "gizmo") { dragGizmo(event); return; }
+    if (mode === "draw") { moved += Math.abs(event.clientX - lastX) + Math.abs(event.clientY - lastY);
+                           lastX = event.clientX; lastY = event.clientY; return; }
     const dx = event.clientX - lastX, dy = event.clientY - lastY;
     lastX = event.clientX; lastY = event.clientY; moved += Math.abs(dx) + Math.abs(dy);
     if (mode === "orbit") {
@@ -179,6 +191,7 @@ function placeCamera() {
   });
   el.addEventListener("pointerup", event => {
     if (mode === "gizmo") dropGizmo();
+    else if (mode === "draw") { if (moved < 4) sketchClick(event); }
     else if (mode === "orbit" && moved < 4 && !pickVertex(event)) {
       // While a mesh is being edited by hand, the viewport belongs to its
       // handles: a click that misses one drops the vertex, it does not walk off
@@ -189,6 +202,15 @@ function placeCamera() {
     mode = null;
   });
   el.addEventListener("pointercancel", () => { meshEdit.axis = null; mode = null; });
+  //! Double-clicking a sketch opens it - the way a CAD modeller does, and the
+  //! same gesture in the tree. Double-clicking inside an open one ends a
+  //! spline, which is the only element that does not know how long it is.
+  el.addEventListener("dblclick", event => {
+    if (sketching()) { finishSpline(); return; }
+    pick(event);
+    const entry = feature(state.selected);
+    if (entry && entry.sketch) enterSketch(entry.id);
+  });
   el.addEventListener("contextmenu", event => event.preventDefault());
   el.addEventListener("wheel", event => {
     event.preventDefault();
@@ -324,6 +346,7 @@ async function syncShapes() {
   applyVisibility();
   paintSelection();
   refreshMeshEdit();
+  refreshSketch();
   draw();
   if (staging && showroom.ready) showroom.setScene(state.tree.features, streams);
 }
@@ -434,6 +457,395 @@ function refreshMeshEdit() {
     world.add(meshEdit.gizmo);
   }
   draw();
+}
+
+/* ==========================================================================
+   The sketcher.
+
+   A sketch is a drawing in two dimensions and a plane to put it on. Opening
+   one takes the viewport over: the camera goes to the plane and stops
+   orbiting, the tool rail steps aside for the seven things a drawing is made
+   of, and a click is no longer a click on a solid - it is a point on the
+   plane, in the plane's own two numbers.
+
+   Nothing here holds any geometry. Every click ends as one line of the model
+   description language - {"op":"draw","id":"SK1","type":"line","at":[[0,0],
+   [120,0]]} - which goes down the same road as a slider and a wire, and comes
+   back as a rebuilt sketch. Drawing a line and typing that line into the model
+   file are the same edit, because there is only one of them.
+   ========================================================================== */
+
+const sketcher = {
+  id: null,          // the sketch being drawn on
+  tool: "line",      // what the next clicks will make
+  clicks: [],        // the clicks so far, in the plane's coordinates
+  hover: null,       // where the cursor is on the plane, for the rubber band
+  picked: [],        // what a relation will be put on, in the order picked
+  relating: null,    // the relation waiting for things to be put on
+  snapped: null,     // the handle the last click landed on, for coincidence
+  group: null,       // the overlay: handles, the band, what is picked
+  orbit: null,       // the view to put back on the way out
+};
+
+const sketching = () => (sketcher.id && feature(sketcher.id)) || null;
+
+//! The plane, as the kernel last resolved it. The driver writes it down when
+//! it builds, so the viewport never has to work out which way a plane's axes
+//! point - which is exactly the sum it would get subtly wrong.
+function sketchFrame() {
+  const entry = sketching();
+  const frame = entry && entry.sketch && entry.sketch.frame;
+  if (!frame) return null;
+  return {
+    origin: new THREE.Vector3(...frame.origin),
+    x: new THREE.Vector3(...frame.x),
+    y: new THREE.Vector3(...frame.y),
+    normal: new THREE.Vector3(...frame.normal),
+  };
+}
+
+//! Two numbers on the paper, one point in the world - the same map the kernel
+//! builds its edges through.
+function sketchToWorld(uv, frame = sketchFrame()) {
+  if (!frame) return new THREE.Vector3();
+  return frame.origin.clone()
+    .addScaledVector(frame.x, uv[0]).addScaledVector(frame.y, uv[1]);
+}
+
+//! And back: where a pointer is, on the plane, in the drawing's own numbers.
+function sketchAt(event) {
+  const frame = sketchFrame();
+  if (!frame) return null;
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(frame.normal, frame.origin);
+  const hit = rayFrom(event).ray.intersectPlane(plane, new THREE.Vector3());
+  if (!hit) return null;
+  const away = hit.sub(frame.origin);
+  return [Math.round(away.dot(frame.x) * 1e3) / 1e3, Math.round(away.dot(frame.y) * 1e3) / 1e3];
+}
+
+const sketchDrawing = () => {
+  const entry = sketching();
+  return entry && entry.sketch ? readSketch(entry.sketch.drawing) : { elements: [], constraints: [] };
+};
+
+//! How far a snap reaches, in the drawing's units: a fixed number of pixels,
+//! turned into millimetres by how far away the camera is, so it feels the same
+//! zoomed in and zoomed out.
+const snapReach = () => view.distance * 0.018;
+
+//! The nearest end of anything already drawn. Landing on one and saying so is
+//! what makes a drawn corner a corner rather than two lines that nearly meet.
+function nearestHandle(uv, drawing = sketchDrawing()) {
+  let best = null, reach = snapReach();
+  for (const el of drawing.elements) {
+    for (const [key, p] of sketchHandles(el)) {
+      const away = Math.hypot(p[0] - uv[0], p[1] - uv[1]);
+      if (away < reach) { reach = away; best = { ref: el.id + "." + key, p, id: el.id }; }
+    }
+  }
+  return best;
+}
+
+//! The nearest element, by its own outline. What a relation is put on.
+function nearestElement(uv, drawing = sketchDrawing()) {
+  let best = null, reach = snapReach() * 1.6;
+  for (const el of drawing.elements) {
+    const line = sketchOutline(el, 48);
+    for (const p of line) {
+      const away = Math.hypot(p[0] - uv[0], p[1] - uv[1]);
+      if (away < reach) { reach = away; best = el.id; }
+    }
+  }
+  return best;
+}
+
+function enterSketch(id) {
+  const entry = feature(id);
+  if (!entry || !entry.sketch) return;
+  if (handEditing()) { meshEdit.id = null; meshEdit.vertex = -1; refreshMeshEdit(); }
+  sketcher.id = id;
+  sketcher.clicks = [];
+  sketcher.picked = [];
+  sketcher.snapped = null;
+  sketcher.hover = null;
+  sketcher.orbit = { yaw: view.yaw, pitch: view.pitch, distance: view.distance,
+                     target: view.target.clone() };
+  lookAtSketch();
+  buildSketchRail();
+  refreshSketch();
+  // The drawing is worth having open while you draw on it: the panel shows the
+  // JSON, which is the drawing itself and not a report of it.
+  select(id, true);
+}
+
+function leaveSketch() {
+  if (!sketcher.id) return;
+  sketcher.id = null;
+  sketcher.clicks = [];
+  sketcher.picked = [];
+  if (sketcher.orbit) {
+    Object.assign(view, { yaw: sketcher.orbit.yaw, pitch: sketcher.orbit.pitch,
+                          distance: sketcher.orbit.distance });
+    view.target.copy(sketcher.orbit.target);
+    sketcher.orbit = null;
+    placeCamera();
+  }
+  refreshSketch();
+  refreshToolbar();
+}
+
+//! Square on to the plane, and staying there. The camera sits along the
+//! plane's own normal; while a sketch is open the drag that would orbit pans
+//! instead, because a drawing seen at an angle is a drawing you cannot draw on.
+function lookAtSketch() {
+  const frame = sketchFrame();
+  if (!frame) return;
+  const n = frame.normal;
+  view.target.copy(frame.origin);
+  view.yaw = Math.atan2(n.y, n.x);
+  view.pitch = Math.max(-1.53, Math.min(1.53, Math.asin(Math.max(-1, Math.min(1, n.z)))));
+  placeCamera();
+  draw();
+}
+
+/* ------------------------------------------------------- drawing overlay */
+
+function refreshSketch() {
+  if (sketcher.group) { world.remove(sketcher.group); disposeGroup(sketcher.group); sketcher.group = null; }
+  const bar = document.getElementById("sketch-bar");
+  const rail = document.getElementById("sketch-rail");
+  const entry = sketching();
+  bar.hidden = rail.hidden = !entry;
+  document.getElementById("rail").hidden = !!entry;
+  if (!entry) { draw(); return; }
+
+  document.getElementById("sketch-who").textContent = entry.name;
+  document.getElementById("sketch-hint").textContent = sketchHint();
+  for (const button of rail.querySelectorAll(".tool[data-sketch]"))
+    button.classList.toggle("on", button.dataset.sketch === sketcher.tool);
+  for (const button of rail.querySelectorAll(".tool[data-relation]"))
+    button.disabled = !relationReady(button.dataset.relation);
+
+  const frame = sketchFrame();
+  if (!frame) { draw(); return; }
+  const group = new THREE.Group();
+  const drawing = sketchDrawing();
+
+  // The drawing itself, over the top of everything. The kernel already built
+  // these edges and the viewport already draws them - but behind the solid the
+  // sketch was padded into, and a line you cannot see is a line you cannot
+  // draw against.
+  for (const el of drawing.elements) {
+    const line = sketchOutline(el, 64).map(p => sketchToWorld(p, frame));
+    if (line.length < 2) continue;
+    const over = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(line),
+      new THREE.LineBasicMaterial({ color: THEME.curve, depthTest: false,
+                                    transparent: true, opacity: 0.85 }));
+    over.renderOrder = 5;
+    group.add(over);
+  }
+
+  // Every end of everything, as a dot. These are what a click snaps to and
+  // what a coincidence is put between.
+  const dots = [];
+  for (const el of drawing.elements)
+    for (const [, p] of sketchHandles(el)) dots.push(sketchToWorld(p, frame));
+  if (dots.length) {
+    const cloud = new THREE.Points(
+      new THREE.BufferGeometry().setFromPoints(dots),
+      new THREE.PointsMaterial({ color: THEME.datum, size: 6, sizeAttenuation: false,
+                                 depthTest: false }));
+    cloud.renderOrder = 6;
+    group.add(cloud);
+  }
+
+  // What a relation would be put on, drawn over the top of it.
+  for (const id of sketcher.picked) {
+    const el = drawing.elements.find(e => e.id === String(id).split(".")[0]);
+    if (!el) continue;
+    const line = sketchOutline(el, 48).map(p => sketchToWorld(p, frame));
+    if (line.length < 2) continue;
+    const shown = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(line),
+      new THREE.LineBasicMaterial({ color: THEME.accent, depthTest: false }));
+    shown.renderOrder = 7;
+    group.add(shown);
+  }
+
+  // The element being drawn, following the cursor. Made the same way the real
+  // one will be, so what is shown is what will be written.
+  const band = sketchBand(drawing);
+  if (band) {
+    const line = sketchOutline(band, 48).map(p => sketchToWorld(p, frame));
+    if (line.length >= 2) {
+      const rubber = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(line),
+        new THREE.LineDashedMaterial({ color: THEME.accent, dashSize: 6, gapSize: 4,
+                                       depthTest: false }));
+      rubber.computeLineDistances();
+      rubber.renderOrder = 7;
+      group.add(rubber);
+    }
+  }
+
+  world.add(group);
+  sketcher.group = group;
+  draw();
+}
+
+//! The element the clicks so far would make if the cursor were the last one.
+function sketchBand(drawing) {
+  if (!sketcher.hover || !sketcher.clicks.length) return null;
+  const wanted = SKETCH_CLICKS[sketcher.tool];
+  const clicks = [...sketcher.clicks, sketcher.hover];
+  if (wanted && clicks.length < wanted) {
+    // Not enough yet to be what it will be; show the straight run of clicks.
+    return { id: "band", type: "spline", pts: clicks, closed: false };
+  }
+  try { return sketchElement(sketcher.tool, "band", clicks); } catch (e) { return null; }
+}
+
+function sketchHint() {
+  const wanted = SKETCH_CLICKS[sketcher.tool] || 0;
+  if (sketcher.picked.length)
+    return sketcher.picked.length + " picked · choose a relation, or Esc";
+  if (!wanted) return "spline · click points, Enter or double-click to finish";
+  const left = wanted - sketcher.clicks.length;
+  return sketcher.tool + " · " + (left > 0 ? left + " more click" + (left === 1 ? "" : "s")
+                                           : "click to place");
+}
+
+/* --------------------------------------------------------------- clicking */
+
+//! One click on the plane. It either finishes an element - in which case a
+//! draw edit is written - or waits for the next one.
+function sketchClick(event) {
+  const uv = sketchAt(event);
+  if (!uv) return;
+  const drawing = sketchDrawing();
+
+  // Picking things for a relation is a different job from drawing, and the
+  // rail says which one is on: with a relation armed, a click picks.
+  if (sketcher.relating) {
+    const spec = SKETCH_RELATIONS.find(r => r.key === sketcher.relating);
+    const want = spec.of === "handle" ? (nearestHandle(uv, drawing) || {}).ref
+                                      : nearestElement(uv, drawing);
+    if (want && !sketcher.picked.includes(want)) sketcher.picked.push(want);
+    if (sketcher.picked.length >= spec.takes) putRelation(spec.key);
+    else refreshSketch();
+    return;
+  }
+
+  const snap = nearestHandle(uv, drawing);
+  const at = snap ? snap.p.slice() : uv;
+  if (!sketcher.clicks.length) sketcher.snapped = snap ? snap.ref : null;
+  sketcher.clicks.push(at);
+  const wanted = SKETCH_CLICKS[sketcher.tool];
+  if (wanted && sketcher.clicks.length >= wanted) commitSketchElement(snap);
+  else refreshSketch();
+}
+
+function commitSketchElement(endSnap) {
+  const clicks = sketcher.clicks.slice();
+  const opening = sketcher.snapped;
+  sketcher.clicks = [];
+  sketcher.snapped = null;
+  if (clicks.length < Math.max(2, SKETCH_CLICKS[sketcher.tool] || 2)) { refreshSketch(); return; }
+
+  const drawing = sketchDrawing();
+  const id = nextSketchId(drawing);
+  const edits = [{ op: "draw", id: sketcher.id, type: sketcher.tool, at: clicks, as: id }];
+  // A line drawn onto the end of another one is meant to stay on it. The snap
+  // put it there; the coincidence keeps it there when either is moved.
+  const ends = { line: ["a", "b"], arc: ["start", "end"], spline: null };
+  const pair = ends[sketcher.tool];
+  if (pair && opening)
+    edits.push({ op: "relate", id: sketcher.id, type: "coincident",
+                 of: [id + "." + pair[0], opening] });
+  if (pair && endSnap && endSnap.ref !== opening)
+    edits.push({ op: "relate", id: sketcher.id, type: "coincident",
+                 of: [id + "." + pair[1], endSnap.ref] });
+  mdl.runAll(edits).catch(err => showError(err.message));
+}
+
+//! A spline is as many points as you give it; Enter or a double-click is what
+//! says that was the last one.
+function finishSpline() {
+  if (SKETCH_CLICKS[sketcher.tool] || sketcher.clicks.length < 2) return;
+  commitSketchElement(null);
+}
+
+const relationReady = key => {
+  const spec = SKETCH_RELATIONS.find(r => r.key === key);
+  return !!spec && sketcher.picked.length >= spec.takes;
+};
+
+function armRelation(key) {
+  const spec = SKETCH_RELATIONS.find(r => r.key === key);
+  if (!spec) return;
+  if (sketcher.picked.length >= spec.takes) { putRelation(key); return; }
+  sketcher.relating = sketcher.relating === key ? null : key;
+  sketcher.clicks = [];
+  if (!sketcher.relating) sketcher.picked = [];
+  document.getElementById("sketch-hint").textContent = sketcher.relating
+    ? spec.label + " · pick " + spec.takes + " " + (spec.of === "handle" ? "ends" : spec.of)
+    : sketchHint();
+  refreshSketch();
+}
+
+function putRelation(key) {
+  const spec = SKETCH_RELATIONS.find(r => r.key === key);
+  const of = sketcher.picked.slice(0, spec.takes);
+  sketcher.picked = [];
+  sketcher.relating = null;
+  edit({ op: "relate", id: sketcher.id, type: key, of });
+}
+
+/* -------------------------------------------------------------- the rail */
+
+//! The rail the sketcher draws with: the seven things a drawing is made of,
+//! then the six ways one part of it can be held against another.
+function buildSketchRail() {
+  const rail = document.getElementById("sketch-rail");
+  if (rail.dataset.built) return;
+  rail.dataset.built = "1";
+
+  const tools = document.createElement("div");
+  tools.dataset.group = "elements";
+  for (const type of SKETCH_TYPES) {
+    const button = document.createElement("button");
+    button.className = "tool";
+    button.dataset.sketch = type;
+    button.dataset.label = type + (SKETCH_CLICKS[type] ? " · " + SKETCH_CLICKS[type] + " clicks"
+                                                       : " · click points");
+    button.setAttribute("aria-label", type);
+    button.innerHTML = svg(SKETCH_ICONS[type]);
+    button.addEventListener("click", () => {
+      sketcher.tool = type;
+      sketcher.clicks = [];
+      sketcher.relating = null;
+      sketcher.picked = [];
+      refreshSketch();
+    });
+    tools.appendChild(button);
+  }
+  rail.appendChild(tools);
+  rail.appendChild(document.createElement("hr"));
+
+  const relations = document.createElement("div");
+  relations.dataset.group = "relations";
+  for (const spec of SKETCH_RELATIONS) {
+    const button = document.createElement("button");
+    button.className = "tool";
+    button.dataset.relation = spec.key;
+    button.dataset.label = spec.label + " · " + spec.hint;
+    button.setAttribute("aria-label", spec.label);
+    button.innerHTML = svg(SKETCH_ICONS[spec.key]);
+    button.addEventListener("click", () => armRelation(spec.key));
+    relations.appendChild(button);
+  }
+  rail.appendChild(relations);
 }
 
 //! Three arrows. Sized against the camera distance so they stay the same size
@@ -567,10 +979,33 @@ function fitView() {
    Interface.
    ========================================================================== */
 
+//! The sketcher's own rail. Seven shapes and six relations, drawn the way a
+//! drawing board draws them.
+const SKETCH_ICONS = {
+  point: '<circle cx="8" cy="8" r="2.2" fill="currentColor"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2" stroke="currentColor" stroke-width="1"/>',
+  line: '<path d="M2.6 13.4L13.4 2.6" stroke="currentColor" stroke-width="1.4"/><circle cx="2.6" cy="13.4" r="1.5" fill="currentColor"/><circle cx="13.4" cy="2.6" r="1.5" fill="currentColor"/>',
+  arc: '<path d="M2.4 12.4A9 9 0 0112.4 2.4" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="2.4" cy="12.4" r="1.4" fill="currentColor"/><circle cx="12.4" cy="2.4" r="1.4" fill="currentColor"/>',
+  circle: '<circle cx="8" cy="8" r="5.8" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/>',
+  ellipse: '<ellipse cx="8" cy="8" rx="6.2" ry="3.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/>',
+  oblong: '<rect x="1.6" y="4.6" width="12.8" height="6.8" rx="3.4" fill="none" stroke="currentColor" stroke-width="1.4"/>',
+  spline: '<path d="M1.8 11.5c2.6 0 2.6-7 5.2-7s2.6 7 5.2 7 2.6-3 2.6-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
+
+  coincident: '<path d="M2 11.5L7.4 6.1M14 4.5L8.6 9.9" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/>',
+  horizontal: '<path d="M1.8 8h12.4" stroke="currentColor" stroke-width="1.6"/><path d="M1.8 12.5h12.4" stroke="currentColor" stroke-width=".9" stroke-dasharray="2 2" opacity=".5"/>',
+  vertical: '<path d="M8 1.8v12.4" stroke="currentColor" stroke-width="1.6"/><path d="M12.5 1.8v12.4" stroke="currentColor" stroke-width=".9" stroke-dasharray="2 2" opacity=".5"/>',
+  parallel: '<path d="M3.4 13.6L7.6 2.4M8.8 13.6L13 2.4" stroke="currentColor" stroke-width="1.4"/>',
+  perpendicular: '<path d="M3 13h10M4.6 13V3" stroke="currentColor" stroke-width="1.4"/><path d="M4.6 10.6h2.4v2.4" fill="none" stroke="currentColor" stroke-width="1"/>',
+  tangent: '<circle cx="9" cy="9" r="4.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M1.6 4.6h12.8" stroke="currentColor" stroke-width="1.4"/>',
+};
+
 const ICONS = {
   Point: '<circle cx="8" cy="8" r="2.4" fill="currentColor"/><path d="M8 1v3M8 12v3M1 8h3M12 8h3" stroke="currentColor" stroke-width="1.2"/>',
   Vector: '<path d="M2 13L12 4" stroke="currentColor" stroke-width="1.5"/><path d="M13.5 2.5L9 3.6l3.4 3.2z" fill="currentColor"/>',
   Line: '<path d="M2 13L14 3" stroke="currentColor" stroke-width="1.5"/><circle cx="2.6" cy="12.6" r="1.6" fill="currentColor"/><circle cx="13.4" cy="3.4" r="1.6" fill="currentColor"/>',
+  // A sheet with a drawing on it: the plane, and two dimensions of lines.
+  Sketch: '<path d="M1.6 11.2L5.6 4.6h8.8L10.4 11.2z" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round" opacity=".55"/>'
+        + '<path d="M4.6 9.6h5.4M7.6 6.2v3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+        + '<circle cx="4.6" cy="9.6" r="1.15" fill="currentColor"/><circle cx="10" cy="9.6" r="1.15" fill="currentColor"/>',
   Plane: '<path d="M1.5 10.5L6 4.5h8.5L10 10.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
   Cube: '<path d="M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M2.4 4.6L8 7.6l5.6-3M8 7.6v6.8" stroke="currentColor" stroke-width="1.1"/>',
   Sphere: '<circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.3"/><ellipse cx="8" cy="8" rx="2.7" ry="6.3" fill="none" stroke="currentColor" stroke-width="1"/>',
@@ -829,6 +1264,14 @@ function treeNode(entry) {
   kind.className = "kind";
   // A feature that computes says what it computed, where a solid says its type.
   kind.textContent = entry.error ? "error"
+    // A sketch says what is drawn on it, ahead of everything else: it is what
+    // you want to know about a sketch, and a sketch stays worth opening after
+    // a pad has consumed it - which is the whole point of one. Only the count
+    // here, though: the tree has a name to fit in beside it, and the whole of
+    // it is in the panel.
+    : entry.sketch ? (entry.sketch.drawing.elements.length || "empty")
+        + (entry.sketch.drawing.elements.length === 1 ? " element"
+           : entry.sketch.drawing.elements.length ? " elements" : "")
     : consumed ? "hidden"
     : entry.data && !entry.built
       ? entry.data.count + " " + entry.data.kind + (entry.data.count === 1 ? "" : "s")
@@ -850,7 +1293,12 @@ function treeNode(entry) {
   }
 
   li.addEventListener("click", () => select(entry.id, false));
-  li.addEventListener("dblclick", () => select(entry.id, true));
+  li.addEventListener("dblclick", () => {
+    // A sketch opens into the sketcher, the way a CAD modeller does. Everything
+    // else opens its definition.
+    if (entry.sketch) { select(entry.id, false); enterSketch(entry.id); return; }
+    select(entry.id, true);
+  });
   li.addEventListener("keydown", event => {
     if (event.key === "Enter") { select(entry.id, true); event.preventDefault(); }
   });
@@ -900,6 +1348,7 @@ function buildPanel() {
                    : arg.kind === "choice" ? choiceField(entry, arg)
                    : arg.kind === "edits" ? editsField(entry, arg)
                    : arg.kind === "text" ? textField(entry, arg)
+                   : arg.kind === "sketch" ? sketchField(entry, arg)
                    : refField(entry, arg));
   }
 
@@ -1055,6 +1504,45 @@ function textField(entry, arg) {
 //! The hand edits, both ways round: the vertex under the handle can be typed
 //! as three numbers, and the whole set can be read and cleared. Dragging in the
 //! viewport and typing here write the same line of JSON.
+//! The drawing, in the panel. It says what is in the sketch, opens the
+//! sketcher, and shows the JSON - which is the drawing itself, not a report of
+//! it, so editing the text here is editing the sketch.
+function sketchField(entry, arg) {
+  const field = document.createElement("div");
+  field.className = "field";
+  const drawing = (entry.sketch && entry.sketch.drawing) || { elements: [], constraints: [] };
+  field.innerHTML = '<div class="field-head"><label>' + arg.label + "</label>" +
+    '<span class="kind">' + escapeHtml((entry.sketch && entry.sketch.summary) || "empty") +
+    "</span></div>";
+
+  const open = document.createElement("button");
+  open.className = "row-btn";
+  open.type = "button";
+  open.textContent = sketcher.id === entry.id ? "Close the sketcher" : "Draw on it…";
+  open.addEventListener("click", () =>
+    (sketcher.id === entry.id ? leaveSketch() : enterSketch(entry.id)));
+  field.appendChild(open);
+
+  const area = document.createElement("textarea");
+  area.className = "code";
+  area.rows = 7;
+  area.spellcheck = false;
+  area.value = JSON.stringify(drawing, null, 1);
+  area.addEventListener("change", () => {
+    let parsed;
+    try { parsed = JSON.parse(area.value); }
+    catch (err) { showError("the drawing is not valid JSON: " + err.message); return; }
+    edit({ op: "sketch", id: entry.id, drawing: parsed });
+  });
+  field.appendChild(area);
+
+  const path = document.createElement("div");
+  path.className = "attr-path";
+  path.innerHTML = escapeHtml(entry.labels[arg.key] || "") + " · <b>TDataStd_AsciiString</b>";
+  field.appendChild(path);
+  return field;
+}
+
 function editsField(entry, arg) {
   const field = document.createElement("div");
   field.className = "field";
@@ -1510,6 +1998,9 @@ function select(id, openDefinition) {
     : "click a body · double-click to edit it";
   buildTree(); buildPanel(); refreshToolbar(); paintSelection();
   refreshMeshEdit();
+  // Selecting anything else leaves the sketch; the tree is a way out too.
+  if (sketcher.id && id !== sketcher.id) leaveSketch();
+  else if (sketcher.id) refreshSketch();
   if (graph.showing) graph.update();
   if (staging) refreshStageSelection();
 }
@@ -1705,8 +2196,12 @@ const graph = new GraphEditor({
   openDefinition: id => { select(id, true); toggleTree(true); },
   onOpen: () => document.getElementById("btn-graph").setAttribute("aria-pressed", "true"),
   onClose: () => document.getElementById("btn-graph").setAttribute("aria-pressed", "false"),
+  // The graph may be on another screen; the drawing is not. Draw… on a sketch
+  // node opens the sketcher here.
+  onSketch: id => { focus(); enterSketch(id); },
 });
 document.getElementById("btn-graph").addEventListener("click", () => graph.toggle());
+document.getElementById("sketch-done").addEventListener("click", leaveSketch);
 
 /* ----------------------------------------------------------------- showroom
 
@@ -2014,12 +2509,22 @@ addEventListener("pointerdown", event => {
 
 addEventListener("keydown", event => {
   if (event.target.matches("input, textarea, select")) return;
-  if (event.key === "f" || event.key === "F") fitView();
+  if (event.key === "f" || event.key === "F") { if (sketching()) lookAtSketch(); else fitView(); }
   if (event.key === "t" || event.key === "T") toggleTree();
   if (event.key === "g" || event.key === "G") graph.toggle();
+  if (event.key === "Enter" && sketching()) { finishSpline(); return; }
   if (event.key === "Escape") {
     sampleMenu.hidden = true;
     if (staging) return leaveShowroom();
+    // Out of the sketcher a step at a time: the half-drawn element, then what
+    // is picked, then the sketch itself.
+    if (sketching()) {
+      if (sketcher.clicks.length) { sketcher.clicks = []; sketcher.snapped = null; refreshSketch(); }
+      else if (sketcher.picked.length || sketcher.relating) {
+        sketcher.picked = []; sketcher.relating = null; refreshSketch();
+      } else leaveSketch();
+      return;
+    }
     state.edited = null; buildPanel(); logPop.hidden = true;
   }
 });

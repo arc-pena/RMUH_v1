@@ -10,6 +10,8 @@
 // build() that calls a real kernel - OpenCascade compiled to WebAssembly in the
 // browser, the same OpenCascade natively behind the HTTP kernel.
 
+import { EMPTY_SKETCH, readSketch, sketchSummary } from "./sketch.js";
+
 /* --------------------------------------------------------------- samples
 
    A whole document, ready to load. Not a feature and not a script: every one
@@ -919,12 +921,349 @@ export const HILLSIDE_TOWN = {
   }
 };
 
+//! The sketcher, doing what a sketcher is for: one drawing, on a plane, with
+//! relations holding it square, and a pad off the loops it closes. The outline
+//! is six elements chained end to end; the three loops drawn inside it are
+//! holes rather than plates because they are inside it, which is counted
+//! rather than declared. The rib beside it is the same sketch node on a
+//! different plane with the extrude switched to Surface, so the two halves of
+//! that toggle are on screen at once.
+export const SKETCHED_BRACKET = {
+  "format": "ocaf-parametric-model",
+  "version": 1,
+  "name": "Sketched bracket",
+  "units": "mm",
+  "features": [
+    {
+      "id": "PT1",
+      "type": "Point",
+      "name": "Origin",
+      "args": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      }
+    },
+    {
+      "id": "VE1",
+      "type": "Vector",
+      "name": "Up",
+      "args": {
+        "dx": 0,
+        "dy": 0,
+        "dz": 1
+      }
+    },
+    {
+      "id": "PL1",
+      "type": "Plane",
+      "name": "XY",
+      "args": {
+        "origin": {
+          "ref": "PT1"
+        },
+        "normal": {
+          "ref": "VE1"
+        }
+      }
+    },
+    {
+      "id": "SK1",
+      "type": "Sketch",
+      "name": "Plate profile",
+      "args": {
+        "plane": {
+          "ref": "PL1"
+        },
+        "origin": {
+          "ref": "PT1"
+        },
+        "drawing": {
+          "elements": [
+            {
+              "id": "o1",
+              "type": "line",
+              "a": [
+                -130,
+                -80
+              ],
+              "b": [
+                130,
+                -80
+              ]
+            },
+            {
+              "id": "o2",
+              "type": "arc",
+              "c": [
+                130,
+                -40
+              ],
+              "r": 40,
+              "a0": -1.5707963,
+              "a1": 1.5707963
+            },
+            {
+              "id": "o3",
+              "type": "line",
+              "a": [
+                130,
+                0
+              ],
+              "b": [
+                130,
+                60
+              ]
+            },
+            {
+              "id": "o4",
+              "type": "arc",
+              "c": [
+                80,
+                60
+              ],
+              "r": 50,
+              "a0": 0,
+              "a1": 3.1415927
+            },
+            {
+              "id": "o5",
+              "type": "line",
+              "a": [
+                30,
+                60
+              ],
+              "b": [
+                -130,
+                60
+              ]
+            },
+            {
+              "id": "o6",
+              "type": "line",
+              "a": [
+                -130,
+                60
+              ],
+              "b": [
+                -130,
+                -80
+              ]
+            },
+            {
+              "id": "h1",
+              "type": "circle",
+              "c": [
+                -90,
+                -40
+              ],
+              "r": 16
+            },
+            {
+              "id": "h2",
+              "type": "circle",
+              "c": [
+                80,
+                60
+              ],
+              "r": 22
+            },
+            {
+              "id": "h3",
+              "type": "oblong",
+              "a": [
+                -40,
+                10
+              ],
+              "b": [
+                40,
+                10
+              ],
+              "r": 14
+            }
+          ],
+          "constraints": [
+            {
+              "type": "horizontal",
+              "of": [
+                "o1"
+              ]
+            },
+            {
+              "type": "horizontal",
+              "of": [
+                "o5"
+              ]
+            },
+            {
+              "type": "vertical",
+              "of": [
+                "o6"
+              ]
+            },
+            {
+              "type": "parallel",
+              "of": [
+                "o6",
+                "o3"
+              ]
+            }
+          ]
+        },
+        "faces": "Make faces",
+        "solve": "Solve",
+        "passes": 24
+      }
+    },
+    {
+      "id": "NU1",
+      "type": "Number",
+      "name": "Plate thickness",
+      "args": {
+        "value": 14
+      }
+    },
+    {
+      "id": "EX1",
+      "type": "Extrude",
+      "name": "Plate",
+      "args": {
+        "profile": {
+          "ref": "SK1"
+        },
+        "direction": {
+          "ref": "VE1"
+        },
+        "distance": {
+          "value": 14,
+          "from": "NU1"
+        },
+        "cap": "Solid"
+      },
+      "appearance": {
+        "finish": "aluminium"
+      }
+    },
+    {
+      "id": "FI1",
+      "type": "Fillet",
+      "name": "Broken edges",
+      "args": {
+        "body": {
+          "ref": "EX1"
+        },
+        "radius": 2
+      },
+      "appearance": {
+        "finish": "aluminium"
+      }
+    },
+    {
+      "id": "PT2",
+      "type": "Point",
+      "name": "Rib base",
+      "args": {
+        "x": 0,
+        "y": 0,
+        "z": 14
+      }
+    },
+    {
+      "id": "PL2",
+      "type": "Plane",
+      "name": "Rib plane",
+      "args": {
+        "origin": {
+          "ref": "PT2"
+        },
+        "normal": {
+          "ref": "VE1"
+        }
+      }
+    },
+    {
+      "id": "SK2",
+      "type": "Sketch",
+      "name": "Rib line",
+      "args": {
+        "plane": {
+          "ref": "PL2"
+        },
+        "origin": {
+          "ref": "PT2"
+        },
+        "drawing": {
+          "elements": [
+            {
+              "id": "r1",
+              "type": "line",
+              "a": [
+                -110,
+                -60
+              ],
+              "b": [
+                110,
+                -60
+              ]
+            },
+            {
+              "id": "r2",
+              "type": "arc",
+              "c": [
+                0,
+                -60
+              ],
+              "r": 110,
+              "a0": 0,
+              "a1": 1.0471976
+            }
+          ],
+          "constraints": [
+            {
+              "type": "horizontal",
+              "of": [
+                "r1"
+              ]
+            }
+          ]
+        },
+        "faces": "Make faces",
+        "solve": "Solve",
+        "passes": 24
+      }
+    },
+    {
+      "id": "EX2",
+      "type": "Extrude",
+      "name": "Rib",
+      "args": {
+        "profile": {
+          "ref": "SK2"
+        },
+        "direction": {
+          "ref": "VE1"
+        },
+        "distance": 46,
+        "cap": "Surface"
+      },
+      "appearance": {
+        "finish": "glass"
+      }
+    }
+  ]
+};
+
 export const SAMPLES = [
   { key: "hillside-town", name: "Hillside town",
     summary: "A landform, six villas terraced across it, and the plan projected onto "
            + "the hill. The villa is after Zaha Hadid Architects' Rock, Dubrovnik. "
            + "52 nodes, no script.",
     model: HILLSIDE_TOWN },
+  { key: "sketched-bracket", name: "Sketched bracket",
+    summary: "One sketch on a plane: six elements chained into an outline, three loops "
+           + "inside it that come out as holes, relations holding it square, and a pad. "
+           + "Double-click it to draw on it.",
+    model: SKETCHED_BRACKET },
 ];
 
 /* ------------------------------------------------------------- catalogue */
@@ -1351,6 +1690,13 @@ const refs = (key, label, accepts, consumes = false) =>
 //! model file - which is the point.
 const edits = (key, label, summary) => ({ key, label, kind: "edits", def: "{}", summary });
 
+//! A 2D drawing, as JSON on a label of its own. Held exactly as it is drawn,
+//! so the sketcher, the node editor and the model file are three windows onto
+//! one string. Its geometry means nothing until the sketch's plane says where
+//! it is - which is what makes a sketch a sketch.
+const drawing = (key, label, summary) =>
+  ({ key, label, kind: "sketch", def: JSON.stringify(EMPTY_SKETCH), summary });
+
 //! What a feature hands downstream. An input accepts a set of these.
 export const KINDS = ["number", "point", "vector", "curve", "plane", "solid", "mesh", "text"];
 const ANY = KINDS.slice();
@@ -1444,6 +1790,25 @@ export const CATALOGUE = [
     args: [ref("input", "Input", ANY)] },
 
   /* ------------------------------------------------------------- curves */
+  //! The sketch. Everything a CAD modeller draws in two dimensions before it
+  //! becomes three: the drawing itself is one JSON string on one label, the
+  //! plane and the origin are wires, and the loops it closes come out as
+  //! planar faces ready to be padded.
+  { type: "Sketch", guid: "9a1b2c30-0090-4c00-9e00-caf000000090", category: "curve",
+    produces: "curve",
+    summary: "A 2D drawing on a plane. Lines, arcs, circles, ellipses, oblongs, points "
+           + "and splines, in the plane's own u-v coordinates, held with their "
+           + "constraints as JSON. Point it at a different plane or origin and the "
+           + "whole drawing moves. Closed loops come out as planar faces, ready to "
+           + "extrude into a pad.",
+    args: [ref("plane", "Plane", ["plane"]), ref("origin", "Origin", ["point"]),
+           drawing("drawing", "Drawing",
+                   "the 2D elements and their constraints, as JSON: "
+                   + "{\"elements\":[{\"id\":\"e1\",\"type\":\"line\","
+                   + "\"a\":[0,0],\"b\":[100,0]}],\"constraints\":[]}"),
+           choice("faces", "Closed loops", ["Make faces", "Leave as wires"], 0),
+           choice("solve", "Constraints", ["Solve", "Ignore"], 0),
+           real("passes", "Solver passes", 24, 1, 400, 1, "")] },
   { type: "Circle", guid: "9a1b2c30-0050-4c00-9e00-caf000000050", category: "curve",
     produces: "curve",
     summary: "A circle on a plane. A profile to extrude, a section to loft, a rail "
@@ -1625,8 +1990,10 @@ export const CATALOGUE = [
   /* --------------------------------------------------------- operations */
   { type: "Extrude", guid: "9a1b2c30-0070-4c00-9e00-caf000000070", category: "operation",
     produces: "solid",
-    summary: "Drags a profile along a direction. A closed profile can be capped into a "
-           + "solid; an open one comes out as a surface.",
+    summary: "Drags a profile along a direction. On Solid every closed loop in the "
+           + "profile is capped and padded - a sketch of six loops pads into six "
+           + "bodies. On Surface the wires are swept open instead, which is what to "
+           + "use when the profile is a rib, a wall or a skin rather than a body.",
     args: [ref("profile", "Profile", ["curve", "plane"], true),
            ref("direction", "Direction", ["vector"]),
            real("distance", "Distance", 120, -4000, 4000, 1),
@@ -1720,6 +2087,12 @@ export const PARAM_TAG_BASE = 10, PARAM_TAG_LIMIT = 50, SPECS_TAG = 51;
 //! arguments, because it drives no geometry - XCAF keeps colour beside a shape
 //! for the same reason.
 export const APPEARANCE_TAG = 52;
+
+//! Where a sketch's plane put it, written by the driver when it builds and read
+//! by the viewport so it can lock the camera to the plane and put a click back
+//! into the drawing's own two numbers. A result, not an argument: the plane says
+//! what it is, and this is what the plane came to.
+export const FRAME_TAG = 53;
 
 const byType = new Map(CATALOGUE.map(t => [t.type, t]));
 const byGuid = new Map(CATALOGUE.map(t => [t.guid, t]));
@@ -1856,6 +2229,19 @@ export const F = {
     return F.setEdits(f, key, moves);
   },
 
+  //! The drawing on a sketch argument. Stored as the text it is written in and
+  //! read back through the same tolerant parser the file format uses, so a
+  //! drawing typed into the model file by hand behaves like one that was drawn.
+  sketch(f, key) {
+    const label = F.argLabel(f, key);
+    return readSketch(label && label.attr.TDataStd_AsciiString);
+  },
+  setSketch(f, key, source) {
+    const clean = readSketch(source);
+    F.argLabel(f, key, true).attr.TDataStd_AsciiString = JSON.stringify(clean);
+    return clean;
+  },
+
   appearance(f) {
     const label = f.findChild(APPEARANCE_TAG);
     if (!label || typeof label.attr.TDataStd_AsciiString !== "string") return null;
@@ -1865,6 +2251,16 @@ export const F = {
     const label = f.findChild(APPEARANCE_TAG, true);
     if (!appearance) label.attr.TDataStd_AsciiString = "";
     else label.attr.TDataStd_AsciiString = JSON.stringify(appearance);
+  },
+
+  frame(f) {
+    const label = f.findChild(FRAME_TAG);
+    if (!label || typeof label.attr.TDataStd_AsciiString !== "string") return null;
+    try { return JSON.parse(label.attr.TDataStd_AsciiString); } catch (e) { return null; }
+  },
+  setFrame(f, frame) {
+    f.findChild(FRAME_TAG, true).attr.TDataStd_AsciiString =
+      frame ? JSON.stringify(frame) : "";
   },
 
   //! What the script last declared, so the panel can draw its sliders without
@@ -2154,6 +2550,7 @@ export class Doc {
       if (arg.kind === "real") label.attr.TDataStd_Real = arg.def;
       else if (arg.kind === "choice") label.attr.TDataStd_Integer = arg.def;
       else if (arg.kind === "code") label.attr.TDataStd_AsciiString = arg.def;
+      else if (arg.kind === "sketch") label.attr.TDataStd_AsciiString = arg.def;
     }
     F.resultLabel(f, true);
     this.log.touch(f);
@@ -2189,7 +2586,8 @@ export class Doc {
 
   setParameter(f, key, value) {
     const spec = F.spec(f);
-    const arg = spec && spec.args.find(a => a.key === key && a.kind !== "ref" && a.kind !== "code");
+    const arg = spec && spec.args.find(a => a.key === key &&
+      (a.kind === "real" || a.kind === "choice"));
     if (!Number.isFinite(value)) throw new Error("'" + key + "' must be a number");
 
     if (!arg) {
@@ -2229,6 +2627,19 @@ export class Doc {
     this.log.touch(F.argLabel(f, key));
   }
 
+  //! Drawing a line is an edit like any other: the drawing is one string on one
+  //! label, and rewriting it re-runs the sketch and everything downstream of it.
+  //! The sketcher, the node editor and someone typing into the model file all
+  //! arrive here.
+  setSketch(f, key, source) {
+    const spec = F.spec(f);
+    const arg = spec && spec.args.find(a => a.key === key && a.kind === "sketch");
+    if (!arg) throw new Error(F.name(f) + " has no drawing at '" + key + "'");
+    const clean = F.setSketch(f, key, source);
+    this.log.touch(F.argLabel(f, key));
+    return clean;
+  }
+
   //! Appearance drives no geometry, so it is set without touching the logbook:
   //! nothing needs rebuilding, only redrawing.
   setAppearance(f, appearance) { F.setAppearance(f, appearance); }
@@ -2239,7 +2650,7 @@ export class Doc {
   setReference(f, key, target) {
     const spec = F.spec(f);
     const arg = spec && spec.args.find(a => a.key === key);
-    if (!arg || arg.kind === "code")
+    if (!arg || arg.kind === "code" || arg.kind === "sketch")
       throw new Error(F.name(f) + " has no input '" + key + "'");
     if (target) {
       const accepts = arg.kind === "ref" || arg.kind === "refs" ? arg.accepts : ["number"];
@@ -2388,6 +2799,7 @@ export class Doc {
           else if (arg.kind === "code") { /* published separately, below */ }
           else if (arg.kind === "text") texts[arg.key] = F.text(f, arg.key, arg.def);
           else if (arg.kind === "edits") lists[arg.key] = F.edits(f, arg.key);
+          else if (arg.kind === "sketch") { /* published whole, below */ }
           else if (arg.kind === "refs") lists[arg.key] = F.references(f, arg.key).map(F.id);
           else {
             const target = F.reference(f, arg.key);
@@ -2418,6 +2830,17 @@ export class Doc {
         // A script publishes its source and the parameters it declared, so the
         // panel can draw an editor and a slider per parameter without knowing
         // anything about what the script builds.
+        // The drawing travels whole: the sketcher needs every point of it, and
+        // it is small next to a mesh. Same string the model file carries.
+        const paper = spec.args.find(a => a.kind === "sketch");
+        if (paper) {
+          entry.sketch = { key: paper.key, drawing: F.sketch(f, paper.key) };
+          entry.sketch.summary = sketchSummary(entry.sketch.drawing);
+          // Where the plane put it, last time it built. The viewport needs it
+          // to lock the camera and to turn a click back into two numbers.
+          const frame = F.frame(f);
+          if (frame) entry.sketch.frame = frame;
+        }
         const source = spec.args.find(a => a.kind === "code");
         if (source) {
           entry.code = F.code(f, source.key, source.def);
@@ -2456,6 +2879,7 @@ export class Doc {
             if (Object.keys(moves).length) args[arg.key] = moves;
           }
           else if (arg.kind === "text") args[arg.key] = F.text(f, arg.key, arg.def);
+          else if (arg.kind === "sketch") args[arg.key] = F.sketch(f, arg.key);
           else if (arg.kind === "refs") args[arg.key] = F.references(f, arg.key).map(t => ({ ref: F.id(t) }));
           else if (arg.kind === "choice") args[arg.key] = arg.options[F.choice(f, arg.key, arg.def)];
           else if (arg.kind === "code") {
@@ -2518,6 +2942,10 @@ export class Doc {
           if (!value || typeof value !== "object" || Array.isArray(value))
             throw new Error(key + " of " + entry.id + " must be an object of index → offset");
           F.setEdits(f, key, value);
+        } else if (arg.kind === "sketch") {
+          if (typeof value !== "string" && (!value || typeof value !== "object"))
+            throw new Error(key + " of " + entry.id + " must be a drawing");
+          F.setSketch(f, key, value);
         } else if (arg.kind === "refs") {
           const list = Array.isArray(value) ? value : [value];
           F.setReferences(f, key, list.map(item => {
@@ -2650,6 +3078,8 @@ export function schemaJson() {
         if (arg.kind === "code")
           return { ...base, default: arg.def };
         if (arg.kind === "edits")
+          return { ...base, default: arg.def, summary: arg.summary || "" };
+        if (arg.kind === "sketch")
           return { ...base, default: arg.def, summary: arg.summary || "" };
         if (arg.kind === "text")
           return { ...base, default: arg.def, hint: arg.hint || "" };

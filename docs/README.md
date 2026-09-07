@@ -133,8 +133,9 @@ Everything the interface can do to the document is one JSON edit, and there is
 no second path. A toolbar button is a literal, `{"op":"add","type":"Cube"}`. A
 slider is a literal, `{"op":"set","id":"CB1","key":"dx","value":92}`. A wire
 dragged in the node graph is `{"op":"connect","id":"FI1","key":"body",
-"from":"CB1"}`. `src/mdl.js` holds the eleven of them and the channel they all
-go through; nothing else may touch the kernel.
+"from":"CB1"}`. A line drawn in the sketcher is `{"op":"draw","id":"SK1",
+"type":"line","at":[[0,0],[120,0]]}`. `src/mdl.js` holds the sixteen of them
+and the channel they all go through; nothing else may touch the kernel.
 
 | | |
 |---|---|
@@ -143,8 +144,10 @@ go through; nothing else may touch the kernel.
 | `set` | one number — a catalogue argument, or a parameter a script declared |
 | `connect` `disconnect` | one reference: one wire |
 | `code` | the source of a written feature |
+| `sketch` | a whole drawing at once |
+| `draw` `erase` `relate` | one element of a drawing, or one relation over it — what a click in the sketcher writes |
 | `appearance` | a finish; redraws, does not rebuild |
-| `model` | the whole document at once — the other ten are small edits of the text this one writes wholesale |
+| `model` | the whole document at once — every one above is a small edit of the text this one writes wholesale |
 | `move` `select` | view state, through the same channel, recorded and marked as not rebuilding anything |
 
 `add` without `refs` wires its inputs the way pressing the button does — the
@@ -264,6 +267,116 @@ These four are what a node editor needs to stand on its own:
 like code, with a field rather than an editor. It shows on the node itself,
 because a list of numbers is short enough to read and change without opening
 anything.
+
+## The sketch
+
+Every CAD modeller has one, and it is the same idea in all of them: a drawing
+in two dimensions, and a plane to put it on. Nothing in the drawing knows where
+that plane is. `{"id":"e1","type":"line","a":[0,0],"b":[100,0]}` is a hundred
+millimetres along the sketch's own **u**, and that is all it is. Point the
+sketch at a different plane, or wire a different point into its origin, and
+every line, arc and spline in it goes with it — while the JSON does not change
+by one character. That is not a convenience; it is what a sketch *is*, and the
+test that matters says exactly that:
+
+```
+ok   the drawing does not change when the plane does
+ok   but the geometry does
+```
+
+`src/sketch.js` is the drawing's semantics and nothing else — no OpenCascade,
+no DOM. The kernel reads it to build edges; the viewport reads the same
+functions to draw what you are drawing and to decide what your cursor is
+snapping to. One definition, two readers.
+
+| | |
+|---|---|
+| elements | `point` `line` `arc` `circle` `ellipse` `oblong` `spline` |
+| relations | `coincident` `horizontal` `vertical` `parallel` `perpendicular` `tangent` |
+| arguments | a plane, an origin, the drawing, and whether closed loops become faces |
+
+### Drawing is an edit like any other
+
+Double-click a sketch — in the tree, in the viewport, or on its node — and the
+viewport becomes a drawing board: the camera goes square on to the plane and
+stops orbiting, and the tool rail steps aside for the seven things a drawing is
+made of. A click is then no longer a click on a solid. It is a point on the
+plane, in the plane's own two numbers, and when enough of them have been
+collected the element they make is written as one line of the model description
+language:
+
+```json
+{ "op": "draw", "id": "SK1", "type": "line", "at": [[0, 0], [120, 0]] }
+```
+
+which goes down the same road a slider and a wire go down. Drawing a line in
+the viewport and typing that line into the model file are the same edit,
+because there is only one of them. `draw`, `erase`, `relate` and `sketch` are
+the four ops; the first three read the drawing, change one thing and write it
+back, because the drawing is one string on one label.
+
+A click that lands on the end of something already drawn snaps to it and writes
+a `coincident` relation as well, so the corner stays a corner when either side
+of it moves.
+
+### Adding the sketcher moved two other things
+
+`Extrude` gained the loops rule below, and the page gained a `<meta
+charset="utf-8">`. The Artifact wrapper supplies one, so the middle dots and
+en-dashes read correctly there; the same file opened from disk or served by
+`ocafcad serve --ui` had none and showed them as mojibake.
+
+### The constraints are a relaxation, not a solver
+
+Every relation knows how to move the handles it governs the shortest way to
+satisfy itself, and they are run in turn until nothing moves. That converges on
+the sketches people draw, it fights itself when a sketch is over-constrained,
+and — the part that matters — it reports how far off it finished rather than
+pretending. It is not a degree-of-freedom solver and does not claim to be. The
+drawing on the label is what you drew; what the relations make of it is
+computed at build time and never written back, so nothing drifts by being
+rebuilt twice.
+
+### A loop inside a loop is a hole
+
+A loop drawn inside another is a hole in it, and a loop drawn inside that hole
+is solid again. Nothing declares this: the loops' own 2D outlines are counted —
+a loop with an odd number of loops around it is a hole in the innermost of them
+— and the hole wire is added to the face **reversed**, because OpenCascade
+otherwise reads it as a second outline and hands back a face that is bigger
+rather than smaller. A 200 mm square with two 18 mm circles in it padded 40 mm
+measures 1 518 570 mm³, which is the square less the two circles, times the
+thickness, to four significant figures.
+
+### A closed loop is a face
+
+The chain walker takes the elements that have ends and walks them end to end
+until a walk comes back where it started; circles, ellipses and slots are
+already a loop on their own. Every loop that closes becomes a planar face —
+`BRepBuilderAPI_MakeFace(wire, true)` — and everything left over stays a wire.
+So a sketch is pad-ready the moment it closes, without anyone asking for a
+surface.
+
+Two millimetre-scale details make that work rather than nearly work. A drawing
+made by clicking is full of hundredth-of-a-millimetre gaps and **a wire will
+not close over one**: `BRepBuilderAPI_MakeWire` simply returns `IsDone() ==
+false`. So the ends of a chain are welded first — the meeting point is the
+middle of the two ends and both sides are given that exact point — and every
+edge is then built *through the points the walk hands over* rather than from
+each element's own arithmetic. An arc is built with `GC_MakeArcOfCircle`
+through three of its own points, which means its ends are exactly the welded
+ones whatever that did to its radius, and it is still a real arc rather than a
+run of segments.
+
+### Solid or surface is a real choice
+
+`Extrude` used to take the first face it found. It now sweeps **every** face
+the profile offers, so a sketch of six closed loops pads into six bodies rather
+than one; on `Surface` it sweeps the wires instead, taking them back off the
+faces when the profile arrived as faces. A sketch of a square 100 mm on a side,
+padded 40 mm, measures 400 000 mm³ and 36 000 mm² as a solid and 16 000 mm² as
+a surface — the two ends, present or absent. That is the whole difference
+between a body and a skin, and it is worth measuring rather than assuming.
 
 ## Polymesh
 

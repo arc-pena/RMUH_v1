@@ -24,6 +24,8 @@
 import { CATALOGUE, Doc, Driver, F, clampTo, dataLines, kernelMessage, meshFaces,
          parseNumbers, schemaJson,
          typeSpec } from "./ocaf.js";
+import { sketchArcPoint, sketchChainEnds, sketchEnds, sketchLoops, sketchNesting,
+         sketchOutline, solveSketch, splinePoints } from "./sketch.js";
 
 const CONFUSION = 1e-7;
 
@@ -938,6 +940,39 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     return face;
   }
 
+  const subShapes = (shape, kind, cast) => {
+    const explorer = new oc.TopExp_Explorer(shape, kind, ANY);
+    const out = [];
+    while (explorer.More()) { out.push(cast(explorer.Current())); explorer.Next(); }
+    explorer.delete();
+    return out;
+  };
+
+  //! Every face a profile offers, capping its wires if it offers none. What a
+  //! solid is swept from.
+  function capped(f, source) {
+    const faces = subShapes(source, FACE, oc.TopoDS.Face);
+    if (faces.length) return faces;
+    const wires = subShapes(source, oc.TopAbs_ShapeEnum.TopAbs_WIRE, oc.TopoDS.Wire);
+    const out = [];
+    for (const wire of wires.length ? wires : [wireOf(F.reference(f, "profile"), "profile")]) {
+      try {
+        const face = new oc.BRepBuilderAPI_MakeFace(wire, true);
+        if (face.IsDone()) out.push(face.Face());
+      } catch (e) { /* an open wire will not cap; it is not a solid */ }
+    }
+    // Nothing capped: sweep it open rather than fail, and say so by shape.
+    return out.length ? out : wires;
+  }
+
+  //! Every wire a profile offers, taken off its faces when it has them. What a
+  //! surface is swept from.
+  function outlines(f, source) {
+    const wires = subShapes(source, oc.TopAbs_ShapeEnum.TopAbs_WIRE, oc.TopoDS.Wire);
+    if (wires.length) return wires;
+    return [wireOf(F.reference(f, "profile"), "profile")];
+  }
+
   builders.Circle = {
     precondition: f => {
       if (!planeAxis(F.reference(f, "plane"))) return "a plane is needed to put the circle on";
@@ -981,6 +1016,230 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       const list = pointsFrom(F.reference(f, "points"));
       return { shape: shapeApi().polyline(list, { closed: Feature_choice(f, "closed") === 1 }),
                data: points(list) };
+    },
+  };
+
+  /* --------------------------------------------------------------- sketch
+
+     A drawing in two dimensions, put on a plane. Everything in the drawing is
+     written in the plane's own u-v coordinates, so this is the only place in
+     the program where the sketch meets the world: the plane resolves to a
+     gp_Ax2, every point in the drawing goes through it, and the edges are
+     built there. Point the sketch at another plane and the whole drawing moves
+     with it, because none of it was ever written in world coordinates.
+
+     Edges are built through the points the chain walker hands over rather than
+     from each element's own arithmetic. A drawing is full of hundredth-of-a-
+     millimetre gaps and a wire will not close over one; welding the ends first
+     and building an arc through three points on it means the wire closes
+     exactly, and the arc is still a real arc rather than a run of segments. */
+
+  //! The sketch's frame: the plane it is on, moved to the origin point if one
+  //! is wired. Without a plane it lies on world XY, so a new sketch draws.
+  function sketchFrame(f) {
+    const axis = planeAxis(F.reference(f, "plane"))
+      || new oc.gp_Ax2(pnt([0, 0, 0]), dir([0, 0, 1]));
+    const X = axis.XDirection(), Y = axis.YDirection(), N = axis.Direction();
+    const here = axis.Location();
+    const origin = readPoint(F.reference(f, "origin")) || [here.X(), here.Y(), here.Z()];
+    const x = [X.X(), X.Y(), X.Z()], y = [Y.X(), Y.Y(), Y.Z()], n = [N.X(), N.Y(), N.Z()];
+    return {
+      normal: n, x, y, origin,
+      //! Two numbers on the paper, one point in the world.
+      at: uv => V.add(origin, V.add(V.scale(x, uv[0]), V.scale(y, uv[1]))),
+      //! A frame for a circle or an ellipse: on the plane, centred there, and
+      //! turned in the plane by \p turn so an ellipse knows which way it lies.
+      frame(uv, turn = 0) {
+        const along = V.add(V.scale(x, Math.cos(turn)), V.scale(y, Math.sin(turn)));
+        return new oc.gp_Ax2(pnt(this.at(uv)), dir(n), dir(along));
+      },
+    };
+  }
+
+  //! The drawing as the sketch will be built from it: read off the label, then
+  //! relaxed against its own constraints unless that is switched off. The
+  //! solved drawing is not written back - the constraints are the truth and
+  //! this is what they come to, so nothing drifts by being rebuilt twice.
+  function sketchDrawing(f) {
+    const drawing = F.sketch(f, "drawing");
+    if (Feature_choice(f, "solve") !== 0) return drawing;
+    return solveSketch(drawing, Math.max(1, Math.round(F.real(f, "passes", 24)))).drawing;
+  }
+
+  const round4 = v => Math.round(v * 1e6) / 1e6;
+
+  const straight = (frame, a, b) =>
+    new oc.BRepBuilderAPI_MakeEdge(pnt(frame.at(a)), pnt(frame.at(b))).Edge();
+
+  //! An arc through three of its own points. Its ends are exactly the ones the
+  //! chain welded, whatever that did to the radius.
+  function arcThrough(frame, a, via, b) {
+    const arc = new oc.GC_MakeArcOfCircle(pnt(frame.at(a)), pnt(frame.at(via)), pnt(frame.at(b)));
+    if (!arc.IsDone()) throw new Error("the arc is degenerate");
+    return new oc.BRepBuilderAPI_MakeEdge(arc.Value()).Edge();
+  }
+
+  const runOfEdges = (frame, list) => {
+    const out = [];
+    for (let i = 0; i + 1 < list.length; i++) {
+      const [a, b] = [list[i], list[i + 1]];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) > CONFUSION) out.push(straight(frame, a, b));
+    }
+    return out;
+  };
+
+  //! One element as edges, in the direction the chain walks it. \p a and \p b
+  //! are the welded ends; a closed element has neither and is built from its
+  //! own numbers.
+  function sketchEdgesOf(el, frame, a, b) {
+    switch (el.type) {
+      case "point": return [];
+      case "line":  return [straight(frame, a, b)];
+      case "arc": {
+        const via = sketchArcPoint(el, (el.a0 + el.a1) / 2);
+        return [arcThrough(frame, a, via, b)];
+      }
+      case "circle":
+        return [new oc.BRepBuilderAPI_MakeEdge(new oc.gp_Circ(frame.frame(el.c), el.r)).Edge()];
+      case "ellipse": {
+        // gp_Elips insists the major radius is the larger one; a taller
+        // ellipse is the same ellipse turned a quarter turn.
+        const tall = (el.ry || 0) > (el.rx || 0);
+        const major = Math.max(el.rx, el.ry), minor = Math.min(el.rx, el.ry);
+        const turn = (el.rot || 0) + (tall ? Math.PI / 2 : 0);
+        return [new oc.BRepBuilderAPI_MakeEdge(
+          new oc.gp_Elips(frame.frame(el.c, turn), major, minor)).Edge()];
+      }
+      case "oblong": {
+        // Two straights and a half turn at either end - built through points so
+        // the four meet exactly.
+        const along = V.norm([el.b[0] - el.a[0], el.b[1] - el.a[1], 0]) || [1, 0, 0];
+        const side = [-along[1], along[0]];
+        const r = el.r;
+        const off = (c, k, m) => [c[0] + side[0] * r * k + along[0] * r * m,
+                                  c[1] + side[1] * r * k + along[1] * r * m];
+        const b1 = off(el.b, -1, 0), b2 = off(el.b, 1, 0);
+        const a1 = off(el.a, 1, 0), a2 = off(el.a, -1, 0);
+        return [arcThrough(frame, b1, off(el.b, 0, 1), b2),
+                straight(frame, b2, a1),
+                arcThrough(frame, a1, off(el.a, 0, -1), a2),
+                straight(frame, a2, b1)];
+      }
+      case "spline": {
+        const run = splinePoints(el, 12);
+        if (run.length < 2) return [];
+        const walk = a && b ? [a, ...run.slice(1, -1), b] : run;
+        return runOfEdges(frame, walk);
+      }
+      default: return [];
+    }
+  }
+
+  //! A chain of elements as one wire. If the exact edges will not join - a
+  //! spline doubling back on itself, an arc the weld made degenerate - the
+  //! chain is rebuilt as a fine polyline through the same drawing, because a
+  //! wire that closes is worth more than a wire that is analytic.
+  function sketchWire(drawing, chain, frame, closed) {
+    const run = sketchChainEnds(drawing, chain, closed);
+    const edges = [];
+    for (const step of run) {
+      const walked = step.reversed
+        ? { ...step.el, ...reverseElement(step.el) } : step.el;
+      edges.push(...sketchEdgesOf(walked, frame, step.a, step.b));
+    }
+    if (!edges.length) return null;
+    const maker = new oc.BRepBuilderAPI_MakeWire();
+    for (const edge of edges) maker.Add(edge);
+    if (maker.IsDone()) return maker.Wire();
+
+    const walk = [];
+    for (const step of run) {
+      const line = sketchOutlineOf(step.el, step.reversed);
+      for (const p of line) if (!walk.length || Math.hypot(p[0] - walk[walk.length - 1][0],
+                                                           p[1] - walk[walk.length - 1][1]) > 1e-6)
+        walk.push(p);
+    }
+    if (walk.length < 2) return null;
+    const fallback = new oc.BRepBuilderAPI_MakeWire();
+    for (const edge of runOfEdges(frame, closed ? [...walk, walk[0]] : walk)) fallback.Add(edge);
+    return fallback.IsDone() ? fallback.Wire() : null;
+  }
+
+  //! An element walked backwards. Only the ones with a direction have one.
+  function reverseElement(el) {
+    if (el.type === "line") return { a: el.b, b: el.a };
+    if (el.type === "arc") return { a0: el.a1, a1: el.a0 + Math.PI * 2 };
+    if (el.type === "spline") return { pts: (el.pts || []).slice().reverse() };
+    return {};
+  }
+
+  function sketchOutlineOf(el, reversed) {
+    const line = sketchOutline(el, 64);
+    return reversed ? line.slice().reverse() : line;
+  }
+
+  builders.Sketch = {
+    precondition: f => {
+      // The frame is written before anything can go wrong with the drawing,
+      // because an empty sketch is exactly the one you need it for: without it
+      // the viewport cannot turn a click into two numbers, and a sketch you
+      // cannot click on is a sketch you can never draw the first line on.
+      const frame = sketchFrame(f);
+      F.setFrame(f, { origin: frame.origin.map(round4), x: frame.x.map(round4),
+                      y: frame.y.map(round4), normal: frame.normal.map(round4) });
+      const drawing = F.sketch(f, "drawing");
+      const elements = drawing.elements || [];
+      if (!elements.length) return "the sketch is empty - draw something on it";
+      if (!elements.some(el => sketchEnds(el)))
+        return "the sketch has only points in it - draw a line, an arc or a circle";
+      return null;
+    },
+    build: f => {
+      const api = shapeApi();
+      const drawing = sketchDrawing(f);
+      const frame = sketchFrame(f);
+      const { loops, open } = sketchLoops(drawing, 0.05);
+      const wanted = Feature_choice(f, "faces") === 0;
+
+      // A closed loop becomes a planar face, and that face is what a pad is
+      // extruded from - so everything the sketcher closes is pad-ready without
+      // anyone asking for a surface. A loop drawn inside another is a hole in
+      // it rather than a second plate, and a loop inside a hole is solid again:
+      // the nesting is counted, not guessed.
+      const wires = loops.map(loop => sketchWire(drawing, loop, frame, true));
+      const nesting = sketchNesting(drawing, loops);
+      const shapes = [];
+      for (let i = 0; i < loops.length; i++) {
+        const wire = wires[i];
+        if (!wire) continue;
+        if (!wanted) { shapes.push(wire); continue; }
+        if (nesting[i].hole) continue;              // built into its outline below
+        try {
+          const maker = new oc.BRepBuilderAPI_MakeFace(wire, true);
+          if (!maker.IsDone()) { shapes.push(wire); continue; }
+          let face = maker.Face();
+          for (let j = 0; j < loops.length; j++) {
+            if (!wires[j] || !nesting[j].hole || nesting[j].parent !== i) continue;
+            // A hole runs against its outline, or OpenCascade takes it for a
+            // second outline and the face comes back bigger, not smaller.
+            const cut = new oc.BRepBuilderAPI_MakeFace(face, oc.TopoDS.Wire(wires[j].Reversed()));
+            if (cut.IsDone()) face = cut.Face();
+          }
+          shapes.push(face);
+        } catch (e) { shapes.push(wire); }
+      }
+      for (const chain of open) {
+        const wire = sketchWire(drawing, chain, frame, false);
+        if (wire) shapes.push(wire);
+      }
+      if (!shapes.length) throw new Error("nothing in the sketch could be built");
+
+      // The points someone put in the sketch come out as points, so a sketch
+      // is also a way of laying out a row of locations on a plane.
+      const marks = (drawing.elements || []).filter(el => el.type === "point")
+        .map(el => frame.at(el.p));
+      const shape = shapes.length === 1 ? shapes[0] : api.compound(shapes);
+      return marks.length ? { shape, data: points(marks) } : shape;
     },
   };
 
@@ -2162,16 +2421,15 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       const v = V.norm(readVector(F.reference(f, "direction")));
       const along = V.scale(v, F.real(f, "distance", 120));
 
-      // A face extrudes to a solid; a wire has to be capped first, and if it
-      // will not cap it is swept open and comes out as a surface.
-      let base = null;
-      if (countSubShapes(source, FACE) > 0) base = firstFace(source, "profile");
-      else {
-        const wire = wireOf(F.reference(f, "profile"), "profile");
-        if (solid) { try { base = api.face(wire); } catch (e) { base = null; } }
-        if (!base) base = wire;
-      }
-      return api.prism(base, along);
+      // Solid or surface is a real choice, not a hint. A pad is swept from the
+      // faces of the profile - every one of them, so a sketch of six closed
+      // loops pads into six bodies rather than the first. A surface is swept
+      // from the wires, so the same sketch on "Surface" gives six tubes; a
+      // profile that arrived as a face has its own outlines taken back off it.
+      const bases = solid ? capped(f, source) : outlines(f, source);
+      if (!bases.length) throw new Error("the profile has nothing to extrude");
+      const swept = bases.map(base => api.prism(base, along));
+      return swept.length === 1 ? swept[0] : api.compound(swept);
     },
   };
 
@@ -2412,6 +2670,18 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       const f = doc.find(id);
       if (!f) throw new Error("no feature '" + id + "'");
       doc.setCode(f, key, text);
+      return state(doc.recompute(false));
+    },
+
+    //! The drawing on a sketch. One string in, the whole sketch and everything
+    //! downstream of it rebuilt - which is the same road the tree, the node
+    //! editor and someone typing into the model file all take.
+    async setSketch(id, key, drawing) {
+      const f = doc.find(id);
+      if (!f) throw new Error("no feature '" + id + "'");
+      const arg = key || (F.spec(f).args.find(a => a.kind === "sketch") || {}).key;
+      if (!arg) throw new Error(F.name(f) + " has nothing to draw on");
+      doc.setSketch(f, arg, drawing);
       return state(doc.recompute(false));
     },
 

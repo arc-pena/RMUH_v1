@@ -30,7 +30,7 @@ STAGE_PACKAGE = "playcanvas"
 STAGE_FILE = "build/playcanvas.min.js"
 
 # Concatenated in this order into one module script.
-MODULES = ["ocaf.js", "wasm-kernel.js", "http-kernel.js", "mdl.js", "graph.js",
+MODULES = ["sketch.js", "ocaf.js", "wasm-kernel.js", "http-kernel.js", "mdl.js", "graph.js",
            "showroom.js", "app.js"]
 
 # An import may wrap across lines; nothing but the statement itself may
