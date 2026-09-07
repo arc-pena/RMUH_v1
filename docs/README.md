@@ -217,11 +217,35 @@ The chain reads left to right in the graph:
 | **the hill** | `MeshGrid` → `MeshDisplace`, one formula in one node, → `Subdivide`. Its width, depth and height are `Number` features wired into those sliders, so the hill is a fixed surface whose size and height you drive from three places. |
 | **the plan** | a `Numbers` list — `-1450, 0, 1450` — into the `x` of a `Point`, with `y` a plain slider. Two of those are the two terrace rows. Flat, two-dimensional, and it never mentions z. |
 | **the projection** | `Drape` drops each plan point straight down onto the hill and hands back where it landed. That is the whole of "project the plan onto the mountain", in one wire. |
-| **the villa** | boxes for the deck and the glass, a `Boolean` for the pool, two `Polyline` rectangles `Loft`ed into a hipped roof, an `Array` of posts and another of mullions, all gathered by `Join`. Twenty-two nodes, built once. |
+| **the villa** | after Zaha Hadid Architects' **Rock**, below. Twenty-nine nodes, built once. |
 | **the town** | `PlaceAt` puts that one villa at every draped site, turned by an angle from a second `Numbers` list. Retype `0, 16, -12` and three nodes rebuild, not forty-seven. |
 
 Individual control is the two typed lists: bay positions in plan, and a turn
 per villa. Everything else is a slider.
+
+### The villa, after ZHA's "Rock"
+
+Reverse-engineered from the published drawings of the Dubrovnik golf and spa
+resort prototype — which the practice describes as inspired by Croatian karst,
+"a rock, partly sunken into the ground". Four moves, and every one of them is
+the same lens resized:
+
+| | |
+|---|---|
+| **a plan** | a lens pointed at both ends — six numbers in `Lens x`, six in `Lens y`. Nothing else in the villa holds a plan. |
+| **a batter** | `Math` multiplies that lens by `Batter` and a `Point` drops it below grade, so the walls lean in as they go down and the mass sits into the slope. One `Loft` between the two is the whole body. |
+| **a lid** | `Math` multiplies the lens by `Roof oversail`, twice, a plate thickness apart. A second `Loft` is a thin roof that oversails the wall on a crisp edge. |
+| **a sinkhole** | a four-sided wedge `Loft`ed from the terrace up through the sky, cut out of both, leaving the terrace and the lap pool in the hole. |
+
+Retype the twelve numbers of the lens and the body, the lid and the batter all
+follow, because they are all that lens.
+
+**One thing that bit, worth knowing.** The mass and the lid were first gathered
+by `Join` and cut once. That silently did nothing: a boolean argument that is a
+compound of two solids which touch is self-intersecting, and OpenCascade
+answers by handing back what it was given — no error, no cut, and the volume
+identical to the input. Each solid is now cut on its own. If a `Boolean` ever
+appears to do nothing, measure it.
 
 ## Four primitives, so a graph can compose
 

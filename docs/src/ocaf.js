@@ -16,10 +16,12 @@
    of these is the catalogue wired to itself, which is the point of showing it.
    ------------------------------------------------------------------------ */
 
-//! A hillside town. The hill is a grid displaced by a formula; the plan is
-//! three numbers typed into a list; Drape projects that plan onto the hill;
-//! one villa is built from boxes, a loft and an array, and PlaceAt puts it at
-//! every site, turned by its own angle. Forty-seven nodes and no script.
+//! A hillside town, after Zaha Hadid Architects' "Rock" prototype for the
+//! Dubrovnik golf and spa resort. The hill is a grid displaced by a formula;
+//! the plan is three numbers typed into a list; Drape projects that plan onto
+//! the hill; the villa is a lens lofted from a battered base to an oversailing
+//! lid with a sinkhole cut through it; and PlaceAt puts it at every site,
+//! turned by its own angle. Fifty-two nodes and no script.
 export const HILLSIDE_TOWN = {
   "format": "ocaf-parametric-model",
   "version": 1,
@@ -200,198 +202,136 @@ export const HILLSIDE_TOWN = {
       }
     },
     {
-      "id": "PD",
-      "type": "Point",
-      "name": "Deck corner",
+      "id": "PX",
+      "type": "Numbers",
+      "name": "Lens x",
       "args": {
-        "x": -460,
-        "y": -380,
-        "z": -620
+        "values": "-450, -240, 210, 480, 200, -240",
+        "scale": 1
       }
     },
     {
-      "id": "CD",
-      "type": "Cube",
-      "name": "Deck",
+      "id": "PY",
+      "type": "Numbers",
+      "name": "Lens y",
       "args": {
-        "origin": {
-          "ref": "PD"
-        },
-        "plane": {
-          "ref": "PL1"
-        },
-        "dx": 920,
-        "dy": 760,
-        "dz": 620
-      }
-    },
-    {
-      "id": "PP",
-      "type": "Point",
-      "name": "Pool corner",
-      "args": {
-        "x": 200,
-        "y": -250,
-        "z": -95
-      }
-    },
-    {
-      "id": "CP",
-      "type": "Cube",
-      "name": "Pool void",
-      "args": {
-        "origin": {
-          "ref": "PP"
-        },
-        "plane": {
-          "ref": "PL1"
-        },
-        "dx": 230,
-        "dy": 520,
-        "dz": 130
+        "values": "0, -172, -200, 0, 200, 172",
+        "scale": 1
       }
     },
     {
       "id": "BT",
-      "type": "Boolean",
-      "name": "Terrace",
+      "type": "Number",
+      "name": "Batter",
+      "args": {
+        "value": 0.68
+      }
+    },
+    {
+      "id": "NO",
+      "type": "Number",
+      "name": "Roof oversail",
+      "args": {
+        "value": 1.06
+      }
+    },
+    {
+      "id": "MBX",
+      "type": "Math",
+      "name": "Base x",
       "args": {
         "a": {
-          "ref": "CD"
+          "value": 1,
+          "from": "PX"
         },
         "b": {
-          "ref": "CP"
+          "value": 0.68,
+          "from": "BT"
         },
-        "op": "Difference"
+        "op": "A \u00d7 B"
       }
     },
     {
-      "id": "PH",
+      "id": "MBY",
+      "type": "Math",
+      "name": "Base y",
+      "args": {
+        "a": {
+          "value": 1,
+          "from": "PY"
+        },
+        "b": {
+          "value": 0.68,
+          "from": "BT"
+        },
+        "op": "A \u00d7 B"
+      }
+    },
+    {
+      "id": "QB",
       "type": "Point",
-      "name": "House corner",
-      "args": {
-        "x": -170,
-        "y": -240,
-        "z": 0
-      }
-    },
-    {
-      "id": "CH",
-      "type": "Cube",
-      "name": "Glass box",
-      "args": {
-        "origin": {
-          "ref": "PH"
-        },
-        "plane": {
-          "ref": "PL1"
-        },
-        "dx": 340,
-        "dy": 480,
-        "dz": 330
-      }
-    },
-    {
-      "id": "NEX",
-      "type": "Numbers",
-      "name": "Eaves x",
-      "args": {
-        "values": "-230, 230, 230, -230",
-        "scale": 1
-      }
-    },
-    {
-      "id": "NEY",
-      "type": "Numbers",
-      "name": "Eaves y",
-      "args": {
-        "values": "-300, -300, 300, 300",
-        "scale": 1
-      }
-    },
-    {
-      "id": "PE",
-      "type": "Point",
-      "name": "Eaves corners",
+      "name": "Base lens",
       "args": {
         "x": {
           "value": 0,
-          "from": "NEX"
+          "from": "MBX"
         },
         "y": {
           "value": 0,
-          "from": "NEY"
+          "from": "MBY"
         },
-        "z": 330
+        "z": -430
       }
     },
     {
-      "id": "WE",
+      "id": "WB",
+      "type": "Polyline",
+      "name": "Base",
+      "args": {
+        "points": {
+          "ref": "QB"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "QT",
+      "type": "Point",
+      "name": "Eaves lens",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "PX"
+        },
+        "y": {
+          "value": 0,
+          "from": "PY"
+        },
+        "z": 205
+      }
+    },
+    {
+      "id": "WT",
       "type": "Polyline",
       "name": "Eaves",
       "args": {
         "points": {
-          "ref": "PE"
+          "ref": "QT"
         },
         "closed": "Closed"
       }
     },
     {
-      "id": "NRX",
-      "type": "Numbers",
-      "name": "Ridge x",
-      "args": {
-        "values": "-45, 45, 45, -45",
-        "scale": 1
-      }
-    },
-    {
-      "id": "NRY",
-      "type": "Numbers",
-      "name": "Ridge y",
-      "args": {
-        "values": "-190, -190, 190, 190",
-        "scale": 1
-      }
-    },
-    {
-      "id": "PRG",
-      "type": "Point",
-      "name": "Ridge corners",
-      "args": {
-        "x": {
-          "value": 0,
-          "from": "NRX"
-        },
-        "y": {
-          "value": 0,
-          "from": "NRY"
-        },
-        "z": 440
-      }
-    },
-    {
-      "id": "WR",
-      "type": "Polyline",
-      "name": "Ridge",
-      "args": {
-        "points": {
-          "ref": "PRG"
-        },
-        "closed": "Closed"
-      }
-    },
-    {
-      "id": "LR",
+      "id": "LM",
       "type": "Loft",
-      "name": "Roof",
+      "name": "Mass",
       "args": {
         "sections": [
           {
-            "ref": "WE"
+            "ref": "WB"
           },
           {
-            "ref": "WR"
+            "ref": "WT"
           }
         ],
         "cap": "Solid",
@@ -399,115 +339,249 @@ export const HILLSIDE_TOWN = {
       }
     },
     {
-      "id": "PB",
-      "type": "Point",
-      "name": "Post corner",
+      "id": "MOX",
+      "type": "Math",
+      "name": "Roof x",
       "args": {
-        "x": 432,
-        "y": -372,
-        "z": 0
+        "a": {
+          "value": 1,
+          "from": "PX"
+        },
+        "b": {
+          "value": 1.06,
+          "from": "NO"
+        },
+        "op": "A \u00d7 B"
       }
     },
     {
-      "id": "CB",
+      "id": "MOY",
+      "type": "Math",
+      "name": "Roof y",
+      "args": {
+        "a": {
+          "value": 1,
+          "from": "PY"
+        },
+        "b": {
+          "value": 1.06,
+          "from": "NO"
+        },
+        "op": "A \u00d7 B"
+      }
+    },
+    {
+      "id": "QR",
+      "type": "Point",
+      "name": "Roof underside",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "MOX"
+        },
+        "y": {
+          "value": 0,
+          "from": "MOY"
+        },
+        "z": 205
+      }
+    },
+    {
+      "id": "WR",
+      "type": "Polyline",
+      "name": "Soffit",
+      "args": {
+        "points": {
+          "ref": "QR"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "QS",
+      "type": "Point",
+      "name": "Roof top",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "MOX"
+        },
+        "y": {
+          "value": 0,
+          "from": "MOY"
+        },
+        "z": 246
+      }
+    },
+    {
+      "id": "WS",
+      "type": "Polyline",
+      "name": "Roof edge",
+      "args": {
+        "points": {
+          "ref": "QS"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "LP",
+      "type": "Loft",
+      "name": "Roof plate",
+      "args": {
+        "sections": [
+          {
+            "ref": "WR"
+          },
+          {
+            "ref": "WS"
+          }
+        ],
+        "cap": "Solid",
+        "ruled": "Ruled"
+      }
+    },
+    {
+      "id": "CX",
+      "type": "Numbers",
+      "name": "Court x",
+      "args": {
+        "values": "-250, 300, 345, -165",
+        "scale": 1
+      }
+    },
+    {
+      "id": "CY",
+      "type": "Numbers",
+      "name": "Court y",
+      "args": {
+        "values": "-118, -58, 118, 152",
+        "scale": 1
+      }
+    },
+    {
+      "id": "QC",
+      "type": "Point",
+      "name": "Court floor",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "CX"
+        },
+        "y": {
+          "value": 0,
+          "from": "CY"
+        },
+        "z": -30
+      }
+    },
+    {
+      "id": "WC",
+      "type": "Polyline",
+      "name": "Court sill",
+      "args": {
+        "points": {
+          "ref": "QC"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "QD",
+      "type": "Point",
+      "name": "Court sky",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "CX"
+        },
+        "y": {
+          "value": 0,
+          "from": "CY"
+        },
+        "z": 420
+      }
+    },
+    {
+      "id": "WD",
+      "type": "Polyline",
+      "name": "Court head",
+      "args": {
+        "points": {
+          "ref": "QD"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "LC",
+      "type": "Loft",
+      "name": "Sinkhole",
+      "args": {
+        "sections": [
+          {
+            "ref": "WC"
+          },
+          {
+            "ref": "WD"
+          }
+        ],
+        "cap": "Solid",
+        "ruled": "Ruled"
+      }
+    },
+    {
+      "id": "BM",
+      "type": "Boolean",
+      "name": "Mass, cut",
+      "args": {
+        "a": {
+          "ref": "LM"
+        },
+        "b": {
+          "ref": "LC"
+        },
+        "op": "Difference"
+      }
+    },
+    {
+      "id": "BP",
+      "type": "Boolean",
+      "name": "Roof, cut",
+      "args": {
+        "a": {
+          "ref": "LP"
+        },
+        "b": {
+          "ref": "LC"
+        },
+        "op": "Difference"
+      }
+    },
+    {
+      "id": "PP",
+      "type": "Point",
+      "name": "Pool corner",
+      "args": {
+        "x": -150,
+        "y": -66,
+        "z": -30
+      }
+    },
+    {
+      "id": "CP",
       "type": "Cube",
-      "name": "Post",
+      "name": "Pool",
       "args": {
         "origin": {
-          "ref": "PB"
+          "ref": "PP"
         },
         "plane": {
           "ref": "PL1"
         },
-        "dx": 26,
-        "dy": 26,
-        "dz": 92
-      }
-    },
-    {
-      "id": "AB",
-      "type": "Array",
-      "name": "Posts",
-      "args": {
-        "source": {
-          "ref": "CB"
-        },
-        "mode": "Rectangular",
-        "countX": 1,
-        "spacingX": 100,
-        "countY": 9,
-        "spacingY": 93,
-        "countZ": 1,
-        "spacingZ": 100
-      }
-    },
-    {
-      "id": "PL2",
-      "type": "Point",
-      "name": "Rail corner",
-      "args": {
-        "x": 424,
-        "y": -378,
-        "z": 90
-      }
-    },
-    {
-      "id": "CR",
-      "type": "Cube",
-      "name": "Rail",
-      "args": {
-        "origin": {
-          "ref": "PL2"
-        },
-        "plane": {
-          "ref": "PL1"
-        },
-        "dx": 42,
-        "dy": 756,
-        "dz": 24
-      }
-    },
-    {
-      "id": "PM",
-      "type": "Point",
-      "name": "Mullion corner",
-      "args": {
-        "x": 164,
-        "y": -246,
-        "z": 8
-      }
-    },
-    {
-      "id": "CM",
-      "type": "Cube",
-      "name": "Mullion",
-      "args": {
-        "origin": {
-          "ref": "PM"
-        },
-        "plane": {
-          "ref": "PL1"
-        },
-        "dx": 14,
-        "dy": 14,
-        "dz": 316
-      }
-    },
-    {
-      "id": "AM",
-      "type": "Array",
-      "name": "Mullions",
-      "args": {
-        "source": {
-          "ref": "CM"
-        },
-        "mode": "Rectangular",
-        "countX": 1,
-        "spacingX": 100,
-        "countY": 8,
-        "spacingY": 68,
-        "countZ": 1,
-        "spacingZ": 100
+        "dx": 420,
+        "dy": 62,
+        "dz": 20
       }
     },
     {
@@ -517,22 +591,13 @@ export const HILLSIDE_TOWN = {
       "args": {
         "parts": [
           {
-            "ref": "BT"
+            "ref": "BM"
           },
           {
-            "ref": "CH"
+            "ref": "BP"
           },
           {
-            "ref": "LR"
-          },
-          {
-            "ref": "AB"
-          },
-          {
-            "ref": "CR"
-          },
-          {
-            "ref": "AM"
+            "ref": "CP"
           }
         ]
       }
@@ -699,104 +764,124 @@ export const HILLSIDE_TOWN = {
       950,
       1010
     ],
-    "PD": [
+    "PX": [
       1450,
       30
     ],
-    "CD": [
-      1750,
+    "PY": [
+      1450,
+      190
+    ],
+    "BT": [
+      1450,
+      350
+    ],
+    "NO": [
+      1450,
+      510
+    ],
+    "MBX": [
+      1770,
       30
+    ],
+    "MBY": [
+      1770,
+      190
+    ],
+    "QB": [
+      2090,
+      30
+    ],
+    "WB": [
+      2390,
+      30
+    ],
+    "QT": [
+      2090,
+      190
+    ],
+    "WT": [
+      2390,
+      190
+    ],
+    "LM": [
+      2690,
+      30
+    ],
+    "MOX": [
+      1770,
+      350
+    ],
+    "MOY": [
+      1770,
+      510
+    ],
+    "QR": [
+      2090,
+      350
+    ],
+    "WR": [
+      2390,
+      350
+    ],
+    "QS": [
+      2090,
+      510
+    ],
+    "WS": [
+      2390,
+      510
+    ],
+    "LP": [
+      2690,
+      350
+    ],
+    "CX": [
+      1450,
+      700
+    ],
+    "CY": [
+      1450,
+      860
+    ],
+    "QC": [
+      1770,
+      700
+    ],
+    "WC": [
+      2090,
+      700
+    ],
+    "QD": [
+      1770,
+      860
+    ],
+    "WD": [
+      2090,
+      860
+    ],
+    "LC": [
+      2390,
+      700
+    ],
+    "BM": [
+      3010,
+      30
+    ],
+    "BP": [
+      3010,
+      350
     ],
     "PP": [
       1450,
-      250
+      1020
     ],
     "CP": [
-      1750,
-      250
-    ],
-    "BT": [
-      2070,
-      30
-    ],
-    "PH": [
-      1450,
-      470
-    ],
-    "CH": [
-      1750,
-      470
-    ],
-    "NEX": [
-      1450,
-      690
-    ],
-    "NEY": [
-      1450,
-      850
-    ],
-    "PE": [
-      1750,
-      690
-    ],
-    "WE": [
-      2070,
-      690
-    ],
-    "NRX": [
-      1450,
-      1010
-    ],
-    "NRY": [
-      1450,
-      1170
-    ],
-    "PRG": [
-      1750,
-      1010
-    ],
-    "WR": [
-      2070,
-      1010
-    ],
-    "LR": [
-      2350,
-      690
-    ],
-    "PB": [
-      1450,
-      1330
-    ],
-    "CB": [
-      1750,
-      1330
-    ],
-    "AB": [
-      2070,
-      1330
-    ],
-    "PL2": [
-      1450,
-      1550
-    ],
-    "CR": [
-      1750,
-      1550
-    ],
-    "PM": [
-      1450,
-      1770
-    ],
-    "CM": [
-      1750,
-      1770
-    ],
-    "AM": [
-      2070,
-      1770
+      1770,
+      1020
     ],
     "JV": [
-      2650,
+      3330,
       30
     ],
     "NT1": [
@@ -837,7 +922,8 @@ export const HILLSIDE_TOWN = {
 export const SAMPLES = [
   { key: "hillside-town", name: "Hillside town",
     summary: "A landform, six villas terraced across it, and the plan projected onto "
-           + "the hill. 47 nodes, no script.",
+           + "the hill. The villa is after Zaha Hadid Architects' Rock, Dubrovnik. "
+           + "52 nodes, no script.",
     model: HILLSIDE_TOWN },
 ];
 
