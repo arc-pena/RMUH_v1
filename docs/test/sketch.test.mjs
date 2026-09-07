@@ -6,8 +6,10 @@
 // loops it closes really are faces - measured, not assumed - and that a pad
 // off a sketch is a solid with a volume you can predict on paper.
 import { createWasmKernel } from "../src/wasm-kernel.js";
-import { EMPTY_SKETCH, SKETCH_CLICKS, SKETCH_TYPES, readSketch, sketchElement,
-         sketchLoops, sketchRelation, sketchSummary, solveSketch } from "../src/sketch.js";
+import { EMPTY_SKETCH, SKETCH_CLICKS, SKETCH_TYPES, readSketch, sketchDirectionAt,
+         sketchElement, sketchEnds, sketchLoops, sketchRelation, sketchSummary,
+         sketchTangentArc, solveSketch } from "../src/sketch.js";
+import { Mdl } from "../src/mdl.js";
 import { readFileSync } from "fs";
 
 const WASM_DIR = process.env.OCJS_DIR || "/tmp/oc/rep/package/dist";
@@ -252,7 +254,67 @@ console.log("\n10. an element the chain walks backwards is still itself");
   await kernel.deleteFeature(rule);
 }
 
-console.log("\n11. the sample the sketcher ships with");
+console.log("\n11. drawing that carries on from what was drawn");
+{
+  const mdl = new Mdl({ kernel, apply: () => {}, setNode: () => {},
+                        readLayout: () => ({}), select: () => {}, selected: () => null });
+  await kernel.loadModel({ format: "ocaf-parametric-model", version: 1, name: "S",
+                           units: "mm", features: [] });
+  const sk = (await mdl.run({ op: "add", type: "Sketch", name: "Chain" })).id;
+  const drawing = async () => (await at(sk)).sketch.drawing;
+
+  // A polyline is the line tool used again and again, so what it writes is the
+  // same edit again and again.
+  for (const [a, b] of [[[0, 0], [100, 0]], [[100, 0], [100, 60]], [[100, 60], [0, 60]]])
+    await mdl.run({ op: "draw", id: sk, type: "line", at: [a, b] });
+  check("three segments make a run", (await drawing()).elements.length === 3);
+
+  // An arc off the end of the last line: it starts there, leaves the way the
+  // line was going, and only needs where it ends.
+  await mdl.run({ op: "draw", id: sk, type: "arc", at: [[-60, 0]], from: "e3.b" });
+  const arc = (await drawing()).elements[3];
+  check("the arc is an arc", arc.type === "arc", JSON.stringify(arc));
+
+  // Tangency, measured: at the join, the arc's direction and the line's must
+  // be the same, and both ends must sit on the circle.
+  const line = (await drawing()).elements[2];
+  const join = line.b;
+  const ends = sketchEnds(arc);
+  const onCircle = p => Math.abs(Math.hypot(p[0] - arc.c[0], p[1] - arc.c[1]) - arc.r);
+  check("it starts where the line stopped",
+    Math.min(Math.hypot(ends.a[0] - join[0], ends.a[1] - join[1]),
+             Math.hypot(ends.b[0] - join[0], ends.b[1] - join[1])) < 1e-3);
+  check("and reaches where it was told", Math.min(onCircle(ends.a), onCircle(ends.b)) < 1e-3);
+  // sketchDirectionAt answers "which way was it going when it got here", so the
+  // way out of a handle and back along the element is the opposite of it. The
+  // line arrives at the corner going one way; the arc must leave going the same.
+  const heading = sketchDirectionAt(line, "b");
+  const near = Math.hypot(ends.a[0] - join[0], ends.a[1] - join[1]) < 1e-3 ? "start" : "end";
+  const inward = sketchDirectionAt(arc, near);
+  const along = [-inward[0], -inward[1]];
+  check("leaving exactly the way the line came in",
+    Math.abs(along[0] - heading[0]) < 1e-4 && Math.abs(along[1] - heading[1]) < 1e-4,
+    JSON.stringify([along, heading]));
+
+  // Straight on has no arc through it - the "circle" is infinite. That is a
+  // line, and drawing one beats refusing the click. e3 runs to [0,60] from
+  // [100,60], so carrying on out of its far end means going back east.
+  await mdl.run({ op: "draw", id: sk, type: "arc", at: [[240, 60]], from: "e3.a" });
+  check("a straight tangent comes out as a line",
+    (await drawing()).elements[4].type === "line", (await drawing()).elements[4].type);
+
+  // And a handle moves without tearing the element it belongs to.
+  await mdl.run({ op: "drag", id: sk, handle: "e1.b", to: [140, -20] });
+  check("dragging an end moves it",
+    JSON.stringify((await drawing()).elements[0].b) === "[140,-20]",
+    JSON.stringify((await drawing()).elements[0].b));
+  let refused = "";
+  try { await mdl.run({ op: "drag", id: sk, handle: "nope.b", to: [0, 0] }); }
+  catch (e) { refused = e.message; }
+  check("dragging nothing is refused in words", /no handle/.test(refused), refused);
+}
+
+console.log("\n12. the sample the sketcher ships with");
 {
   const { SAMPLES } = await import("../src/ocaf.js");
   const sample = SAMPLES.find(s => s.key === "sketcher");

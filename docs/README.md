@@ -134,7 +134,7 @@ no second path. A toolbar button is a literal, `{"op":"add","type":"Cube"}`. A
 slider is a literal, `{"op":"set","id":"CB1","key":"dx","value":92}`. A wire
 dragged in the node graph is `{"op":"connect","id":"FI1","key":"body",
 "from":"CB1"}`. A line drawn in the sketcher is `{"op":"draw","id":"SK1",
-"type":"line","at":[[0,0],[120,0]]}`. `src/mdl.js` holds the sixteen of them
+"type":"line","at":[[0,0],[120,0]]}`. `src/mdl.js` holds the nineteen of them
 and the channel they all go through; nothing else may touch the kernel.
 
 | | |
@@ -145,7 +145,8 @@ and the channel they all go through; nothing else may touch the kernel.
 | `connect` `disconnect` | one reference: one wire |
 | `code` | the source of a written feature |
 | `sketch` | a whole drawing at once |
-| `draw` `erase` `relate` | one element of a drawing, or one relation over it — what a click in the sketcher writes |
+| `draw` `erase` `relate` `drag` | one element of a drawing, one relation over it, or one end moved — what a click and a drag in the sketcher write |
+| `undo` `redo` | walk the stack of documents. Edits like any other, so they are recorded and can be sent from outside |
 | `appearance` | a finish; redraws, does not rebuild |
 | `model` | the whole document at once — every one above is a small edit of the text this one writes wholesale |
 | `move` `select` | view state, through the same channel, recorded and marked as not rebuilding anything |
@@ -154,6 +155,34 @@ and the channel they all go through; nothing else may touch the kernel.
 selected body for an operation, the first datum of the right type for the rest
 — so `{"op":"add","type":"Fillet"}` typed into a console does what the toolbar
 does.
+
+## Undo, and what it is a stack of
+
+Every edit already goes through one channel, and the document is already one
+JSON file. So undo is not a log of inverse operations that has to be kept
+honest against what the edits actually did — it is **a stack of documents**.
+Before an edit that changes anything, `src/mdl.js` takes the model file as it
+stands; undo loads the one underneath. Nothing on the stack understands what an
+edit *does*, which is exactly why it cannot drift from what edits do.
+
+- **Ctrl+Z / Ctrl+Shift+Z**, or the two arrows in the corner chip, which say
+  what they would take back (`Undo drag`) rather than just being arrows.
+- `{"op":"undo"}` and `{"op":"redo"}` are edits like any other, so they go
+  through the same channel, appear in the console, and can be sent from
+  outside.
+- **View edits are not on it.** Moving a node on the graph canvas or selecting
+  something changes nothing to undo, which is what `view: true` in the op table
+  already meant.
+- **A refused edit has nothing to undo**, because it changed nothing — the
+  snapshot is taken before and kept only if the edit succeeds.
+- **A drag is one step.** Consecutive edits on the same thing within 900 ms
+  collapse into one entry, so dragging a slider through 21 values leaves one
+  step behind it, not 21. That is what `coalesceKey` decides, and it is the
+  only place the stack knows anything about particular ops.
+- The graph's canvas layout rides along, so undoing a load puts the nodes back
+  where they were.
+
+Depth is 60 documents. For a part this size that is about what one mesh costs.
 
 ## Numbers are features too
 
@@ -359,6 +388,46 @@ charset="utf-8">`. The Artifact wrapper supplies one, so the middle dots and
 en-dashes read correctly there; the same file opened from disk or served by
 `ocafcad serve --ui` had none and showed them as mojibake.
 
+### Select first, then draw
+
+A sketch opens in **Select**, not armed with a tool — the first thing anyone
+does to a drawing is look at it and push something. In select you drag an end
+to move it (an arc's endpoint is an angle and a radius, so it turns and resizes
+the arc rather than tearing it), and click to pick elements or ends. Relations
+apply to what is picked, the way every parametric sketcher works.
+
+A drag is shown as it happens but written once, at the end: one `drag` edit,
+one step to undo, however far the cursor travelled.
+
+### The line tool is a polyline, and the arc leaves it smoothly
+
+Keep clicking and the line tool keeps going, corner after corner, each segment
+joined to the last by a `coincident` relation so the corner stays a corner when
+either side of it moves. Reach for the **arc** while a chain is live and the
+next click is all it needs: the arc starts where the chain stopped and leaves
+in the direction the chain was travelling, tangent to it — the move a CAD
+sketcher is built around. A **Tangent** switch appears while that is on offer,
+so it can be turned off.
+
+Tangency is *said*, not computed in the viewport and smuggled into the model:
+
+```json
+{ "op": "draw", "id": "SK1", "type": "arc", "at": [[200, 100]], "from": "e1.b" }
+```
+
+`from` names the end to leave. The op works out the arc — the one circle
+through the start point tangent to that direction and through the end point,
+which is a two-line derivation with exactly one answer:
+
+```
+|from + r·N − to| = |r|,  N ⟂ tangent    ⟹    r = −(D·D) / (2 N·D),  D = from − to
+```
+
+So the line in the console is the whole of what happened, and replaying it
+draws the same arc. When the three points are in a line there is no arc — the
+circle is infinite — and a line is drawn instead, which is what that case
+actually is.
+
 ### The constraints are a relaxation, not a solver
 
 Every relation knows how to move the handles it governs the shortest way to
@@ -537,6 +606,25 @@ real window again.
 
 That console is the surface an external driver would speak to. It already takes
 the whole language; what is missing is only the transport.
+
+## Two small things in the way
+
+Neither is interesting, both were wrong for a while, and both are the kind of
+thing only a measurement finds.
+
+**The tool rail was cropping its own buttons.** Forty-three tools in two
+columns do not fit a laptop window, so the rail scrolls — and `overflow-y:
+auto` forces `overflow-x` to `auto` as well, by the rules. Anything drawn
+*beside* a button inside it is therefore clipped away. The rail now runs three
+wide (its width is a variable, because the tree stands next to it and has to
+know), which fits all forty-three without scrolling at all.
+
+**Every tool had a hover label, and none of them were visible** — for the same
+reason. They were `::after` on each button, positioned outside the rail's
+padding box, and the rail clipped every one. There is now one `#tip` element
+fixed to the window, placed beside whatever the cursor is on and flipped to the
+other side when there is no room. Anything carrying `data-label` gets one, so
+the sketcher's rail and anything added later are covered without being told.
 
 ## Getting the scene out
 

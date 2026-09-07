@@ -5,7 +5,8 @@ import { Mdl } from "./mdl.js";
 import { acceptsFrom, dataLines, SAMPLES } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
 import { SKETCH_CLICKS, SKETCH_RELATIONS, SKETCH_TYPES, nextSketchId, readSketch,
-         sketchElement, sketchHandles, sketchOutline } from "./sketch.js";
+         sketchDirectionAt, sketchElement, sketchHandleAt, sketchHandles,
+         sketchMoveHandle, sketchOutline, sketchTangentArc } from "./sketch.js";
 
 "use strict";
 
@@ -160,7 +161,11 @@ function placeCamera() {
     if (event.button === 0 && !event.shiftKey && grabGizmo(event)) mode = "gizmo";
     // A sketch is looked at square on, and stays that way: the drag that would
     // orbit pans instead, because a drawing seen at an angle cannot be drawn on.
-    else if (sketching()) mode = event.button === 0 && !event.shiftKey ? "draw" : "pan";
+    // In select, a press that lands on an end takes hold of it.
+    else if (sketching()) {
+      if (event.button !== 0 || event.shiftKey) mode = "pan";
+      else mode = grabSketchHandle(event) ? "handle" : "draw";
+    }
     else mode = (event.shiftKey || event.button === 1 || event.button === 2) ? "pan" : "orbit";
     lastX = event.clientX; lastY = event.clientY; moved = 0;
     el.setPointerCapture(event.pointerId);
@@ -173,6 +178,7 @@ function placeCamera() {
     }
     if (!mode) return;
     if (mode === "gizmo") { dragGizmo(event); return; }
+    if (mode === "handle") { dragSketchHandle(event); return; }
     if (mode === "draw") { moved += Math.abs(event.clientX - lastX) + Math.abs(event.clientY - lastY);
                            lastX = event.clientX; lastY = event.clientY; return; }
     const dx = event.clientX - lastX, dy = event.clientY - lastY;
@@ -191,6 +197,7 @@ function placeCamera() {
   });
   el.addEventListener("pointerup", event => {
     if (mode === "gizmo") dropGizmo();
+    else if (mode === "handle") dropSketchHandle();
     else if (mode === "draw") { if (moved < 4) sketchClick(event); }
     else if (mode === "orbit" && moved < 4 && !pickVertex(event)) {
       // While a mesh is being edited by hand, the viewport belongs to its
@@ -201,12 +208,16 @@ function placeCamera() {
     }
     mode = null;
   });
-  el.addEventListener("pointercancel", () => { meshEdit.axis = null; mode = null; });
+  el.addEventListener("pointercancel", () => {
+    meshEdit.axis = null;
+    if (sketcher.drag) { sketcher.drag = null; sketcher.preview = null; refreshSketch(); }
+    mode = null;
+  });
   //! Double-clicking a sketch opens it - the way a CAD modeller does, and the
   //! same gesture in the tree. Double-clicking inside an open one ends a
   //! spline, which is the only element that does not know how long it is.
   el.addEventListener("dblclick", event => {
-    if (sketching()) { finishSpline(); return; }
+    if (sketching()) { endSketchRun(); return; }
     pick(event);
     const entry = feature(state.selected);
     if (entry && entry.sketch) enterSketch(entry.id);
@@ -477,14 +488,38 @@ function refreshMeshEdit() {
 
 const sketcher = {
   id: null,          // the sketch being drawn on
-  tool: "line",      // what the next clicks will make
+  tool: "select",    // a sketch opens ready to look at, not ready to draw
   clicks: [],        // the clicks so far, in the plane's coordinates
+  from: null,        // the end a chain is carrying on from: { id, key }
+  tangent: true,     // whether an arc off a chain leaves it smoothly
   hover: null,       // where the cursor is on the plane, for the rubber band
   picked: [],        // what a relation will be put on, in the order picked
-  relating: null,    // the relation waiting for things to be put on
   snapped: null,     // the handle the last click landed on, for coincidence
+  drag: null,        // the handle under the cursor, mid-drag
+  preview: null,     // the drawing as the drag would leave it, not yet written
   group: null,       // the overlay: handles, the band, what is picked
   orbit: null,       // the view to put back on the way out
+};
+
+//! Choosing a tool abandons whatever was half-drawn - a half-drawn thing
+//! belongs to the tool that was drawing it.
+function pickSketchTool(type) {
+  // Reaching for the arc while a chain is live keeps the chain, so the arc can
+  // leave it tangentially. Everything else starts clean.
+  const carry = type === "arc" && sketcher.from && sketcher.clicks.length === 1;
+  sketcher.tool = type;
+  if (!carry) { sketcher.clicks = []; sketcher.from = null; sketcher.snapped = null; }
+  sketcher.picked = [];
+  sketcher.drag = null;
+  sketcher.preview = null;
+  refreshSketch();
+}
+
+//! What the buttons are called. The type names are lower case because they are
+//! what the model file says; these are for people.
+const SKETCH_LABELS = {
+  select: "Select", point: "Point", line: "Polyline", arc: "Arc", circle: "Circle",
+  ellipse: "Ellipse", oblong: "Oblong", spline: "Spline",
 };
 
 const sketching = () => (sketcher.id && feature(sketcher.id)) || null;
@@ -523,7 +558,11 @@ function sketchAt(event) {
   return [Math.round(away.dot(frame.x) * 1e3) / 1e3, Math.round(away.dot(frame.y) * 1e3) / 1e3];
 }
 
+//! The drawing as it should be seen. Mid-drag that is the drawing as the drag
+//! would leave it - shown, not yet written, because a drag is one edit and it
+//! is not finished until the cursor is let go.
 const sketchDrawing = () => {
+  if (sketcher.preview) return sketcher.preview;
   const entry = sketching();
   return entry && entry.sketch ? readSketch(entry.sketch.drawing) : { elements: [], constraints: [] };
 };
@@ -564,9 +603,13 @@ function enterSketch(id) {
   if (!entry || !entry.sketch) return;
   if (handEditing()) { meshEdit.id = null; meshEdit.vertex = -1; refreshMeshEdit(); }
   sketcher.id = id;
+  sketcher.tool = "select";
   sketcher.clicks = [];
+  sketcher.from = null;
   sketcher.picked = [];
   sketcher.snapped = null;
+  sketcher.drag = null;
+  sketcher.preview = null;
   sketcher.hover = null;
   sketcher.orbit = { yaw: view.yaw, pitch: view.pitch, distance: view.distance,
                      target: view.target.clone() };
@@ -582,7 +625,10 @@ function leaveSketch() {
   if (!sketcher.id) return;
   sketcher.id = null;
   sketcher.clicks = [];
+  sketcher.from = null;
   sketcher.picked = [];
+  sketcher.drag = null;
+  sketcher.preview = null;
   if (sketcher.orbit) {
     Object.assign(view, { yaw: sketcher.orbit.yaw, pitch: sketcher.orbit.pitch,
                           distance: sketcher.orbit.distance });
@@ -624,7 +670,12 @@ function refreshSketch() {
   for (const button of rail.querySelectorAll(".tool[data-sketch]"))
     button.classList.toggle("on", button.dataset.sketch === sketcher.tool);
   for (const button of rail.querySelectorAll(".tool[data-relation]"))
-    button.disabled = !relationReady(button.dataset.relation);
+    button.classList.toggle("ready", relationReady(button.dataset.relation));
+  // The tangent switch is only a question while there is something to be
+  // tangent to, so it is only asked then.
+  const smooth = document.getElementById("sketch-tangent");
+  smooth.hidden = !(sketcher.from && sketcher.clicks.length === 1);
+  smooth.setAttribute("aria-pressed", sketcher.tangent ? "true" : "false");
 
   const frame = sketchFrame();
   if (!frame) { draw(); return; }
@@ -695,21 +746,47 @@ function refreshSketch() {
 }
 
 //! The element the clicks so far would make if the cursor were the last one.
+//! Made the same way the real one will be, so what is shown is what will be
+//! written - including a tangent arc, which is worth seeing before you commit
+//! to it.
 function sketchBand(drawing) {
   if (!sketcher.hover || !sketcher.clicks.length) return null;
   const wanted = SKETCH_CLICKS[sketcher.tool];
   const clicks = [...sketcher.clicks, sketcher.hover];
-  if (wanted && clicks.length < wanted) {
+  const smooth = tangentHere(drawing);
+  if (smooth && sketcher.tool === "arc")
+    return sketchTangentArc(sketcher.clicks[0], smooth, sketcher.hover, "band");
+  if (wanted && clicks.length < wanted)
     // Not enough yet to be what it will be; show the straight run of clicks.
     return { id: "band", type: "spline", pts: clicks, closed: false };
-  }
   try { return sketchElement(sketcher.tool, "band", clicks); } catch (e) { return null; }
 }
 
+//! The direction the chain is travelling, when there is a chain and tangency is
+//! wanted. This is what makes the next arc leave the last line smoothly rather
+//! than at a kink - the move a CAD sketcher is built around.
+function tangentHere(drawing = sketchDrawing()) {
+  // Only the arc tool leaves smoothly. Carrying on with the line tool is a
+  // polyline, and a polyline's corners are corners.
+  if (sketcher.tool !== "arc") return null;
+  if (!sketcher.tangent || !sketcher.from || sketcher.clicks.length !== 1) return null;
+  const el = drawing.elements.find(e => e.id === sketcher.from.id);
+  return el ? sketchDirectionAt(el, sketcher.from.key) : null;
+}
+
 function sketchHint() {
+  if (sketcher.tool === "select") {
+    if (sketcher.picked.length)
+      return sketcher.picked.length + " picked · apply a relation, or Esc";
+    return "select · drag an end to move it · click to pick, then relate";
+  }
   const wanted = SKETCH_CLICKS[sketcher.tool] || 0;
-  if (sketcher.picked.length)
-    return sketcher.picked.length + " picked · choose a relation, or Esc";
+  const smooth = tangentHere();
+  if (smooth) return "arc · tangent to the last segment · click where it ends";
+  if (sketcher.tool === "arc" && sketcher.from && sketcher.clicks.length === 1)
+    return "arc · 2 more clicks · Tangent to carry on smoothly";
+  if (sketcher.tool === "line" && sketcher.clicks.length)
+    return "polyline · click for the next corner · Esc or Enter to stop";
   if (!wanted) return "spline · click points, Enter or double-click to finish";
   const left = wanted - sketcher.clicks.length;
   return sketcher.tool + " · " + (left > 0 ? left + " more click" + (left === 1 ? "" : "s")
@@ -718,87 +795,173 @@ function sketchHint() {
 
 /* --------------------------------------------------------------- clicking */
 
-//! One click on the plane. It either finishes an element - in which case a
-//! draw edit is written - or waits for the next one.
+//! One click on the plane. In select it picks or starts a drag; with a tool it
+//! collects clicks until there are enough to be something, and writes it.
 function sketchClick(event) {
   const uv = sketchAt(event);
   if (!uv) return;
   const drawing = sketchDrawing();
 
-  // Picking things for a relation is a different job from drawing, and the
-  // rail says which one is on: with a relation armed, a click picks.
-  if (sketcher.relating) {
-    const spec = SKETCH_RELATIONS.find(r => r.key === sketcher.relating);
-    const want = spec.of === "handle" ? (nearestHandle(uv, drawing) || {}).ref
-                                      : nearestElement(uv, drawing);
-    if (want && !sketcher.picked.includes(want)) sketcher.picked.push(want);
-    if (sketcher.picked.length >= spec.takes) putRelation(spec.key);
-    else refreshSketch();
+  if (sketcher.tool === "select") {
+    // Picking is what select is for: ends for a coincidence, whole elements
+    // for everything else. Clicking nothing clears, the way a canvas does.
+    const handle = nearestHandle(uv, drawing);
+    const want = handle ? handle.ref : nearestElement(uv, drawing);
+    if (!want) sketcher.picked = [];
+    else if (sketcher.picked.includes(want))
+      sketcher.picked = sketcher.picked.filter(p => p !== want);
+    else sketcher.picked.push(want);
+    refreshSketch();
     return;
   }
 
+  // Asked before the click is added, because whether this click finishes a
+  // tangent arc depends on what was there before it, not after.
+  const smooth = tangentHere(drawing);
   const snap = nearestHandle(uv, drawing);
   const at = snap ? snap.p.slice() : uv;
-  if (!sketcher.clicks.length) sketcher.snapped = snap ? snap.ref : null;
+  if (!sketcher.clicks.length && !sketcher.from) sketcher.snapped = snap ? snap.ref : null;
   sketcher.clicks.push(at);
-  const wanted = SKETCH_CLICKS[sketcher.tool];
-  if (wanted && sketcher.clicks.length >= wanted) commitSketchElement(snap);
+  // A tangent arc needs only where it ends: where it starts and which way it
+  // leaves are both already settled by the element before it.
+  const enough = smooth ? 2 : SKETCH_CLICKS[sketcher.tool];
+  if (enough && sketcher.clicks.length >= enough) commitSketchElement(snap, smooth);
   else refreshSketch();
 }
 
-function commitSketchElement(endSnap) {
+//! Which handle of a freshly drawn element is its start and which its end.
+const SKETCH_ENDS = { line: ["a", "b"], arc: ["start", "end"], spline: null };
+
+function commitSketchElement(endSnap, smooth = null) {
   const clicks = sketcher.clicks.slice();
   const opening = sketcher.snapped;
+  const carried = sketcher.from;
   sketcher.clicks = [];
   sketcher.snapped = null;
-  if (clicks.length < Math.max(2, SKETCH_CLICKS[sketcher.tool] || 2)) { refreshSketch(); return; }
+  if (clicks.length < 2) { refreshSketch(); return; }
 
   const drawing = sketchDrawing();
   const id = nextSketchId(drawing);
-  const edits = [{ op: "draw", id: sketcher.id, type: sketcher.tool, at: clicks, as: id }];
-  // A line drawn onto the end of another one is meant to stay on it. The snap
-  // put it there; the coincidence keeps it there when either is moved.
-  const ends = { line: ["a", "b"], arc: ["start", "end"], spline: null };
-  const pair = ends[sketcher.tool];
-  if (pair && opening)
+  const tool = sketcher.tool;
+
+  // Tangency is said, not computed here: the edit names the end to leave and
+  // the point to reach, and the op works out the arc. So the line in the
+  // console is the whole of what happened, and replaying it draws the same arc.
+  const carry = smooth ? carried.id + "." + carried.key : null;
+  const edits = [carry
+    ? { op: "draw", id: sketcher.id, type: "arc", at: [clicks[1]], from: carry, as: id }
+    : { op: "draw", id: sketcher.id, type: tool, at: clicks, as: id }];
+
+  const pair = SKETCH_ENDS[tool === "select" ? "line" : tool];
+  // An element drawn onto the end of another is meant to stay on it. The snap
+  // put it there; the coincidence keeps it there when either is moved. A chain
+  // carries its own join, so the corner holds without a second click.
+  // A tangent arc already starts where the chain left off; it needs no second
+  // way of being told so.
+  const joinTo = carry ? null : (opening || (carried && carried.id + "." + carried.key));
+  if (pair && joinTo)
     edits.push({ op: "relate", id: sketcher.id, type: "coincident",
-                 of: [id + "." + pair[0], opening] });
-  if (pair && endSnap && endSnap.ref !== opening)
+                 of: [id + "." + pair[0], joinTo] });
+  if (pair && endSnap && endSnap.ref !== joinTo)
     edits.push({ op: "relate", id: sketcher.id, type: "coincident",
                  of: [id + "." + pair[1], endSnap.ref] });
+
+  // A line keeps going: this is a polyline tool, so the end of the segment just
+  // drawn is the start of the next one, and switching to the arc tool now
+  // carries the tangent with it. Anything else is one element and stops.
+  const chains = tool === "line" || tool === "arc";
+  if (chains && pair) {
+    sketcher.from = { id, key: pair[1] };
+    sketcher.clicks = [endSnap ? endSnap.p.slice() : clicks[clicks.length - 1]];
+  } else {
+    sketcher.from = null;
+  }
   mdl.runAll(edits).catch(err => showError(err.message));
 }
 
-//! A spline is as many points as you give it; Enter or a double-click is what
-//! says that was the last one.
-function finishSpline() {
-  if (SKETCH_CLICKS[sketcher.tool] || sketcher.clicks.length < 2) return;
-  commitSketchElement(null);
+//! Enter, a double-click, or Esc: that was the last point. A spline needs it
+//! because it is however long you make it; a chain needs it because it would
+//! otherwise carry on for ever.
+function endSketchRun() {
+  if (!SKETCH_CLICKS[sketcher.tool] && sketcher.clicks.length >= 2) {
+    commitSketchElement(null);
+    sketcher.from = null;
+    sketcher.clicks = [];
+    refreshSketch();
+    return true;
+  }
+  if (sketcher.clicks.length || sketcher.from) {
+    sketcher.clicks = [];
+    sketcher.from = null;
+    sketcher.snapped = null;
+    refreshSketch();
+    return true;
+  }
+  return false;
 }
 
-const relationReady = key => {
-  const spec = SKETCH_RELATIONS.find(r => r.key === key);
-  return !!spec && sketcher.picked.length >= spec.takes;
-};
+/* --------------------------------------------------------------- dragging */
 
-function armRelation(key) {
-  const spec = SKETCH_RELATIONS.find(r => r.key === key);
-  if (!spec) return;
-  if (sketcher.picked.length >= spec.takes) { putRelation(key); return; }
-  sketcher.relating = sketcher.relating === key ? null : key;
-  sketcher.clicks = [];
-  if (!sketcher.relating) sketcher.picked = [];
-  document.getElementById("sketch-hint").textContent = sketcher.relating
-    ? spec.label + " · pick " + spec.takes + " " + (spec.of === "handle" ? "ends" : spec.of)
-    : sketchHint();
+//! Dragging an end of an element. The drawing is changed as the cursor moves so
+//! it can be seen, but only the end of the drag is written - one edit, one
+//! step to undo, however far the cursor travelled.
+function grabSketchHandle(event) {
+  if (!sketching() || sketcher.tool !== "select") return false;
+  const uv = sketchAt(event);
+  if (!uv) return false;
+  const found = nearestHandle(uv);
+  if (!found) return false;
+  sketcher.drag = { ref: found.ref, at: found.p.slice(), moved: false };
+  return true;
+}
+
+function dragSketchHandle(event) {
+  const uv = sketchAt(event);
+  if (!uv || !sketcher.drag) return;
+  sketcher.drag.at = uv;
+  sketcher.drag.moved = true;
+  // Shown from the drawing as it would be, without writing anything yet.
+  const preview = sketchDrawing();
+  const found = sketchHandleAt(preview, sketcher.drag.ref);
+  if (found) { sketchMoveHandle(found.el, found.key, uv); sketcher.preview = preview; }
   refreshSketch();
 }
 
+function dropSketchHandle() {
+  const drag = sketcher.drag;
+  sketcher.drag = null;
+  sketcher.preview = null;
+  if (!drag) return;
+  if (!drag.moved) { refreshSketch(); return; }
+  edit({ op: "drag", id: sketcher.id, handle: drag.ref, to: drag.at });
+}
+
+/* -------------------------------------------------------------- relations */
+
+const relationReady = key => {
+  const spec = SKETCH_RELATIONS.find(r => r.key === key);
+  if (!spec) return false;
+  const wanted = spec.of === "handle";
+  const usable = sketcher.picked.filter(p => p.includes(".") === wanted);
+  return usable.length >= spec.takes;
+};
+
+//! Select first, then say what should hold - the way every parametric sketcher
+//! works. A relation with nothing picked says what it wants rather than doing
+//! nothing.
 function putRelation(key) {
   const spec = SKETCH_RELATIONS.find(r => r.key === key);
-  const of = sketcher.picked.slice(0, spec.takes);
+  if (!spec) return;
+  const wanted = spec.of === "handle";
+  const usable = sketcher.picked.filter(p => p.includes(".") === wanted);
+  if (usable.length < spec.takes) {
+    document.getElementById("sketch-hint").textContent =
+      spec.label + " · pick " + spec.takes + " "
+      + (wanted ? "ends" : spec.of === "line" ? "lines" : "elements") + " first";
+    return;
+  }
+  const of = usable.slice(0, spec.takes);
   sketcher.picked = [];
-  sketcher.relating = null;
   edit({ op: "relate", id: sketcher.id, type: key, of });
 }
 
@@ -813,21 +976,22 @@ function buildSketchRail() {
 
   const tools = document.createElement("div");
   tools.dataset.group = "elements";
-  for (const type of SKETCH_TYPES) {
+  // Select comes first and is where the sketcher starts, because opening a
+  // sketch should not arm a tool: the first thing you want to do to a drawing
+  // is usually look at it and push something.
+  for (const type of ["select", ...SKETCH_TYPES]) {
     const button = document.createElement("button");
     button.className = "tool";
     button.dataset.sketch = type;
-    button.dataset.label = type + (SKETCH_CLICKS[type] ? " · " + SKETCH_CLICKS[type] + " clicks"
-                                                       : " · click points");
+    button.dataset.label =
+      type === "select" ? "Select · drag an end, or pick things to relate"
+      : type === "line" ? "Polyline · click corner after corner"
+      : type === "arc" ? "Arc · 3 clicks, or tangent to what you just drew"
+      : SKETCH_CLICKS[type] ? SKETCH_LABELS[type] + " · " + SKETCH_CLICKS[type] + " clicks"
+      : SKETCH_LABELS[type] + " · click points, Enter to finish";
     button.setAttribute("aria-label", type);
     button.innerHTML = svg(SKETCH_ICONS[type]);
-    button.addEventListener("click", () => {
-      sketcher.tool = type;
-      sketcher.clicks = [];
-      sketcher.relating = null;
-      sketcher.picked = [];
-      refreshSketch();
-    });
+    button.addEventListener("click", () => pickSketchTool(type));
     tools.appendChild(button);
   }
   rail.appendChild(tools);
@@ -842,7 +1006,7 @@ function buildSketchRail() {
     button.dataset.label = spec.label + " · " + spec.hint;
     button.setAttribute("aria-label", spec.label);
     button.innerHTML = svg(SKETCH_ICONS[spec.key]);
-    button.addEventListener("click", () => armRelation(spec.key));
+    button.addEventListener("click", () => putRelation(spec.key));
     relations.appendChild(button);
   }
   rail.appendChild(relations);
@@ -982,6 +1146,8 @@ function fitView() {
 //! The sketcher's own rail. Seven shapes and six relations, drawn the way a
 //! drawing board draws them.
 const SKETCH_ICONS = {
+  // The cursor itself: what the sketcher hands you before you ask for a tool.
+  select: '<path d="M3.4 2.2l9.4 5.1-4 1-1.6 4.2z" fill="currentColor" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>',
   point: '<circle cx="8" cy="8" r="2.2" fill="currentColor"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2" stroke="currentColor" stroke-width="1"/>',
   line: '<path d="M2.6 13.4L13.4 2.6" stroke="currentColor" stroke-width="1.4"/><circle cx="2.6" cy="13.4" r="1.5" fill="currentColor"/><circle cx="13.4" cy="2.6" r="1.5" fill="currentColor"/>',
   arc: '<path d="M2.4 12.4A9 9 0 0112.4 2.4" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="2.4" cy="12.4" r="1.4" fill="currentColor"/><circle cx="12.4" cy="2.4" r="1.4" fill="currentColor"/>',
@@ -1021,6 +1187,8 @@ const ICONS = {
   Ribbon: '<path d="M5.2 4.4L2 8l3.2 3.6M10.8 4.4L14 8l-3.2 3.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
         + '<path d="M6.3 10.6c1-3.6 2.2-5 3.4-5s1.5 1.1 0 1.1" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>'
         + '<path d="M6.3 8.6c1.1-2.6 2-3.6 3-3.6" fill="none" stroke="currentColor" stroke-width=".9" stroke-linecap="round" opacity=".6"/>',
+  undo: '<path d="M3.4 7.6h6.2a3.6 3.6 0 010 7.2H6.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6.2 4.2L2.8 7.6l3.4 3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
+  redo: '<path d="M12.6 7.6H6.4a3.6 3.6 0 000 7.2h3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9.8 4.2l3.4 3.4-3.4 3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
   Fillet: '<path d="M2.5 13.5V8a5.5 5.5 0 015.5-5.5h5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 2.5h5.5M2.5 2.5v5.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2"/>',
 
   /* ------------------------------------------------------------ numbers */
@@ -1143,6 +1311,49 @@ const ICONS = {
   eyeOff: '<path d="M1.5 8S4 3.5 8 3.5s6.5 4.5 6.5 4.5-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/><path d="M2.5 2.5l11 11" stroke="currentColor" stroke-width="1.3"/>',
 };
 const svg = body => '<svg viewBox="0 0 16 16" aria-hidden="true">' + body + "</svg>";
+
+/* ------------------------------------------------------------ the labels */
+
+//! Every button that carries a data-label gets one, wherever it is: the tool
+//! rail, the sketcher's rail, anything added later. One element, fixed to the
+//! window, placed beside whatever the cursor is on - because a rail that
+//! scrolls clips anything drawn beside a button inside it, which is what was
+//! quietly happening to all of these.
+(function labelOnHover() {
+  const tip = document.getElementById("tip");
+  let shown = null;
+
+  const place = target => {
+    const box = target.getBoundingClientRect();
+    tip.textContent = target.dataset.label || "";
+    tip.classList.toggle("dim", !!target.disabled);
+    tip.classList.add("on");
+    // Beside the button, or on the other side of it when there is no room.
+    const width = tip.offsetWidth, height = tip.offsetHeight;
+    let x = box.right + 9;
+    if (x + width > innerWidth - 6) x = Math.max(6, box.left - 9 - width);
+    const y = Math.max(6, Math.min(innerHeight - height - 6,
+                                   box.top + box.height / 2 - height / 2));
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  };
+
+  const hide = () => { shown = null; tip.classList.remove("on"); };
+
+  addEventListener("pointerover", event => {
+    const target = event.target.closest && event.target.closest("[data-label]");
+    if (!target) { if (shown) hide(); return; }
+    shown = target;
+    place(target);
+  }, true);
+  addEventListener("pointerout", event => {
+    if (shown && event.target === shown) hide();
+  }, true);
+  // A button that vanishes under the cursor - a rail swapped for another one -
+  // must not leave its label behind.
+  addEventListener("pointerdown", hide, true);
+  addEventListener("scroll", () => { if (shown) place(shown); }, true);
+})();
 const escapeHtml = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const escapeAttr = s => escapeHtml(s).replace(/"/g, "&quot;");
 
@@ -1173,6 +1384,9 @@ function buildToolbar() {
     (targets[spec.category] || targets.operation || rail).appendChild(button);
   }
   document.getElementById("btn-def-close").innerHTML = svg(ICONS.close);
+  document.getElementById("btn-undo").innerHTML = svg(ICONS.undo);
+  document.getElementById("btn-redo").innerHTML = svg(ICONS.redo);
+  refreshSteps();
 }
 
 //! Fillet waits for its input, the way a CAD operation does.
@@ -2201,7 +2415,38 @@ const graph = new GraphEditor({
   onSketch: id => { focus(); enterSketch(id); },
 });
 document.getElementById("btn-graph").addEventListener("click", () => graph.toggle());
+/* ----------------------------------------------------------- undo, redo */
+
+//! Both are edits, so they go down the same channel as everything else and are
+//! recorded the same way. What they walk is the stack of model files the
+//! channel keeps: every edit that changed the document remembers what it said
+//! before, so undo is never a guess about what an edit did.
+function step(back) {
+  mdl.run({ op: back ? "undo" : "redo" })
+     .then(() => { select(state.selected, false); refreshSteps(); })
+     .catch(err => { showError(err.message); refreshSteps(); });
+}
+
+function refreshSteps() {
+  const undo = document.getElementById("btn-undo");
+  const redo = document.getElementById("btn-redo");
+  undo.disabled = !mdl.undoable;
+  redo.disabled = !mdl.redoable;
+  undo.dataset.label = mdl.undoable ? "Undo " + mdl.undoable + " (Ctrl+Z)" : "Nothing to undo";
+  redo.dataset.label = mdl.redoable ? "Redo " + mdl.redoable + " (Ctrl+Shift+Z)" : "Nothing to redo";
+}
+
+document.getElementById("btn-undo").addEventListener("click", () => step(true));
+document.getElementById("btn-redo").addEventListener("click", () => step(false));
+// Every edit moves the stack, wherever it came from - a slider here, a wire in
+// the node graph, a line typed into the console.
+mdl.watch(() => refreshSteps());
+
 document.getElementById("sketch-done").addEventListener("click", leaveSketch);
+document.getElementById("sketch-tangent").addEventListener("click", () => {
+  sketcher.tangent = !sketcher.tangent;
+  refreshSketch();
+});
 
 /* ----------------------------------------------------------------- showroom
 
@@ -2508,21 +2753,33 @@ addEventListener("pointerdown", event => {
 }, true);
 
 addEventListener("keydown", event => {
+  // Undo works even from a field: it is the one shortcut people expect
+  // everywhere, and the browser's own would only undo the typing.
+  if ((event.ctrlKey || event.metaKey) && (event.key === "z" || event.key === "Z")) {
+    event.preventDefault();
+    step(!event.shiftKey);
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && (event.key === "y" || event.key === "Y")) {
+    event.preventDefault();
+    step(false);
+    return;
+  }
   if (event.target.matches("input, textarea, select")) return;
   if (event.key === "f" || event.key === "F") { if (sketching()) lookAtSketch(); else fitView(); }
   if (event.key === "t" || event.key === "T") toggleTree();
   if (event.key === "g" || event.key === "G") graph.toggle();
-  if (event.key === "Enter" && sketching()) { finishSpline(); return; }
+  if (event.key === "Enter" && sketching()) { endSketchRun(); return; }
   if (event.key === "Escape") {
     sampleMenu.hidden = true;
     if (staging) return leaveShowroom();
     // Out of the sketcher a step at a time: the half-drawn element, then what
     // is picked, then the sketch itself.
     if (sketching()) {
-      if (sketcher.clicks.length) { sketcher.clicks = []; sketcher.snapped = null; refreshSketch(); }
-      else if (sketcher.picked.length || sketcher.relating) {
-        sketcher.picked = []; sketcher.relating = null; refreshSketch();
-      } else leaveSketch();
+      if (endSketchRun()) return;
+      if (sketcher.picked.length) { sketcher.picked = []; refreshSketch(); return; }
+      if (sketcher.tool !== "select") { pickSketchTool("select"); return; }
+      leaveSketch();
       return;
     }
     state.edited = null; buildPanel(); logPop.hidden = true;

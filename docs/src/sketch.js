@@ -309,6 +309,66 @@ export function sketchLoops(drawing, tolerance = 0.05) {
   return { loops, open };
 }
 
+//! Which way an element is heading when it arrives at one of its ends. What a
+//! CAD sketcher continues when you carry on drawing: the next arc leaves the
+//! corner going the same way the last line came in, so the two meet smoothly
+//! instead of at a kink.
+export function sketchDirectionAt(el, key) {
+  if (!el) return null;
+  if (el.type === "line") return key === "a" ? norm(sub(el.a, el.b)) : norm(sub(el.b, el.a));
+  if (el.type === "arc") {
+    // An arc drawn from a0 to a1 runs anticlockwise, so the way it is going at
+    // any angle is the radius turned a quarter turn the same way.
+    const at = key === "start" ? el.a0 : el.a1;
+    const out = [-Math.sin(at), Math.cos(at)];
+    return key === "start" ? [-out[0], -out[1]] : out;
+  }
+  if (el.type === "spline") {
+    const pts = el.pts || [];
+    if (pts.length < 2) return null;
+    const at = Number(String(key).slice(1));
+    if (at === 0) return norm(sub(pts[0], pts[1]));
+    if (at === pts.length - 1) return norm(sub(pts[at], pts[at - 1]));
+    return norm(sub(pts[at + 1], pts[at - 1]));
+  }
+  return null;
+}
+
+//! The arc that leaves \p from in the direction \p tangent and arrives at
+//! \p to. There is exactly one, and this is the whole of what a tangent-arc
+//! tool does: the centre is somewhere on the line through \p from at right
+//! angles to the tangent, and the radius is whatever puts \p to on the circle.
+//!
+//!   |from + r*N - to| = |r|,  N perpendicular to the tangent
+//!     =>  r = -(D.D) / (2 N.D)   with D = from - to
+//!
+//! Returns null when the three are in a line and no arc exists - draw the line
+//! instead, which is what that degenerate case actually is.
+export function sketchTangentArc(from, tangent, to, id) {
+  const t = norm(tangent);
+  if (!t) return null;
+  const N = perp(t);
+  const D = sub(from, to);
+  const below = 2 * dot(N, D);
+  if (Math.abs(below) < 1e-9 || dot(D, D) < 1e-12) return null;
+  const r = -dot(D, D) / below;
+  const c = add(from, mul(N, r));
+  const radius = Math.abs(r);
+  if (!(radius > 1e-9) || !Number.isFinite(radius)) return null;
+
+  const angleOf = p => Math.atan2(p[1] - c[1], p[0] - c[0]);
+  const a = angleOf(from), b = angleOf(to);
+  const turn = x => ((x % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+  // An arc is stored as a sweep that only ever increases, so if the tangent
+  // says it leaves `from` clockwise it is written the other way round - the
+  // same arc, walked from `to`. Which end is which never mattered to a chain.
+  const anticlockwise = dot([-Math.sin(a), Math.cos(a)], t) > 0;
+  const a0 = anticlockwise ? a : b;
+  const a1 = a0 + turn(anticlockwise ? b - a : a - b);
+  return { id, type: "arc", c: sketchRound(c), r: round1(radius),
+           a0: round4(a0), a1: round4(a1) };
+}
+
 //! One chain's elements with their ends welded shut. Two elements that a
 //! chain says meet are, in a drawing, a hundredth of a millimetre apart; a
 //! wire will not close over that. So the meeting point is taken as the middle

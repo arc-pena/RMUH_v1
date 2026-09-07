@@ -1,6 +1,7 @@
 import { acceptsFrom } from "./ocaf.js";
-import { SKETCH_CLICKS, nextSketchId, readSketch, sketchElement,
-         sketchRelation } from "./sketch.js";
+import { SKETCH_CLICKS, nextSketchId, readSketch, sketchDirectionAt, sketchElement,
+         sketchHandleAt, sketchMoveHandle, sketchRelation,
+         sketchTangentArc } from "./sketch.js";
 
 // The model description language.
 //
@@ -170,21 +171,43 @@ export const MDL_OPS = [
       drawing: { elements: [{ id: "e1", type: "circle", c: [0, 0], r: 60 }], constraints: [] } },
     (ctx, edit) => ctx.kernel.setSketch(needText(edit, "id"), null, edit.drawing)),
 
-  modelOp("draw", ["id", "type", "at", "as?"],
+  modelOp("draw", ["id", "type", "at", "from?", "as?"],
     "Draw one element on a sketch. at is the clicks that would have made it, in the "
     + "plane's own coordinates - a line takes two, an arc takes centre, start and how "
-    + "far round. This is what clicking in the sketcher writes.",
-    { op: "draw", id: "SK1", type: "line", at: [[0, 0], [120, 0]] },
+    + "far round. from names an end of another element, as \"e1.b\": the new element "
+    + "starts there and leaves it smoothly, so an arc off the end of a line is tangent "
+    + "to it and at needs only where the arc ends. This is what clicking in the "
+    + "sketcher writes.",
+    { op: "draw", id: "SK1", type: "arc", at: [[100, 0], [200, 100]], from: "e1.b" },
     async (ctx, edit) => {
       const type = needText(edit, "type");
       const clicks = Array.isArray(edit.at) ? edit.at : [];
       const wanted = SKETCH_CLICKS[type];
       if (wanted === undefined) throw new Error('there is no sketch element called "' + type + '"');
-      if (clicks.length < Math.max(2, wanted))
-        throw new Error(type + " needs " + (wanted || "at least two") + " points in \"at\"");
       const drawing = await drawingOf(ctx, needText(edit, "id"));
       const id = typeof edit.as === "string" && edit.as ? edit.as : nextSketchId(drawing);
-      drawing.elements.push(sketchElement(type, id, clicks));
+
+      // Leaving another element smoothly settles where this one starts and
+      // which way it goes, so all it still needs is where it ends.
+      const carried = typeof edit.from === "string" && edit.from
+        ? sketchHandleAt(drawing, edit.from) : null;
+      if (edit.from && !carried)
+        throw new Error("there is no handle '" + edit.from + "' on that sketch");
+      if (carried) {
+        if (clicks.length < 1) throw new Error('"at" needs the point it ends at');
+        const start = carried.p;
+        const along = sketchDirectionAt(carried.el, carried.key);
+        const end = clicks[clicks.length - 1];
+        // Three points in a line have no arc through them. That is a line, and
+        // drawing one is better than refusing the edit.
+        const made = (type === "arc" && along)
+          ? sketchTangentArc(start, along, end, id) : null;
+        drawing.elements.push(made || sketchElement("line", id, [start, end]));
+      } else {
+        if (clicks.length < Math.max(2, wanted))
+          throw new Error(type + " needs " + (wanted || "at least two") + " points in \"at\"");
+        drawing.elements.push(sketchElement(type, id, clicks));
+      }
       return ctx.kernel.setSketch(edit.id, null, drawing);
     }),
 
@@ -213,6 +236,41 @@ export const MDL_OPS = [
         drawing.constraints.push(relation);
       return ctx.kernel.setSketch(edit.id, null, drawing);
     }),
+
+  modelOp("drag", ["id", "handle", "to"],
+    "Move one end of one element of a sketch, in the plane's own coordinates. An "
+    + "arc's endpoint is an angle and a radius rather than a free point, so moving "
+    + "it turns and resizes the arc instead of tearing it. This is what dragging a "
+    + "handle in the sketcher writes.",
+    { op: "drag", id: "SK1", handle: "e1.b", to: [120, 40] },
+    async (ctx, edit) => {
+      const at = String(edit.handle || "");
+      if (!/^[^.]+\.[^.]+$/.test(at))
+        throw new Error('"handle" names an element and one of its ends, as "e1.b"');
+      const to = edit.to;
+      if (!Array.isArray(to) || to.length !== 2 || !to.every(Number.isFinite))
+        throw new Error('"to" must be two numbers');
+      const drawing = await drawingOf(ctx, needText(edit, "id"));
+      const found = sketchHandleAt(drawing, at);
+      if (!found) throw new Error("there is no handle '" + at + "' on that sketch");
+      sketchMoveHandle(found.el, found.key, to);
+      return ctx.kernel.setSketch(edit.id, null, drawing);
+    }),
+
+  //! Undo and redo are edits like everything else, so they are recorded, they
+  //! show in the console, and a driver on the other end of a socket can send
+  //! them. What they restore is the whole model file, because that is what the
+  //! model is; the stack they walk is kept by the channel below.
+  modelOp("undo", [],
+    "Put the document back the way it was before the last edit that changed it. "
+    + "View edits - selecting, moving a node on the canvas - are not on the stack.",
+    { op: "undo" },
+    ctx => ctx.undo()),
+
+  modelOp("redo", [],
+    "Put back an edit that was undone. Anything else undoes the redo.",
+    { op: "redo" },
+    ctx => ctx.redo()),
 
   viewOp("move", ["id", "x", "y"],
     "Put a node somewhere on the graph canvas. Layout is view state, so no function "
@@ -271,12 +329,87 @@ export function parseEdits(text) {
    an external driver replaying it lands in the same place.
    ========================================================================== */
 
+//! How many documents back you can go. Each one is the model file, which for a
+//! part of this size is a few tens of kilobytes of text - so the whole stack
+//! costs about what one mesh does.
+const UNDO_DEPTH = 60;
+
+//! Edits that arrive in a stream - a slider being dragged, a handle being
+//! pushed around - are one edit as far as a person is concerned, so
+//! consecutive ones on the same thing collapse into a single step rather than
+//! filling the stack with a hundred of them. What "the same thing" means is
+//! this key; an op without one never collapses.
+const coalesceKey = edit => {
+  if (edit.op === "set") return "set:" + edit.id + ":" + edit.key;
+  if (edit.op === "vertex") return "vertex:" + edit.id + ":" + edit.index;
+  if (edit.op === "drag") return "drag:" + edit.id + ":" + edit.handle;
+  return null;
+};
+const COALESCE_WINDOW = 900;   // ms
+
 export class Mdl {
   constructor(ctx) {
     this.ctx = ctx;              // { kernel, apply, setNode, readLayout, select, selected }
     this.history = [];
     this.serial = 0;
     this.watchers = new Set();
+    // The state manager. Two stacks of whole model files: one behind, one
+    // ahead. Nothing here understands what an edit does - it only knows what
+    // the document said before one, which is the only definition of undo that
+    // cannot drift from what the edits actually did.
+    this.past = [];
+    this.future = [];
+    this.restoring = false;
+    this.ctx.undo = () => this.step(this.past, this.future);
+    this.ctx.redo = () => this.step(this.future, this.past);
+  }
+
+  //! The document as it stands, layout and all - one entry on the stack.
+  async snapshot() {
+    const model = await this.ctx.kernel.model();
+    const layout = this.ctx.readLayout ? this.ctx.readLayout() : null;
+    if (layout && Object.keys(layout).length) model.layout = layout;
+    return model;
+  }
+
+  async restore(model) {
+    if (model.layout && this.ctx.readLayout) this.ctx.readLayout(model.layout);
+    return await this.ctx.kernel.loadModel(model);
+  }
+
+  //! One step along the stacks, either way round. What is current goes on the
+  //! other stack on the way past, so undo and redo are the same walk.
+  async step(from, to) {
+    if (!from.length) throw new Error(from === this.past ? "nothing to undo" : "nothing to redo");
+    const here = await this.snapshot();
+    const there = from.pop();
+    this.restoring = true;
+    try {
+      const payload = await this.restore(there.model);
+      to.push({ model: here, label: there.label });
+      return payload;
+    } finally { this.restoring = false; }
+  }
+
+  //! What the buttons read to know whether they are live, and what to call the
+  //! step they would take.
+  get undoable() { return this.past.length ? this.past[this.past.length - 1].label : null; }
+  get redoable() { return this.future.length ? this.future[this.future.length - 1].label : null; }
+
+  //! Remembers the document as it was before an edit. Doing something new
+  //! forgets the branch that was undone, which is what every undo stack does
+  //! and what everyone expects.
+  remember(model, edit) {
+    const key = coalesceKey(edit);
+    const top = this.past[this.past.length - 1];
+    if (key && top && top.key === key && Date.now() - top.at < COALESCE_WINDOW) {
+      // Still the same drag: keep the older document, move the clock on.
+      top.at = Date.now();
+    } else {
+      this.past.push({ model, label: edit.op, key, at: Date.now() });
+      if (this.past.length > UNDO_DEPTH) this.past.shift();
+    }
+    this.future.length = 0;
   }
 
   watch(fn) { this.watchers.add(fn); return () => this.watchers.delete(fn); }
@@ -300,8 +433,13 @@ export class Mdl {
     if (!spec) throw new Error('unknown op "' + (edit && edit.op) + '"');
     const record = { n: ++this.serial, at: Date.now(), edit, view: spec.view, ok: true, ms: 0 };
     const started = performance.now();
+    // Taken before the edit runs, and kept only if it does: a refused edit
+    // changed nothing, so it has nothing to undo.
+    const walking = edit.op === "undo" || edit.op === "redo";
+    const before = (spec.view || walking || this.restoring) ? null : await this.snapshot();
     try {
       const payload = await spec.run(this.ctx, edit);
+      if (before) this.remember(before, edit);
       record.ms = Math.round(performance.now() - started);
       this.announce(record);
       if (payload && payload.tree && this.ctx.apply) this.ctx.apply(payload, hint || {});
