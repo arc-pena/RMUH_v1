@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>World Builder</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🌐</text></svg>">
+<link rel="stylesheet" href="/styles.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three/build/three.module.js",
+    "three/addons/": "/vendor/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<!-- generated DOM overlays land here -->
+<div id="overlays" aria-live="off"></div>
+
+<!-- top-left engine readout -->
+<section id="hud">
+  <header class="hud-head">
+    <span id="hud-state" class="state idle">idle</span>
+    <span id="hud-title">untitled world</span>
+  </header>
+
+  <dl id="hud-stats">
+    <div><dt>objects</dt><dd id="s-objects">0</dd></div>
+    <div><dt>vertices</dt><dd id="s-verts">0</dd></div>
+    <div><dt>tris</dt><dd id="s-tris">0</dd></div>
+    <div><dt>draws</dt><dd id="s-draws">0</dd></div>
+    <div><dt>geo/tex</dt><dd id="s-mem">0 / 0</dd></div>
+    <div><dt>fps</dt><dd id="s-fps">—</dd></div>
+  </dl>
+
+  <div id="hud-progress" hidden><span id="hud-bar"></span></div>
+  <ul id="hud-log"></ul>
+</section>
+
+<!-- code stream, bottom-right -->
+<pre id="codestream" hidden><code id="codestream-body"></code></pre>
+
+<!-- the one control -->
+<form id="bar" autocomplete="off">
+  <input id="prompt" type="text" placeholder="describe a world…"
+         spellcheck="false" autocapitalize="off" enterkeyhint="go">
+  <button id="go" type="submit" aria-label="build">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path d="M5 12h13M12 5l7 7-7 7" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+</form>
+
+<p id="hint">a floating island at dusk · a neon city block · make it rain · shift+enter for a new idea</p>
+
+<script type="module" src="/main.js"></script>
+</body>
+</html>

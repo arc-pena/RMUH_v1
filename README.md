@@ -6,6 +6,9 @@ Pavilions are staggered on a grid at varying heights so the canopies overlap and
 step. Abstracted from a reference image — an architectural *language*, not a
 reproduction of a specific building.
 
+> Also in this repository: [`web/`](web/README.md) — a prompt-driven Three.js
+> world builder, unrelated to the pavilion model below.
+
 Geometry is built directly on **OpenCascade** (via `OCP`, the kernel inside
 build123d), which is what makes the canopy a real doubly-curved NURBS solid
 rather than an approximation.

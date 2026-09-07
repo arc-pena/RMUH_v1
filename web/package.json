@@ -1,0 +1,22 @@
+{
+  "name": "rmuh-world-builder",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Prompt-driven Three.js world builder. One prompt bar; Claude assembles the scene live.",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node test/e2e.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}
