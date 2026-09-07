@@ -220,18 +220,81 @@ console.log("\n9. a sketch is a node like any other");
     String(reloaded.sketch.drawing.elements.length));
 }
 
-console.log("\n10. the sample the sketcher ships with");
+console.log("\n10. an element the chain walks backwards is still itself");
+{
+  // The walker chains elements end to end whichever way round they were drawn,
+  // so half of them get built in reverse. A line does not care. An arc very
+  // much does: its sweep is a pair of angles that only ever increases, so
+  // "reversed" cannot be written down as angles at all - and an attempt to
+  // write it turned a quarter turn into a three-quarter turn the other way,
+  // silently, in geometry that still looked plausible. Measure it.
+  const backwards = {
+    elements: [
+      // Drawn so that the walk has to take the arc from its end to its start.
+      { id: "run", type: "line", a: [-100, 10], b: [0, 10] },
+      { id: "turn", type: "arc", c: [0, -30], r: 40, a0: 0, a1: Math.PI / 2 },
+    ],
+    constraints: [],
+  };
+  const walk = sketchLoops(backwards);
+  check("the chain is one open run of two", walk.open.length === 1 && walk.open[0].length === 2);
+  check("with the arc walked backwards", walk.open[0].some(step => step.reversed));
+
+  await kernel.setSketch(sketchId, "drawing", backwards);
+  // Measured on the sketch itself, not on what was padded from it: the length
+  // of the drawing is the thing the reversal got wrong.
+  const rule = (await kernel.addFeature("Measure", { shape: sketchId })).id;
+  await kernel.setParameter(rule, "quantity", 0);
+  const length = Number((await at(rule)).data.preview);
+  const want = 100 + Math.PI * 40 / 2;
+  check("and it measures the length it was drawn", Math.abs(length - want) < 0.01,
+    length + " vs " + want.toFixed(2));
+  await kernel.deleteFeature(rule);
+}
+
+console.log("\n11. the sample the sketcher ships with");
 {
   const { SAMPLES } = await import("../src/ocaf.js");
-  const sample = SAMPLES.find(s => s.key === "sketched-bracket");
+  const sample = SAMPLES.find(s => s.key === "sketcher");
+  check("it sits after the hillside", SAMPLES.map(s => s.key).join(",")
+    === "hillside-town,sketcher", SAMPLES.map(s => s.key).join(","));
   const built = await kernel.loadModel(sample.model);
-  check("the sketched bracket builds", built.report.failed.length === 0,
+  check("the Sketcher sample builds", built.report.failed.length === 0,
     JSON.stringify(built.report.failed.map(f => f.id + ": " + f.message)));
   const bad = (await tree()).features.filter(f => f.error);
   check("with nothing in error", bad.length === 0,
     bad.map(f => f.id + ": " + f.error).join("; "));
-  const plate = (await kernel.mesh(["FI1"])).features[0];
-  check("and the plate is real geometry", plate.triangles > 2000, String(plate.triangles));
+
+  const measure = async (shape, quantity) => {
+    const id = (await kernel.addFeature("Measure", { shape })).id;
+    await kernel.setParameter(id, "quantity", quantity);
+    return Number((await at(id)).data.preview);
+  };
+  // Every number in the sample can be read off the drawing, so read them off.
+  const outline = 210 + Math.PI * 50 + 210 + 100          // the four outer elements
+                + 2 * Math.PI * 16 + 2 * Math.PI * 22     // two bolt circles
+                + 2 * 70 + 2 * Math.PI * 14;              // and the slot
+  check("the plate outline is as long as it is drawn",
+    Math.abs(await measure("SK1", 0) - outline) < 0.05, String(await measure("SK1", 0)));
+
+  const plate = await measure("EX1", 2), rib = await measure("EX2", 2);
+  const union = await measure("BO1", 2);
+  // A Boolean that appears to do nothing is the failure mode that looks right,
+  // so the fuse is measured rather than believed: what it removed is the
+  // trapezoid of rib standing in the plate's 14 mm, 14 mm thick.
+  const overlap = (210 + 196) / 2 * 14 * 14;
+  check("fusing the rib to the plate removes exactly where they overlap",
+    Math.abs(plate + rib - union - overlap) < 1,
+    (plate + rib - union) + " vs " + overlap);
+
+  // The fin is the other half of the solid/surface toggle: an open chain,
+  // swept, and nothing but the sweep.
+  const chain = await measure("SK3", 0);
+  check("the open chain sweeps into its own area, and no ends",
+    Math.abs(await measure("EX3", 1) - chain * 40) < 0.05,
+    (await measure("EX3", 1)) + " vs " + (chain * 40).toFixed(2));
+  check("and the part is real geometry",
+    (await kernel.mesh(["FI1"])).features[0].triangles > 2000);
 }
 
 console.log(failures ? "\n" + failures + " failed" : "\nall checks passed");

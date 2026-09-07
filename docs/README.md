@@ -250,6 +250,39 @@ answers by handing back what it was given — no error, no cut, and the volume
 identical to the input. Each solid is now cut on its own. If a `Boolean` ever
 appears to do nothing, measure it.
 
+### Sketcher
+
+The second sample, and the one to open if you want to know how a sketch is
+used. Three of them build the whole part and nothing else does:
+
+| | |
+|---|---|
+| **Plate outline** | four elements chained into an outline, held square by `horizontal`, `vertical` and `parallel`. Three more loops drawn inside it — two circles and a slot — come out as holes, because they are inside it rather than because anyone said so. |
+| **Rib section** | the same node on a plane standing on its side, where the drawing's **u** and **v** are the world's Z and X. Nothing in the drawing knows that; re-point its plane and it goes somewhere else unchanged. |
+| **Open chain** | a line and an arc that do not close, extruded on **Surface** rather than Solid — the other half of that toggle, next to the plate that used the first half. |
+
+Then one `Boolean` fuses the rib to the plate and one `Fillet` breaks the
+edges, so the sketches are feeding ordinary modelling rather than living in a
+corner of their own. Double-click any of the three to draw on it.
+
+Every number in it can be read off the drawing, which is the point of a sample
+you are meant to learn from:
+
+| | |
+|---|---|
+| the plate outline | 1143.81 mm — 210 + π·50 + 210 + 100 for the four outer elements, plus two bolt circles and the slot |
+| the fin | 6513.27 mm², which is the chain's 162.83 mm swept 40 |
+| the fuse | removes 39 788 mm³, the trapezoid of rib standing in the plate's 14 mm, 14 mm thick, exactly |
+
+**One thing that bit, and the reason those numbers are in the test.** The fin
+first measured 288.50 mm where the drawing says 162.83. The chain walker joins
+elements end to end whichever way round they were drawn, so about half of them
+are built in reverse — and an arc was being reversed by writing `a0 = a1,
+a1 = a0 + 2π`. That is a real arc, and it is a three-quarter turn the other way
+round. It looked plausible in the viewport. An arc's own numbers say which arc
+it is and the welded ends say which way along it, so nothing needs reversing at
+all; only a spline, whose interior points have an order.
+
 ## Four primitives, so a graph can compose
 
 Before these, a definition of any size fell back to a written feature — and a

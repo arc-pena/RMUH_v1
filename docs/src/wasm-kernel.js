@@ -1165,10 +1165,16 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     return fallback.IsDone() ? fallback.Wire() : null;
   }
 
-  //! An element walked backwards. Only the ones with a direction have one.
+  //! An element walked backwards.
+  //!
+  //! Only a spline needs one. A line and an arc are built from the welded ends
+  //! the walk hands over, and those are already in the order it walks them, so
+  //! turning the element round as well turns it back. An arc especially: its
+  //! sweep is a pair of angles that only ever increases, so there is no way to
+  //! write [a1, a0] at all - the arc's own numbers say which arc it is, and the
+  //! ends say which way along it. Writing a0 = a1, a1 = a0 + 2*pi did have a
+  //! meaning, and it was a three-quarter turn the other way round.
   function reverseElement(el) {
-    if (el.type === "line") return { a: el.b, b: el.a };
-    if (el.type === "arc") return { a0: el.a1, a1: el.a0 + Math.PI * 2 };
     if (el.type === "spline") return { pts: (el.pts || []).slice().reverse() };
     return {};
   }

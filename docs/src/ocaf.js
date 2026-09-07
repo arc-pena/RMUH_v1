@@ -921,336 +921,100 @@ export const HILLSIDE_TOWN = {
   }
 };
 
-//! The sketcher, doing what a sketcher is for: one drawing, on a plane, with
-//! relations holding it square, and a pad off the loops it closes. The outline
-//! is six elements chained end to end; the three loops drawn inside it are
-//! holes rather than plates because they are inside it, which is counted
-//! rather than declared. The rib beside it is the same sketch node on a
-//! different plane with the extrude switched to Surface, so the two halves of
-//! that toggle are on screen at once.
-export const SKETCHED_BRACKET = {
-  "format": "ocaf-parametric-model",
-  "version": 1,
-  "name": "Sketched bracket",
-  "units": "mm",
-  "features": [
-    {
-      "id": "PT1",
-      "type": "Point",
-      "name": "Origin",
-      "args": {
-        "x": 0,
-        "y": 0,
-        "z": 0
-      }
-    },
-    {
-      "id": "VE1",
-      "type": "Vector",
-      "name": "Up",
-      "args": {
-        "dx": 0,
-        "dy": 0,
-        "dz": 1
-      }
-    },
-    {
-      "id": "PL1",
-      "type": "Plane",
-      "name": "XY",
-      "args": {
-        "origin": {
-          "ref": "PT1"
-        },
-        "normal": {
-          "ref": "VE1"
-        }
-      }
-    },
-    {
-      "id": "SK1",
-      "type": "Sketch",
-      "name": "Plate profile",
-      "args": {
-        "plane": {
-          "ref": "PL1"
-        },
-        "origin": {
-          "ref": "PT1"
-        },
-        "drawing": {
-          "elements": [
-            {
-              "id": "o1",
-              "type": "line",
-              "a": [
-                -130,
-                -80
-              ],
-              "b": [
-                130,
-                -80
-              ]
-            },
-            {
-              "id": "o2",
-              "type": "arc",
-              "c": [
-                130,
-                -40
-              ],
-              "r": 40,
-              "a0": -1.5707963,
-              "a1": 1.5707963
-            },
-            {
-              "id": "o3",
-              "type": "line",
-              "a": [
-                130,
-                0
-              ],
-              "b": [
-                130,
-                60
-              ]
-            },
-            {
-              "id": "o4",
-              "type": "arc",
-              "c": [
-                80,
-                60
-              ],
-              "r": 50,
-              "a0": 0,
-              "a1": 3.1415927
-            },
-            {
-              "id": "o5",
-              "type": "line",
-              "a": [
-                30,
-                60
-              ],
-              "b": [
-                -130,
-                60
-              ]
-            },
-            {
-              "id": "o6",
-              "type": "line",
-              "a": [
-                -130,
-                60
-              ],
-              "b": [
-                -130,
-                -80
-              ]
-            },
-            {
-              "id": "h1",
-              "type": "circle",
-              "c": [
-                -90,
-                -40
-              ],
-              "r": 16
-            },
-            {
-              "id": "h2",
-              "type": "circle",
-              "c": [
-                80,
-                60
-              ],
-              "r": 22
-            },
-            {
-              "id": "h3",
-              "type": "oblong",
-              "a": [
-                -40,
-                10
-              ],
-              "b": [
-                40,
-                10
-              ],
-              "r": 14
-            }
+//! The sketcher, taught by example. Three sketches and nothing else builds
+//! any of this part:
+//!
+//!   Plate outline  four elements chained into an outline, held square by
+//!                  horizontal, vertical and parallel; three more loops drawn
+//!                  inside it, which come out as holes because they are inside
+//!                  it rather than because anyone said so.
+//!   Rib section    the same node on a plane standing on its side, so the
+//!                  drawing's u and v are the world's Z and X. Nothing in the
+//!                  drawing knows that.
+//!   Open chain     a line and an arc that do not close, extruded on Surface
+//!                  rather than Solid - the other half of that toggle.
+//!
+//! Every number in it can be read off the drawing: the outline measures
+//! 1143.81 mm, the fin 6513.27 mm2 - which is the chain's 162.83 mm swept
+//! 40 - and fusing the rib to the plate removes 39,788 mm3, the trapezoid
+//! where the two overlap, exactly.
+export const SKETCHER_PART = {
+  format: "ocaf-parametric-model", version: 1, name: "Sketcher", units: "mm",
+  features: [
+    { id: "PT1", type: "Point",  name: "Origin",    args: { x: 0, y: 0, z: 0 } },
+    { id: "VE1", type: "Vector", name: "Up",        args: { dx: 0, dy: 0, dz: 1 } },
+    { id: "VE2", type: "Vector", name: "Across",    args: { dx: 0, dy: 1, dz: 0 } },
+    { id: "PL1", type: "Plane",  name: "Plate plane",
+      args: { origin: { ref: "PT1" }, normal: { ref: "VE1" } } },
+    { id: "PT2", type: "Point",  name: "Rib base",  args: { x: 0, y: 16, z: 0 } },
+    { id: "PL2", type: "Plane",  name: "Rib plane",
+      args: { origin: { ref: "PT2" }, normal: { ref: "VE2" } } },
+    { id: "NU1", type: "Number", name: "Plate thickness", args: { value: 14 } },
+
+    { id: "SK1", type: "Sketch", name: "Plate outline",
+      args: { plane: { ref: "PL1" }, origin: { ref: "PT1" }, faces: "Make faces",
+        solve: "Solve", passes: 24,
+        drawing: {
+          elements: [
+            { id: "front", type: "line", a: [-120, -70], b: [90, -70] },
+            { id: "nose",  type: "arc",  c: [90, -20], r: 50, a0: -1.5707963, a1: 1.5707963 },
+            { id: "back",  type: "line", a: [90, 30], b: [-120, 30] },
+            { id: "side",  type: "line", a: [-120, 30], b: [-120, -70] },
+            { id: "bolt",  type: "circle", c: [-90, -20], r: 16 },
+            { id: "eye",   type: "circle", c: [90, -20], r: 22 },
+            { id: "slot",  type: "oblong", a: [-40, -20], b: [30, -20], r: 14 },
           ],
-          "constraints": [
-            {
-              "type": "horizontal",
-              "of": [
-                "o1"
-              ]
-            },
-            {
-              "type": "horizontal",
-              "of": [
-                "o5"
-              ]
-            },
-            {
-              "type": "vertical",
-              "of": [
-                "o6"
-              ]
-            },
-            {
-              "type": "parallel",
-              "of": [
-                "o6",
-                "o3"
-              ]
-            }
-          ]
-        },
-        "faces": "Make faces",
-        "solve": "Solve",
-        "passes": 24
-      }
-    },
-    {
-      "id": "NU1",
-      "type": "Number",
-      "name": "Plate thickness",
-      "args": {
-        "value": 14
-      }
-    },
-    {
-      "id": "EX1",
-      "type": "Extrude",
-      "name": "Plate",
-      "args": {
-        "profile": {
-          "ref": "SK1"
-        },
-        "direction": {
-          "ref": "VE1"
-        },
-        "distance": {
-          "value": 14,
-          "from": "NU1"
-        },
-        "cap": "Solid"
-      },
-      "appearance": {
-        "finish": "aluminium"
-      }
-    },
-    {
-      "id": "FI1",
-      "type": "Fillet",
-      "name": "Broken edges",
-      "args": {
-        "body": {
-          "ref": "EX1"
-        },
-        "radius": 2
-      },
-      "appearance": {
-        "finish": "aluminium"
-      }
-    },
-    {
-      "id": "PT2",
-      "type": "Point",
-      "name": "Rib base",
-      "args": {
-        "x": 0,
-        "y": 0,
-        "z": 14
-      }
-    },
-    {
-      "id": "PL2",
-      "type": "Plane",
-      "name": "Rib plane",
-      "args": {
-        "origin": {
-          "ref": "PT2"
-        },
-        "normal": {
-          "ref": "VE1"
-        }
-      }
-    },
-    {
-      "id": "SK2",
-      "type": "Sketch",
-      "name": "Rib line",
-      "args": {
-        "plane": {
-          "ref": "PL2"
-        },
-        "origin": {
-          "ref": "PT2"
-        },
-        "drawing": {
-          "elements": [
-            {
-              "id": "r1",
-              "type": "line",
-              "a": [
-                -110,
-                -60
-              ],
-              "b": [
-                110,
-                -60
-              ]
-            },
-            {
-              "id": "r2",
-              "type": "arc",
-              "c": [
-                0,
-                -60
-              ],
-              "r": 110,
-              "a0": 0,
-              "a1": 1.0471976
-            }
+          constraints: [
+            { type: "horizontal", of: ["front"] },
+            { type: "horizontal", of: ["back"] },
+            { type: "vertical",   of: ["side"] },
+            { type: "parallel",   of: ["front", "back"] },
           ],
-          "constraints": [
-            {
-              "type": "horizontal",
-              "of": [
-                "r1"
-              ]
-            }
-          ]
-        },
-        "faces": "Make faces",
-        "solve": "Solve",
-        "passes": 24
-      }
-    },
-    {
-      "id": "EX2",
-      "type": "Extrude",
-      "name": "Rib",
-      "args": {
-        "profile": {
-          "ref": "SK2"
-        },
-        "direction": {
-          "ref": "VE1"
-        },
-        "distance": 46,
-        "cap": "Surface"
-      },
-      "appearance": {
-        "finish": "glass"
-      }
-    }
-  ]
+        } } },
+    { id: "EX1", type: "Extrude", name: "Plate",
+      args: { profile: { ref: "SK1" }, direction: { ref: "VE1" },
+              distance: { value: 14, from: "NU1" }, cap: "Solid" },
+      appearance: { finish: "aluminium" } },
+
+    { id: "SK2", type: "Sketch", name: "Rib section",
+      args: { plane: { ref: "PL2" }, origin: { ref: "PT2" }, faces: "Make faces",
+        solve: "Solve", passes: 24,
+        drawing: {
+          elements: [
+            { id: "foot",  type: "line", a: [0, -120], b: [0, 90] },
+            { id: "slope", type: "line", a: [0, 90], b: [70, 20] },
+            { id: "head",  type: "line", a: [70, 20], b: [70, -120] },
+            { id: "spine", type: "line", a: [70, -120], b: [0, -120] },
+          ],
+          constraints: [{ type: "parallel", of: ["foot", "head"] }],
+        } } },
+    { id: "EX2", type: "Extrude", name: "Rib",
+      args: { profile: { ref: "SK2" }, direction: { ref: "VE2" },
+              distance: 14, cap: "Solid" },
+      appearance: { finish: "aluminium" } },
+
+    { id: "BO1", type: "Boolean", name: "Plate and rib",
+      args: { a: { ref: "EX1" }, b: { ref: "EX2" }, op: "Union" },
+      appearance: { finish: "aluminium" } },
+    { id: "FI1", type: "Fillet", name: "Broken edges",
+      args: { body: { ref: "BO1" }, radius: 2 },
+      appearance: { finish: "aluminium" } },
+
+    { id: "SK3", type: "Sketch", name: "Open chain",
+      args: { plane: { ref: "PL1" }, origin: { ref: "PT1" }, faces: "Make faces",
+        solve: "Solve", passes: 24,
+        drawing: {
+          elements: [
+            { id: "run", type: "line", a: [-80, 90], b: [20, 90] },
+            { id: "turn", type: "arc", c: [20, 50], r: 40, a0: 0, a1: 1.5707963 },
+          ],
+          constraints: [{ type: "horizontal", of: ["run"] }],
+        } } },
+    { id: "EX3", type: "Extrude", name: "Guide fin",
+      args: { profile: { ref: "SK3" }, direction: { ref: "VE1" },
+              distance: 40, cap: "Surface" },
+      appearance: { finish: "glass" } },
+  ],
 };
 
 export const SAMPLES = [
@@ -1259,11 +1023,12 @@ export const SAMPLES = [
            + "the hill. The villa is after Zaha Hadid Architects' Rock, Dubrovnik. "
            + "52 nodes, no script.",
     model: HILLSIDE_TOWN },
-  { key: "sketched-bracket", name: "Sketched bracket",
-    summary: "One sketch on a plane: six elements chained into an outline, three loops "
-           + "inside it that come out as holes, relations holding it square, and a pad. "
-           + "Double-click it to draw on it.",
-    model: SKETCHED_BRACKET },
+  { key: "sketcher", name: "Sketcher",
+    summary: "How a sketch is used, in three of them: an outline held square by "
+           + "relations with holes drawn inside it, the same node on a plane standing "
+           + "on its side, and a chain that does not close, swept as a surface. "
+           + "Double-click any of them to draw on it.",
+    model: SKETCHER_PART },
 ];
 
 /* ------------------------------------------------------------- catalogue */
