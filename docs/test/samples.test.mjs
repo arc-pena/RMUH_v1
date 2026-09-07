@@ -76,7 +76,7 @@ check("three plan points, all flat", (await at(plan.id)).data.count === 3 &&
       (await at(plan.id)).data.preview);
 
 const drape = await mdl.run({ op: "add", type: "Drape", name: "Sites" });
-await mdl.run({ op: "connect", id: drape.id, key: "points", from: plan.id });
+await mdl.run({ op: "connect", id: drape.id, key: "points", from: plan.id, mode: "only" });
 await mdl.run({ op: "connect", id: drape.id, key: "onto", from: hill.id });
 entry = await at(drape.id);
 const landed = entry.data.preview.match(/-?\d+(\.\d+)?(?=\))/g).map(Number);

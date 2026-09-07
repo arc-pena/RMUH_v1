@@ -31,7 +31,7 @@ STAGE_FILE = "build/playcanvas.min.js"
 
 # Concatenated in this order into one module script.
 MODULES = ["sketch.js", "ocaf.js", "wasm-kernel.js", "http-kernel.js", "mdl.js", "graph.js",
-           "showroom.js", "app.js"]
+           "agent.js", "showroom.js", "app.js"]
 
 # An import may wrap across lines; nothing but the statement itself may
 # contain a semicolon before its end.

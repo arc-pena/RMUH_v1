@@ -189,6 +189,9 @@ const GRAPH_CSS = `
 .g-wires path.curve { stroke: var(--g-crv); }
 .g-wires path.mesh { stroke: var(--g-msh); }
 .g-port.hot { background: var(--g-good); transform: scale(1.35); }
+/* Holding shift while a wire is over a port says it will join what is already
+   there rather than replace it, so the port shows a ring rather than a dot. */
+.g-port.adding { box-shadow: 0 0 0 3px var(--g-good); transform: scale(1.5); }
 .g-port:hover { background: var(--g-accent); }
 .g-node .g-head .g-port.out { right: -7px; }
 
@@ -561,7 +564,7 @@ export class GraphEditor {
         '<div class="g-sep"></div>' +
         '<span class="g-sub" data-slot="count"></span>' +
         '<span class="g-spacer"></span>' +
-        '<span class="g-sub" data-slot="hint">drag a port to wire · double-click a node to open it</span>' +
+        '<span class="g-sub" data-slot="hint">drag a port to wire · shift to add a second · double-click a node to open it</span>' +
         '<div class="g-sep"></div>' +
         '<button class="g-btn" data-do="creed">' + gsvg(GRAPH_GLYPH.help) + "</button>" +
       "</div>" +
@@ -1311,13 +1314,20 @@ export class GraphEditor {
       this.linking.to = this.toGraph(e.clientX, e.clientY, true);
       this.drawWires();
       const over = doc.elementFromPoint(e.clientX, e.clientY);
-      for (const port of this.root.querySelectorAll(".g-port.hot")) port.classList.remove("hot");
-      if (over && over.dataset && over.dataset.in) over.classList.add("hot");
+      for (const port of this.root.querySelectorAll(".g-port.hot, .g-port.adding"))
+        port.classList.remove("hot", "adding");
+      if (over && over.dataset && over.dataset.in) {
+        over.classList.add("hot");
+        // Holding shift says this wire joins the ones already there, so the
+        // port says so before the button is let go.
+        if (e.shiftKey) over.classList.add("adding");
+      }
     };
     const up = async e => {
       doc.removeEventListener("pointermove", move);
       doc.removeEventListener("pointerup", up);
-      for (const port of this.root.querySelectorAll(".g-port.hot")) port.classList.remove("hot");
+      for (const port of this.root.querySelectorAll(".g-port.hot, .g-port.adding"))
+        port.classList.remove("hot", "adding");
       const over = doc.elementFromPoint(e.clientX, e.clientY);
       const landed = over && over.dataset && over.dataset.in
         ? { id: over.dataset.in, key: over.dataset.key } : null;
@@ -1331,7 +1341,11 @@ export class GraphEditor {
             ? { op: "disconnect", id: input.id, key: input.key, from: input.had }
             : { op: "disconnect", id: input.id, key: input.key });
         } else if (landed) {
-          await this.mdl.run({ op: "connect", id: landed.id, key: landed.key, from: sourceId });
+          // Standard node grammar: a wire dropped on an input is the input;
+          // shift adds one more. On an input that only ever holds one wire it
+          // makes no difference, which is why shift is safe to hold anywhere.
+          await this.mdl.run({ op: "connect", id: landed.id, key: landed.key,
+                               from: sourceId, mode: e.shiftKey ? undefined : "only" });
         }
       } catch (err) { /* the console has it */ }
     };

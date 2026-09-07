@@ -1,7 +1,7 @@
 import { acceptsFrom } from "./ocaf.js";
 import { SKETCH_CLICKS, nextSketchId, readSketch, sketchDirectionAt, sketchElement,
-         sketchHandleAt, sketchMoveHandle, sketchRelation,
-         sketchTangentArc } from "./sketch.js";
+         sketchHandleAt, sketchMoveHandle, sketchRelation, sketchTangentArc,
+         solveSketch } from "./sketch.js";
 
 // The model description language.
 //
@@ -52,11 +52,29 @@ export async function defaultRefs(ctx, type) {
   const features = (answer.tree || answer).features || [];
   const chosen = ctx.selected ? ctx.selected() : null;
   const selected = features.find(f => f.id === chosen) || null;
+  // Several things shift-clicked are several things meant: that is the answer
+  // to "which sections", and the only reason guessing one was ever wrong.
+  const picked = ((ctx.picked ? ctx.picked() : []) || [])
+    .map(id => features.find(f => f.id === id)).filter(Boolean);
   const refs = {};
   for (const arg of (spec ? spec.args : [])) {
-    // An input that takes several wires is left empty: one section is not a
-    // loft, and guessing the second is worse than guessing nothing.
-    if (arg.kind !== "ref") continue;
+    // An input that gathers bodies is left empty: one section is not a loft, and
+    // guessing the second is worse than guessing nothing. An input that takes
+    // several wires but consumes nothing - the points of a polyline - is wired
+    // like any other, because the first one is the same guess a single-wire
+    // input would already have made, and more are added by hand.
+    if (arg.kind === "refs") {
+      // Several things picked by hand are several things meant: the two
+      // sections of a loft, the three points of a polyline. That is the answer
+      // to "which ones", and the only reason guessing was ever wrong.
+      const taking = picked.filter(f => acceptsFrom(arg.accepts, f)
+        && !(arg.consumes && f.consumedBy));
+      if (taking.length > 1) { refs[arg.key] = taking.map(f => f.id); continue; }
+      // With nothing picked, an input that gathers bodies stays empty - one
+      // section is not a loft. One that only names sources takes the same first
+      // guess a single-wire input would, and more are added by hand.
+      if (arg.consumes) continue;
+    } else if (arg.kind !== "ref") continue;
     const accepts = arg.accepts;
     let target = (arg.consumes && selected && acceptsFrom(accepts, selected) && !selected.consumedBy)
       ? selected : null;
@@ -81,16 +99,18 @@ async function drawingOf(ctx, id) {
 }
 
 export const MDL_OPS = [
-  modelOp("add", ["type", "name?", "refs?"],
+  modelOp("add", ["type", "name?", "id?", "refs?"],
     "Add a feature of the named type. refs wires its reference arguments as it is born; "
-    + "leave it out and each one is wired the way the toolbar would wire it.",
-    { op: "add", type: "Cube", name: "Cube.2", refs: { origin: "PT1", plane: "PL1" } },
+    + "leave it out and each one is wired the way the toolbar would wire it. Give it an "
+    + "id and that is what it is called, so the edits after it can wire to it without "
+    + "having to be told what it was named.",
+    { op: "add", type: "Cube", id: "BASE", name: "Cube.2", refs: { origin: "PT1", plane: "PL1" } },
     async (ctx, edit) => {
       const type = needText(edit, "type");
       const refs = edit.refs && typeof edit.refs === "object"
         ? edit.refs
         : await defaultRefs(ctx, type);
-      const born = await ctx.kernel.addFeature(type, refs);
+      const born = await ctx.kernel.addFeature(type, refs, edit.id ? String(edit.id) : null);
       if (!edit.name) return born;
       return { ...(await ctx.kernel.rename(born.id, String(edit.name))), id: born.id };
     }),
@@ -112,13 +132,16 @@ export const MDL_OPS = [
     (ctx, edit) => ctx.kernel.setParameter(
       needText(edit, "id"), needText(edit, "key"), needNumber(edit, "value"))),
 
-  modelOp("connect", ["id", "key", "from"],
+  modelOp("connect", ["id", "key", "from", "mode?"],
     "Wire one feature into another's input - a reference, a section of a loft, or a "
     + "slider being driven by a number. What an input takes is what a source produces, "
-    + "not which feature type it is.",
+    + "not which feature type it is. An input that holds several wires gains one more; "
+    + 'mode "only" makes this wire the only one on it, which is what dropping a wire '
+    + "on it without holding shift does.",
     { op: "connect", id: "FI1", key: "body", from: "CB1" },
     (ctx, edit) => ctx.kernel.setReference(
-      needText(edit, "id"), needText(edit, "key"), needText(edit, "from"))),
+      needText(edit, "id"), needText(edit, "key"), needText(edit, "from"),
+      false, edit.mode === "only")),
 
   modelOp("disconnect", ["id", "key", "from?"],
     "Pull a wire off an input. An input that takes several wires loses the one named "
@@ -223,6 +246,29 @@ export const MDL_OPS = [
       return ctx.kernel.setSketch(edit.id, null, drawing);
     }),
 
+  modelOp("unrelate", ["id", "at?", "type?", "of?"],
+    "Take a relation off a sketch: at is its place in the constraints list, or name "
+    + "it by type and what it governs. Removing what holds a corner together lets "
+    + "the two ends move apart again.",
+    { op: "unrelate", id: "SK1", at: 0 },
+    async (ctx, edit) => {
+      const drawing = await drawingOf(ctx, needText(edit, "id"));
+      const list = drawing.constraints;
+      let gone = -1;
+      if (Number.isInteger(edit.at)) {
+        if (edit.at < 0 || edit.at >= list.length)
+          throw new Error("that sketch has no relation " + edit.at);
+        gone = edit.at;
+      } else if (edit.type) {
+        const of = Array.isArray(edit.of) ? edit.of : null;
+        gone = list.findIndex(c => c.type === edit.type
+          && (!of || JSON.stringify(c.of) === JSON.stringify(of)));
+        if (gone < 0) throw new Error("that sketch has no such " + edit.type + " relation");
+      } else throw new Error('name the relation with "at", or with "type" and "of"');
+      list.splice(gone, 1);
+      return ctx.kernel.setSketch(edit.id, null, drawing);
+    }),
+
   modelOp("relate", ["id", "type", "of"],
     "Put a relation on a sketch: horizontal, vertical, parallel, perpendicular, tangent "
     + "or coincident. of names the elements it governs, or their ends as \"e1.b\".",
@@ -254,7 +300,13 @@ export const MDL_OPS = [
       const found = sketchHandleAt(drawing, at);
       if (!found) throw new Error("there is no handle '" + at + "' on that sketch");
       sketchMoveHandle(found.el, found.key, to);
-      return ctx.kernel.setSketch(edit.id, null, drawing);
+      // A drag is the one edit where the relations are settled and written down
+      // rather than left to the build: the hand is on this handle, so it stays
+      // exactly where it was put and everything held to it follows all the way.
+      // Anywhere else the drawing keeps what was drawn and the relations are
+      // what they come to - here, dragging a corner has to move the corner.
+      const settled = solveSketch(drawing, 40, [at]);
+      return ctx.kernel.setSketch(edit.id, null, settled.drawing);
     }),
 
   //! Undo and redo are edits like everything else, so they are recorded, they
@@ -362,6 +414,9 @@ export class Mdl {
     this.restoring = false;
     this.ctx.undo = () => this.step(this.past, this.future);
     this.ctx.redo = () => this.step(this.future, this.past);
+    // Told whenever the stacks move, which is not the same as an edit running:
+    // a batch of twenty edits moves them once, at the end.
+    this.onStack = ctx.onStack || (() => {});
   }
 
   //! The document as it stands, layout and all - one entry on the stack.
@@ -387,6 +442,7 @@ export class Mdl {
     try {
       const payload = await this.restore(there.model);
       to.push({ model: here, label: there.label });
+      this.onStack();
       return payload;
     } finally { this.restoring = false; }
   }
@@ -410,6 +466,7 @@ export class Mdl {
       if (this.past.length > UNDO_DEPTH) this.past.shift();
     }
     this.future.length = 0;
+    this.onStack();
   }
 
   watch(fn) { this.watchers.add(fn); return () => this.watchers.delete(fn); }
@@ -453,11 +510,53 @@ export class Mdl {
     }
   }
 
+  //! A list of edits applied in order, carrying on past any that are refused
+  //! and reporting them - what an assistant working the channel needs, where a
+  //! person would have stopped and looked. One step to undo, whatever happened
+  //! inside it, and \p onEach is called as each one lands so it can be watched.
+  async runBatch(edits, onEach, signal = null) {
+    const before = this.restoring ? null : await this.snapshot();
+    const failed = [];
+    let applied = 0;
+    this.restoring = true;
+    try {
+      for (const edit of edits) {
+        // Stop means stop: what has been applied stays, and the rest is dropped
+        // rather than hurried through.
+        if (signal && signal.aborted) break;
+        try {
+          await this.run(edit);
+          applied++;
+          if (onEach) await onEach(null, edit);
+        } catch (err) {
+          const message = err && err.message ? err.message : String(err);
+          failed.push({ edit, message });
+          if (onEach) await onEach(message, edit);
+        }
+      }
+    } finally { this.restoring = !before; }
+    if (before && applied) this.remember(before, { op: "build" });
+    return { applied, failed };
+  }
+
   //! A list of edits, in order, stopping at the first refusal. Returns the last
   //! answer, which is the one carrying the state everything else redraws from.
+  //!
+  //! Applied together, they are one step to undo. That is what a list means:
+  //! drawing a line that also holds a corner together is one action, and so is
+  //! pushing six vertices with one handle - the file still says exactly which
+  //! six moved.
   async runAll(edits, hint) {
+    if (!edits.length) return null;
+    const before = this.restoring ? null : await this.snapshot();
     let payload = null;
-    for (const edit of edits) payload = (await this.run(edit, hint)) || payload;
+    this.restoring = true;
+    try {
+      for (const edit of edits) payload = (await this.run(edit, hint)) || payload;
+    } finally { this.restoring = !before; }
+    // Kept only if something ran: a list that was refused on its first edit
+    // changed nothing.
+    if (before && payload) this.remember(before, { op: edits[0].op });
     return payload;
   }
 

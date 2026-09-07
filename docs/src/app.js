@@ -4,9 +4,11 @@ import { ENVIRONMENTS, FINISHES, Showroom, findFinish } from "./showroom.js";
 import { Mdl } from "./mdl.js";
 import { acceptsFrom, dataLines, SAMPLES } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
+import { Agent, agentTrouble } from "./agent.js";
 import { SKETCH_CLICKS, SKETCH_RELATIONS, SKETCH_TYPES, nextSketchId, readSketch,
          sketchDirectionAt, sketchElement, sketchHandleAt, sketchHandles,
-         sketchMoveHandle, sketchOutline, sketchTangentArc } from "./sketch.js";
+         sketchMoveHandle, sketchOutline, sketchRelationMarks,
+         sketchTangentArc } from "./sketch.js";
 
 "use strict";
 
@@ -36,6 +38,7 @@ const state = {
   tree: null,          // the mirror of the OCAF document
   report: null,        // what the last regeneration did
   selected: null,      // feature id
+  picked: [],          // every feature shift-clicked, in the order picked
   edited: null,        // feature id whose definition the panel shows
   hidden: new Set(),   // per-view hide; the document is not touched
   stream: null,        // what the last triangle fetch cost
@@ -71,6 +74,10 @@ const mdl = new Mdl({
   readLayout: block => (block === undefined ? graph.layoutJson() : graph.readLayout(block)),
   select: id => select(id, false),
   selected: () => state.selected,
+  onStack: () => refreshSteps(),
+  // Everything shift-clicked, so a feature that gathers several - a loft's
+  // sections, a join's parts - is born wired to what was picked for it.
+  picked: () => state.picked,
 });
 
 //! Runs an edit and redraws from the answer. Refusals land in the definition
@@ -163,7 +170,9 @@ function placeCamera() {
     // orbit pans instead, because a drawing seen at an angle cannot be drawn on.
     // In select, a press that lands on an end takes hold of it.
     else if (sketching()) {
-      if (event.button !== 0 || event.shiftKey) mode = "pan";
+      // Inside a sketch, shift means "and this one too", not "pan" - so the
+      // left button always draws or picks and panning is on the other buttons.
+      if (event.button !== 0) mode = "pan";
       else mode = grabSketchHandle(event) ? "handle" : "draw";
     }
     else mode = (event.shiftKey || event.button === 1 || event.button === 2) ? "pan" : "orbit";
@@ -197,8 +206,14 @@ function placeCamera() {
   });
   el.addEventListener("pointerup", event => {
     if (mode === "gizmo") dropGizmo();
-    else if (mode === "handle") dropSketchHandle();
+    else if (mode === "handle") dropSketchHandle(event);
     else if (mode === "draw") { if (moved < 4) sketchClick(event); }
+    // Shift-drag pans, but shift-click still picks - a click is a drag that
+    // went nowhere, and holding shift should not stop you choosing things.
+    // Shift-drag pans, but shift-click still picks - a click is a drag that
+    // went nowhere, and holding shift should not stop you choosing things.
+    else if (mode === "pan" && moved < 4 && event.shiftKey && !handEditing() && !sketching())
+      pick(event);
     else if (mode === "orbit" && moved < 4 && !pickVertex(event)) {
       // While a mesh is being edited by hand, the viewport belongs to its
       // handles: a click that misses one drops the vertex, it does not walk off
@@ -405,12 +420,13 @@ function paintSelection() {
 
 const meshEdit = {
   id: null,        // the feature holding the edits
-  vertex: -1,      // which vertex is selected
+  vertex: -1,      // the vertex the handle is on - the last one picked
+  chosen: [],      // every vertex picked, which the handle moves together
   dots: null,      // the handles
   gizmo: null,     // the three axes on the selected one
   axis: null,      // the one being dragged
   from: null,      // where the drag started, along that axis
-  before: null,    // the offset the vertex had when the drag started
+  before: null,    // index -> the offset it had when the drag started
 };
 
 //! The feature being edited by hand, if the one on the panel holds hand edits.
@@ -447,7 +463,9 @@ function refreshMeshEdit() {
   const stream = streams.get(entry.id);
   const vertices = stream && stream.vertices;
   if (!vertices || !vertices.length) { draw(); return; }
-  if (meshEdit.vertex >= vertices.length / 3) meshEdit.vertex = -1;
+  const count = vertices.length / 3;
+  meshEdit.chosen = meshEdit.chosen.filter(v => v < count);
+  if (meshEdit.vertex >= count) meshEdit.vertex = -1;
 
   const dots = new THREE.Points(
     new THREE.BufferGeometry().setAttribute("position",
@@ -458,10 +476,24 @@ function refreshMeshEdit() {
   dots.userData.handles = true;
   const group = new THREE.Group();
   group.add(dots);
+
+  // The ones picked, marked over the top of the rest, so a run of them along an
+  // edge reads as a run rather than as a guess.
+  if (meshEdit.chosen.length) {
+    const marks = meshEdit.chosen.map(v =>
+      new THREE.Vector3(vertices[v * 3], vertices[v * 3 + 1], vertices[v * 3 + 2]));
+    const on = new THREE.Points(
+      new THREE.BufferGeometry().setFromPoints(marks),
+      new THREE.PointsMaterial({ color: THEME.datum, size: 13, sizeAttenuation: false,
+                                 depthTest: false }));
+    on.renderOrder = 6;
+    group.add(on);
+  }
   world.add(group);
   meshEdit.dots = group;
 
   if (meshEdit.vertex >= 0) {
+    if (!meshEdit.chosen.includes(meshEdit.vertex)) meshEdit.chosen = [meshEdit.vertex];
     const at = new THREE.Vector3(vertices[meshEdit.vertex * 3],
       vertices[meshEdit.vertex * 3 + 1], vertices[meshEdit.vertex * 3 + 2]);
     meshEdit.gizmo = buildGizmo(at);
@@ -494,6 +526,7 @@ const sketcher = {
   tangent: true,     // whether an arc off a chain leaves it smoothly
   hover: null,       // where the cursor is on the plane, for the rubber band
   picked: [],        // what a relation will be put on, in the order picked
+  relation: -1,      // the relation marker under the cursor's last click, if any
   snapped: null,     // the handle the last click landed on, for coincidence
   drag: null,        // the handle under the cursor, mid-drag
   preview: null,     // the drawing as the drag would leave it, not yet written
@@ -585,6 +618,33 @@ function nearestHandle(uv, drawing = sketchDrawing()) {
   return best;
 }
 
+//! Where the relations are drawn. Several holding the same corner would sit on
+//! top of one another, so they fan out from it - each one still beside what it
+//! governs, and each one separately clickable.
+function relationMarks(drawing = sketchDrawing()) {
+  const marks = sketchRelationMarks(drawing);
+  const step = snapReach() * 0.9;
+  const seen = new Map();
+  return marks.map(mark => {
+    const at = mark.p.map(v => Math.round(v * 10) / 10).join(",");
+    const nth = seen.get(at) || 0;
+    seen.set(at, nth + 1);
+    // Up and to the right of what it holds, then along, the way a drawing
+    // board stacks its marks.
+    return { ...mark, at: mark.at,
+             draw: [mark.p[0] + step * (0.9 + nth * 1.0), mark.p[1] + step * 0.9] };
+  });
+}
+
+function nearestRelation(uv, drawing = sketchDrawing()) {
+  let best = -1, reach = snapReach();
+  for (const mark of relationMarks(drawing)) {
+    const away = Math.hypot(mark.draw[0] - uv[0], mark.draw[1] - uv[1]);
+    if (away < reach) { reach = away; best = mark.at; }
+  }
+  return best;
+}
+
 //! The nearest element, by its own outline. What a relation is put on.
 function nearestElement(uv, drawing = sketchDrawing()) {
   let best = null, reach = snapReach() * 1.6;
@@ -607,6 +667,7 @@ function enterSketch(id) {
   sketcher.clicks = [];
   sketcher.from = null;
   sketcher.picked = [];
+  sketcher.relation = -1;
   sketcher.snapped = null;
   sketcher.drag = null;
   sketcher.preview = null;
@@ -676,6 +737,9 @@ function refreshSketch() {
   const smooth = document.getElementById("sketch-tangent");
   smooth.hidden = !(sketcher.from && sketcher.clicks.length === 1);
   smooth.setAttribute("aria-pressed", sketcher.tangent ? "true" : "false");
+  // Only offered when there is one in hand, because it is the one button here
+  // that takes something away.
+  document.getElementById("sketch-unrelate").hidden = sketcher.relation < 0;
 
   const frame = sketchFrame();
   if (!frame) { draw(); return; }
@@ -709,6 +773,32 @@ function refreshSketch() {
                                  depthTest: false }));
     cloud.renderOrder = 6;
     group.add(cloud);
+  }
+
+  // The relations, each beside what it holds. They are not geometry, so they
+  // are drawn rather than built: a small glyph you can click, and take off.
+  for (const mark of relationMarks(drawing)) {
+    const chosen = mark.at === sketcher.relation;
+    const colour = chosen ? THEME.accent : THEME.datum;
+    const at = sketchToWorld(mark.draw, frame);
+    const size = snapReach() * 0.42;
+    const glyph = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(
+        RELATION_GLYPH[mark.type].map(([u, v]) =>
+          sketchToWorld([mark.draw[0] + u * size, mark.draw[1] + v * size], frame))),
+      new THREE.LineBasicMaterial({ color: colour, depthTest: false }));
+    glyph.renderOrder = 8;
+    group.add(glyph);
+    // A thread back to what it holds, so a fanned-out mark still says which
+    // corner it belongs to.
+    for (const on of mark.on) {
+      const tie = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([at, sketchToWorld(on, frame)]),
+        new THREE.LineBasicMaterial({ color: colour, depthTest: false,
+                                      transparent: true, opacity: chosen ? 0.7 : 0.28 }));
+      tie.renderOrder = 8;
+      group.add(tie);
+    }
   }
 
   // What a relation would be put on, drawn over the top of it.
@@ -775,6 +865,13 @@ function tangentHere(drawing = sketchDrawing()) {
 }
 
 function sketchHint() {
+  if (sketcher.tool === "select" && sketcher.picked.length === 1 && sketcher.relation < 0)
+    return "1 picked · shift-click another, then a relation";
+  if (sketcher.relation >= 0) {
+    const drawing = sketchDrawing();
+    const held = drawing.constraints[sketcher.relation];
+    return (held ? held.type : "relation") + " · Delete to take it off";
+  }
   if (sketcher.tool === "select") {
     if (sketcher.picked.length)
       return sketcher.picked.length + " picked · apply a relation, or Esc";
@@ -803,15 +900,22 @@ function sketchClick(event) {
   const drawing = sketchDrawing();
 
   if (sketcher.tool === "select") {
+    // A relation's own mark is the first thing under the cursor: it is drawn
+    // over the drawing, and clicking one is how it is taken off again.
+    const relation = nearestRelation(uv, drawing);
+    if (relation >= 0) {
+      sketcher.relation = sketcher.relation === relation ? -1 : relation;
+      sketcher.picked = [];
+      refreshSketch();
+      return;
+    }
+    sketcher.relation = -1;
     // Picking is what select is for: ends for a coincidence, whole elements
-    // for everything else. Clicking nothing clears, the way a canvas does.
+    // for everything else. Shift adds to what is picked, here as everywhere
+    // else; clicking nothing clears, the way a canvas does.
     const handle = nearestHandle(uv, drawing);
     const want = handle ? handle.ref : nearestElement(uv, drawing);
-    if (!want) sketcher.picked = [];
-    else if (sketcher.picked.includes(want))
-      sketcher.picked = sketcher.picked.filter(p => p !== want);
-    else sketcher.picked.push(want);
-    refreshSketch();
+    pickInSketch(want, event.shiftKey);
     return;
   }
 
@@ -927,16 +1031,43 @@ function dragSketchHandle(event) {
   refreshSketch();
 }
 
-function dropSketchHandle() {
+function dropSketchHandle(event) {
   const drag = sketcher.drag;
   sketcher.drag = null;
   sketcher.preview = null;
   if (!drag) return;
-  if (!drag.moved) { refreshSketch(); return; }
+  if (!drag.moved) {
+    // Taken hold of and let go without moving: that is a click, and a click on
+    // an end picks it. Two picked ends are what a coincidence is made from.
+    sketcher.relation = -1;
+    pickInSketch(drag.ref, !!(event && event.shiftKey));
+    return;
+  }
   edit({ op: "drag", id: sketcher.id, handle: drag.ref, to: drag.at });
 }
 
+//! One thing picked in the drawing - an end, or a whole element. Shift adds
+//! and takes away; without it a pick is a set of one. Written once because a
+//! click on a handle and a click on an element arrive by different roads.
+function pickInSketch(want, add) {
+  if (!want) { if (!add) sketcher.picked = []; refreshSketch(); return; }
+  if (!add) {
+    sketcher.picked = sketcher.picked.length === 1 && sketcher.picked[0] === want ? [] : [want];
+  } else if (sketcher.picked.includes(want)) {
+    sketcher.picked = sketcher.picked.filter(p => p !== want);
+  } else sketcher.picked.push(want);
+  refreshSketch();
+}
+
 /* -------------------------------------------------------------- relations */
+
+//! Taking a relation off. What it held comes apart again, which is the point.
+function dropRelation() {
+  const at = sketcher.relation;
+  if (at < 0) return;
+  sketcher.relation = -1;
+  edit({ op: "unrelate", id: sketcher.id, at });
+}
 
 const relationReady = key => {
   const spec = SKETCH_RELATIONS.find(r => r.key === key);
@@ -1070,7 +1201,10 @@ function grabGizmo(event) {
   const moves = (entry && entry.lists && entry.lists.moves) || {};
   meshEdit.axis = axis;
   meshEdit.from = alongAxis(raycaster.ray, meshEdit.gizmo.position, axis.dir);
-  meshEdit.before = (moves[meshEdit.vertex] || [0, 0, 0]).slice();
+  // Every vertex picked moves, each from wherever it already was - so pushing a
+  // run of them keeps whatever shape the run had.
+  meshEdit.before = {};
+  for (const at of meshEdit.chosen) meshEdit.before[at] = (moves[at] || [0, 0, 0]).slice();
   return axis;
 }
 
@@ -1087,28 +1221,49 @@ function dragGizmo(event) {
   const factor = scale && Number.isFinite(scale.scale) && Math.abs(scale.scale) > 1e-6
     ? scale.scale : 1;
   const which = { x: 0, y: 1, z: 2 }[axis.key];
-  meshEdit.before[which] += step / factor;
+  for (const at of Object.keys(meshEdit.before)) meshEdit.before[at][which] += step / factor;
   draw();
 }
 
 function dropGizmo() {
   if (!meshEdit.axis) return;
-  // A hand drag is not worth six decimal places; the file stays readable.
-  const offset = meshEdit.before.map(v => Math.round(v * 1000) / 1000);
+  const moves = meshEdit.before;
   meshEdit.axis = null;
-  edit({ op: "vertex", id: meshEdit.id, index: meshEdit.vertex,
-         x: offset[0], y: offset[1], z: offset[2] });
+  // One line of the language per vertex, run in order: a drag of six vertices
+  // is six edits and one step to undo, and the file says exactly what moved.
+  const edits = Object.keys(moves).map(at => {
+    // A hand drag is not worth six decimal places; the file stays readable.
+    const offset = moves[at].map(v => Math.round(v * 1000) / 1000);
+    return { op: "vertex", id: meshEdit.id, index: Number(at),
+             x: offset[0], y: offset[1], z: offset[2] };
+  });
+  if (edits.length) mdl.runAll(edits).catch(err => showError(err.message));
 }
 
 //! A handle under the pointer selects that vertex. The threshold is in pixels,
 //! so a vertex is as easy to hit far away as up close.
+//! Shift adds to what is picked and takes it away again; a plain click starts
+//! over. The handle goes on the last one picked and moves all of them, which is
+//! how every modeller does it and what makes pushing a whole edge possible.
 function pickVertex(event) {
   if (!meshEdit.dots) return false;
   const cast = rayFrom(event);
   cast.params.Points.threshold = view.distance * 0.012;
   const hits = cast.intersectObject(meshEdit.dots.children[0], false);
   if (!hits.length) return false;
-  meshEdit.vertex = hits[0].index;
+  const at = hits[0].index;
+  if (event.shiftKey) {
+    if (meshEdit.chosen.includes(at)) {
+      meshEdit.chosen = meshEdit.chosen.filter(v => v !== at);
+      meshEdit.vertex = meshEdit.chosen.length ? meshEdit.chosen[meshEdit.chosen.length - 1] : -1;
+    } else {
+      meshEdit.chosen.push(at);
+      meshEdit.vertex = at;
+    }
+  } else {
+    meshEdit.chosen = [at];
+    meshEdit.vertex = at;
+  }
   refreshMeshEdit();
   buildPanel();
   return true;
@@ -1120,7 +1275,8 @@ function pick(event) {
     ((event.clientX - rect.left) / rect.width) * 2 - 1,
     -((event.clientY - rect.top) / rect.height) * 2 + 1), camera);
   const hits = raycaster.intersectObjects(pickable.filter(m => m.parent && m.parent.visible), false);
-  select(hits.length ? hits[0].object.userData.id : null, false);
+  const id = hits.length ? hits[0].object.userData.id : null;
+  if (event.shiftKey && id) pickAlso(id); else select(id, false);
 }
 
 function fitView() {
@@ -1145,6 +1301,24 @@ function fitView() {
 
 //! The sketcher's own rail. Seven shapes and six relations, drawn the way a
 //! drawing board draws them.
+//! Each relation as a run of line segments in its own little square, drawn on
+//! the sketch plane beside what it holds. Pairs of points: every two make one
+//! segment, which is what THREE.LineSegments wants.
+const RELATION_GLYPH = {
+  // two rings, meeting
+  coincident: [[-0.9, 0], [-0.1, 0], [0.1, 0], [0.9, 0],
+               [-0.35, -0.55], [0.35, -0.55], [-0.35, 0.55], [0.35, 0.55],
+               [-0.35, -0.55], [-0.35, 0.55], [0.35, -0.55], [0.35, 0.55]],
+  horizontal: [[-0.9, 0.35], [0.9, 0.35], [-0.9, -0.35], [0.9, -0.35]],
+  vertical:   [[-0.35, -0.9], [-0.35, 0.9], [0.35, -0.9], [0.35, 0.9]],
+  parallel:   [[-0.6, -0.9], [-0.1, 0.9], [0.2, -0.9], [0.7, 0.9]],
+  perpendicular: [[-0.8, -0.8], [0.8, -0.8], [-0.2, -0.8], [-0.2, 0.9],
+                  [-0.2, -0.4], [0.2, -0.4], [0.2, -0.4], [0.2, -0.8]],
+  tangent:    [[-0.9, -0.7], [0.9, -0.7],
+               [-0.5, -0.7], [-0.5, -0.3], [-0.5, -0.3], [0, 0.3],
+               [0, 0.3], [0.5, -0.3], [0.5, -0.3], [0.5, -0.7]],
+};
+
 const SKETCH_ICONS = {
   // The cursor itself: what the sketcher hands you before you ask for a tool.
   select: '<path d="M3.4 2.2l9.4 5.1-4 1-1.6 4.2z" fill="currentColor" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>',
@@ -1328,14 +1502,16 @@ const svg = body => '<svg viewBox="0 0 16 16" aria-hidden="true">' + body + "</s
     tip.textContent = target.dataset.label || "";
     tip.classList.toggle("dim", !!target.disabled);
     tip.classList.add("on");
-    // Beside the button, or on the other side of it when there is no room.
     const width = tip.offsetWidth, height = tip.offsetHeight;
-    let x = box.right + 9;
-    if (x + width > innerWidth - 6) x = Math.max(6, box.left - 9 - width);
-    const y = Math.max(6, Math.min(innerHeight - height - 6,
-                                   box.top + box.height / 2 - height / 2));
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
+    // A button in a row along the top is labelled below it; one in a rail down
+    // the side is labelled beside it. Either way it must not cover its
+    // neighbours, which is the whole reason it is not a browser tooltip.
+    const below = box.top < 80;
+    let x = below ? box.left + box.width / 2 - width / 2 : box.right + 9;
+    let y = below ? box.bottom + 8 : box.top + box.height / 2 - height / 2;
+    if (!below && x + width > innerWidth - 6) x = box.left - 9 - width;
+    tip.style.left = Math.max(6, Math.min(innerWidth - width - 6, x)) + "px";
+    tip.style.top = Math.max(6, Math.min(innerHeight - height - 6, y)) + "px";
   };
 
   const hide = () => { shown = null; tip.classList.remove("on"); };
@@ -1384,6 +1560,7 @@ function buildToolbar() {
     (targets[spec.category] || targets.operation || rail).appendChild(button);
   }
   document.getElementById("btn-def-close").innerHTML = svg(ICONS.close);
+  document.getElementById("ai-close").innerHTML = svg(ICONS.close);
   document.getElementById("btn-undo").innerHTML = svg(ICONS.undo);
   document.getElementById("btn-redo").innerHTML = svg(ICONS.redo);
   refreshSteps();
@@ -1459,7 +1636,9 @@ function treeNode(entry) {
 
   const li = document.createElement("li");
   li.className = "node pick " + entry.category + (consumed ? " consumed" : "")
-    + (entry.error ? " failed" : "") + (entry.id === state.selected ? " selected" : "");
+    + (entry.error ? " failed" : "")
+    + (entry.id === state.selected ? " selected" : "")
+    + (state.picked.length > 1 && state.picked.includes(entry.id) ? " alongside" : "");
   li.tabIndex = 0;
   li.title = consumed
     ? entry.name + " is consumed by " + (feature(entry.consumedBy) || {}).name
@@ -1506,7 +1685,9 @@ function treeNode(entry) {
     li.appendChild(eye);
   }
 
-  li.addEventListener("click", () => select(entry.id, false));
+  li.addEventListener("click", event => {
+    if (event.shiftKey) pickAlso(entry.id); else select(entry.id, false);
+  });
   li.addEventListener("dblclick", () => {
     // A sketch opens into the sketcher, the way a CAD modeller does. Everything
     // else opens its definition.
@@ -2203,7 +2384,23 @@ async function deleteFeature(id) {
   }
 }
 
-function select(id, openDefinition) {
+//! Shift adds to what is picked and takes it away again; a plain click starts
+//! over. The set is what a Loft's sections and a Join's parts are wired from,
+//! and what Delete removes - so picking several is worth doing.
+function pickAlso(id) {
+  if (!id) { state.picked = []; select(null, false); return; }
+  state.picked = state.picked.includes(id)
+    ? state.picked.filter(p => p !== id)
+    : [...state.picked, id];
+  // The panel follows the last one picked, and the set is kept: this is the
+  // one path that adds rather than replaces.
+  select(state.picked.length ? state.picked[state.picked.length - 1] : null, false, true);
+}
+
+//! \p keep leaves the picked set alone; without it a selection is a set of
+//! one, so there is only ever one answer to "what is selected".
+function select(id, openDefinition, keep = false) {
+  if (!keep) state.picked = id ? [id] : [];
   state.selected = id;
   if (openDefinition || (id && state.edited && id !== state.edited)) state.edited = id;
   const entry = feature(id);
@@ -2443,9 +2640,118 @@ document.getElementById("btn-redo").addEventListener("click", () => step(false))
 mdl.watch(() => refreshSteps());
 
 document.getElementById("sketch-done").addEventListener("click", leaveSketch);
+document.getElementById("sketch-unrelate").addEventListener("click", dropRelation);
 document.getElementById("sketch-tangent").addEventListener("click", () => {
   sketcher.tangent = !sketcher.tangent;
   refreshSketch();
+});
+
+/* ----------------------------------------------------------------------- AI
+
+   Claude, working the one channel everything else works. It is handed the op
+   table, the catalogue and the document, and what it writes goes through
+   mdl.run exactly as a dragged wire does - so there is nothing it can do that
+   could not have been typed into the console, and watching it work is watching
+   nodes appear and wire themselves up.
+   ========================================================================== */
+
+const agent = new Agent({
+  mdl,
+  // The model file as the kernel writes it - the same text the Model dialog
+  // shows and the same one a sample loads. There is only one of it.
+  read: async () => ({
+    schema: state.schema,
+    model: await kernel.model(),
+    errors: (state.tree ? state.tree.features : [])
+      .filter(f => f.error).map(f => f.id + ' "' + f.name + '": ' + f.error),
+  }),
+  onBusy: busy => {
+    aiBar.classList.toggle("working", busy);
+    document.getElementById("ai-stop").hidden = !busy;
+    document.getElementById("ai-send").disabled = busy;
+    document.getElementById("ai-state").textContent = busy ? "building" : "ask";
+  },
+});
+
+const aiBar = document.getElementById("ai-bar");
+const aiLog = document.getElementById("ai-log");
+
+function aiSay(className, text) {
+  const line = document.createElement("div");
+  line.className = className;
+  line.textContent = text;
+  aiLog.appendChild(line);
+  aiLog.scrollTop = aiLog.scrollHeight;
+  return line;
+}
+
+//! What Claude is doing, as it does it. An edit that lands is one line of the
+//! language, shown as the language - because that is exactly what was sent.
+function aiEvent(event, running) {
+  if (event.kind === "text") {
+    if (!running.said) running.said = aiSay("said", "");
+    running.said.textContent = event.text;
+    aiLog.scrollTop = aiLog.scrollHeight;
+    return;
+  }
+  if (event.kind === "edit" || event.kind === "refused") {
+    const line = document.createElement("div");
+    line.className = event.kind === "refused" ? "bad" : "did";
+    if (event.kind === "refused") {
+      line.textContent = "refused: " + JSON.stringify(event.edit) + " — " + event.message;
+    } else {
+      const what = document.createElement("b");
+      what.textContent = event.edit.op;
+      const rest = document.createElement("span");
+      const { op, ...fields } = event.edit;
+      rest.textContent = JSON.stringify(fields);
+      line.append(what, rest);
+    }
+    aiLog.appendChild(line);
+    aiLog.scrollTop = aiLog.scrollHeight;
+    // The next thing it says starts a new line rather than growing this one.
+    running.said = null;
+  }
+}
+
+async function aiAsk() {
+  const field = document.getElementById("ai-prompt");
+  const prompt = field.value.trim();
+  if (!prompt || agent.busy) return;
+  field.value = "";
+  aiSay("asked", prompt);
+  const running = { said: null };
+  try {
+    await agent.ask(prompt, event => aiEvent(event, running));
+  } catch (err) {
+    aiSay("bad", agentTrouble(err));
+  }
+}
+
+function openAI(open) {
+  aiBar.hidden = !open;
+  document.getElementById("btn-ai").setAttribute("aria-pressed", open ? "true" : "false");
+  if (!open) { agent.stop(); return; }
+  document.getElementById("ai-prompt").focus();
+  // Said once, on the first opening, so nobody types into a bar that cannot ask.
+  if (!aiBar.dataset.checked) {
+    aiBar.dataset.checked = "1";
+    agent.ready().then(sample => {
+      if (!sample) aiSay("bad", agentTrouble({ message: "no-sample" }));
+    });
+  }
+}
+
+document.getElementById("btn-ai").addEventListener("click", () => openAI(aiBar.hidden));
+document.getElementById("ai-send").addEventListener("click", aiAsk);
+document.getElementById("ai-stop").addEventListener("click", () => {
+  agent.stop();
+  aiSay("bad", "Stopped. Ask for something else, or say what to change.");
+});
+document.getElementById("ai-close").addEventListener("click", () => openAI(false));
+document.getElementById("ai-prompt").addEventListener("keydown", event => {
+  if (event.key === "Enter") { event.preventDefault(); aiAsk(); }
+  event.stopPropagation();
 });
 
 /* ----------------------------------------------------------------- showroom
@@ -2769,14 +3075,23 @@ addEventListener("keydown", event => {
   if (event.key === "f" || event.key === "F") { if (sketching()) lookAtSketch(); else fitView(); }
   if (event.key === "t" || event.key === "T") toggleTree();
   if (event.key === "g" || event.key === "G") graph.toggle();
+  if (event.key === "a" || event.key === "A") openAI(aiBar.hidden);
+  if (sketching() && sketcher.relation >= 0 &&
+      (event.key === "Delete" || event.key === "Backspace")) {
+    event.preventDefault();
+    dropRelation();
+    return;
+  }
   if (event.key === "Enter" && sketching()) { endSketchRun(); return; }
   if (event.key === "Escape") {
     sampleMenu.hidden = true;
+    if (!aiBar.hidden) { openAI(false); return; }
     if (staging) return leaveShowroom();
     // Out of the sketcher a step at a time: the half-drawn element, then what
     // is picked, then the sketch itself.
     if (sketching()) {
       if (endSketchRun()) return;
+      if (sketcher.relation >= 0) { sketcher.relation = -1; refreshSketch(); return; }
       if (sketcher.picked.length) { sketcher.picked = []; refreshSketch(); return; }
       if (sketcher.tool !== "select") { pickSketchTool("select"); return; }
       leaveSketch();

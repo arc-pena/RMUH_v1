@@ -147,6 +147,7 @@ and the channel they all go through; nothing else may touch the kernel.
 | `sketch` | a whole drawing at once |
 | `draw` `erase` `relate` `drag` | one element of a drawing, one relation over it, or one end moved — what a click and a drag in the sketcher write |
 | `undo` `redo` | walk the stack of documents. Edits like any other, so they are recorded and can be sent from outside |
+| `unrelate` | take a relation off a sketch — what deleting its mark in the sketcher writes |
 | `appearance` | a finish; redraws, does not rebuild |
 | `model` | the whole document at once — every one above is a small edit of the text this one writes wholesale |
 | `move` `select` | view state, through the same channel, recorded and marked as not rebuilding anything |
@@ -155,6 +156,43 @@ and the channel they all go through; nothing else may touch the kernel.
 selected body for an operation, the first datum of the right type for the rest
 — so `{"op":"add","type":"Fillet"}` typed into a console does what the toolbar
 does.
+
+## Asking Claude to build it
+
+The **AI** button opens a bar along the bottom. Type what you want and watch it
+appear: nodes arrive one at a time, wires land, numbers get set. Stop halts it
+mid-sentence and leaves what has been built; one undo takes back everything a
+request did.
+
+**There was almost nothing to build.** Everything that edits this model already
+does it by writing one line of the model description language and sending it
+down one channel. So the assistant is handed the same three things a person
+would be given — the op table, the catalogue, and the document — and its edits
+go through `mdl.run` exactly as a dragged wire does. There is no second path
+into the model, no privileged call, nothing it can do that could not have been
+typed into the node editor's console. That is also why watching it work is
+watching the graph build itself rather than a part arriving from nowhere.
+
+It gets two tools, and both are that same channel:
+
+| | |
+|---|---|
+| `run_edits` | a list of edits, applied in order, live. Carries on past a refusal and reports the message, so a mistake is something to correct rather than a dead end. One tool call is **one** step to undo. |
+| `look` | the model file as it stands, and any errors on it — for checking what a stage actually produced before building on it. |
+
+`add` gained an optional `id`, so it can name what it creates and wire to it in
+the same breath rather than waiting to be told what it was called:
+
+```json
+{"op": "add", "type": "Cube", "id": "BASE", "name": "Base block"}
+{"op": "set", "id": "BASE", "key": "dx", "value": 240}
+```
+
+The asking is the page's own `sample` capability: in the published Artifact the
+**viewer's** Claude answers, on their account, and the page never sees a key.
+Opened from a file or served by a local kernel there is nobody to ask, and the
+bar says so rather than pretending — the one thing in this program that does
+not work everywhere the rest of it does.
 
 ## Undo, and what it is a stack of
 
@@ -387,6 +425,41 @@ of it moves.
 charset="utf-8">`. The Artifact wrapper supplies one, so the middle dots and
 en-dashes read correctly there; the same file opened from disk or served by
 `ocafcad serve --ui` had none and showed them as mojibake.
+
+### Shift means "and this one too", everywhere
+
+One modifier, one meaning, in all four places it can be held:
+
+| | |
+|---|---|
+| the tree, and the 3D view | shift-click builds a set of features. Add a `Loft` or a `Join` with several picked and it is born wired to all of them, in the order they were picked — which is the answer to "which sections", and the only reason guessing one was ever wrong |
+| the node editor | a wire dropped on an input **is** the input; shift-drop adds one more. The port shows a ring rather than a dot while shift is down. `Polyline`, `Interpolate`, `Drape` and `PlaceAt` now take as many point sources as you give them |
+| mesh editing | shift-click picks several vertices; the handle goes on the last one and moves all of them, each from where it already was, so a pushed run keeps its shape. One drag is one step to undo, and the file still says exactly which vertices moved |
+| the sketcher | shift-click picks several elements or ends, and a relation applies to what is picked |
+
+### Relations are things you can see, and take off
+
+Every relation is drawn beside what it holds — a small glyph, with a thread
+back to the corner or the line it governs, fanned out when several hold the
+same point. Click one and it is in hand; **Delete**, or the button that
+appears, takes it off, and what it was holding comes apart again.
+
+### Dragging a held corner moves the corner
+
+This is the one place the solver is run with an anchor. A coincidence normally
+meets in the middle, which is right when both ends are free and quite wrong
+when one of them is under the cursor: dragging a corner would move it half as
+far as the pointer and leave the drawing behind. So `drag` solves with the
+dragged handle **pinned** — everything held to it follows all the way — and
+writes the result back. It is the only edit that writes a solved drawing;
+everywhere else the drawing keeps what was drawn and the relations are what
+they come to.
+
+```
+ok   the dragged end went exactly where it was put  — [140,-30]
+ok   and the other end came with it, all the way  — [140,-30]
+ok   while the far ends stayed put
+```
 
 ### Select first, then draw
 

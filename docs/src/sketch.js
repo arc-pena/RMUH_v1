@@ -309,6 +309,41 @@ export function sketchLoops(drawing, tolerance = 0.05) {
   return { loops, open };
 }
 
+//! Where each relation should be drawn, and what it is holding. A relation is
+//! not geometry, so it has no position of its own - it is put beside the thing
+//! it governs, which is the only place it means anything.
+//!
+//! Returns one entry per constraint, in the order they are stored, so the
+//! index is what an edit uses to name one.
+export function sketchRelationMarks(drawing) {
+  const map = byId(drawing);
+  const spot = name => {
+    const [id, key] = String(name || "").split(".");
+    const el = map.get(id);
+    if (!el) return null;
+    if (key) {
+      const found = sketchHandles(el).find(([k]) => k === key);
+      return found ? found[1] : null;
+    }
+    // A whole element is marked halfway along its own outline - the midpoint of
+    // a line, the far side of a circle - not at one of its ends, where it would
+    // sit on top of whatever holds that end.
+    const line = sketchOutline(el, 24);
+    if (!line.length) return null;
+    if (line.length === 1) return line[0];
+    const half = (line.length - 1) / 2;
+    const lo = line[Math.floor(half)], hi = line[Math.ceil(half)];
+    return [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2];
+  };
+  return (drawing.constraints || []).map((c, at) => {
+    const points = (c.of || []).map(spot).filter(Boolean);
+    if (!points.length) return null;
+    const p = points.reduce((sum, q) => [sum[0] + q[0], sum[1] + q[1]], [0, 0])
+                    .map(v => v / points.length);
+    return { at, type: c.type, of: c.of, p, on: points };
+  }).filter(Boolean);
+}
+
 //! Which way an element is heading when it arrives at one of its ends. What a
 //! CAD sketcher continues when you carry on drawing: the next arc leaves the
 //! corner going the same way the last line came in, so the two meet smoothly
@@ -467,34 +502,66 @@ export function sketchNesting(drawing, loops, quality = 48) {
    fights itself when a sketch is over-constrained, and says how far off it
    finished rather than pretending.                                          */
 
-export function solveSketch(drawing, passes = 24) {
+//! \p pinned names handles that must not move - the one under the cursor while
+//! it is being dragged. Everything held to a pinned handle follows it all the
+//! way rather than meeting it in the middle, which is the difference between
+//! dragging a corner and pulling a drawing apart.
+export function solveSketch(drawing, passes = 24, pinned = []) {
   const work = JSON.parse(JSON.stringify(drawing || EMPTY_SKETCH));
   const relations = work.constraints || [];
   if (!relations.length) return { drawing: work, passes: 0, residual: 0 };
 
+  const held = new Set(pinned || []);
   const index = byId(work);
   const handle = reference => {
     const [id, key] = String(reference || "").split(".");
     const el = index.get(id);
     if (!el) return null;
     const found = sketchHandles(el).find(([k]) => k === key);
-    return found ? { el, key, p: found[1] } : null;
+    return found ? { el, key, p: found[1], ref: reference, held: held.has(reference) } : null;
   };
-  const moveTo = (h, p) => { sketchMoveHandle(h.el, h.key, p); };
+  const moveTo = (h, p) => { if (!h.held) sketchMoveHandle(h.el, h.key, p); };
 
   let residual = 0, ran = 0;
   for (let pass = 0; pass < Math.max(1, passes); pass++) {
     residual = 0;
     ran = pass + 1;
     for (const relation of relations) {
-      residual += applyRelation(relation, index, handle, moveTo);
+      residual += applyRelation(relation, index, handle, moveTo, held);
     }
     if (residual < 1e-7) break;
   }
   return { drawing: work, passes: ran, residual: Math.sqrt(Math.max(0, residual)) };
 }
 
-function applyRelation(relation, index, handle, moveTo) {
+//! Everything held to this handle by coincidence, however many hops away. A
+//! polyline's corner is two handles; a fan of five lines meeting at a point is
+//! five, and dragging any of them has to take the rest.
+export function coincidentGroup(drawing, ref) {
+  const links = new Map();
+  for (const c of (drawing.constraints || [])) {
+    if (c.type !== "coincident") continue;
+    const [a, b] = c.of || [];
+    if (!a || !b) continue;
+    if (!links.has(a)) links.set(a, new Set());
+    if (!links.has(b)) links.set(b, new Set());
+    links.get(a).add(b);
+    links.get(b).add(a);
+  }
+  const seen = new Set([ref]);
+  const queue = [ref];
+  while (queue.length) {
+    for (const next of links.get(queue.pop()) || []) {
+      if (seen.has(next)) continue;
+      seen.add(next);
+      queue.push(next);
+    }
+  }
+  seen.delete(ref);
+  return [...seen];
+}
+
+function applyRelation(relation, index, handle, moveTo, held = new Set()) {
   // A relation names what it governs in one place, however many things that
   // is: {"type":"parallel","of":["e1","e2"]}. SKETCH_RELATIONS says how many
   // each takes, so the panel that offers them and the solver that runs them
@@ -509,7 +576,9 @@ function applyRelation(relation, index, handle, moveTo) {
       const a = handle(of[0]), b = handle(of[1]);
       if (!a || !b) return 0;
       const gap = sub(b.p, a.p);
-      const target = mid(a.p, b.p);
+      // Meeting in the middle is only fair when both are free. One of them held
+      // is the whole point of a drag: the other goes to it.
+      const target = a.held ? a.p : b.held ? b.p : mid(a.p, b.p);
       moveTo(a, target);
       moveTo(b, target);
       return dot(gap, gap);
@@ -519,7 +588,12 @@ function applyRelation(relation, index, handle, moveTo) {
       const el = line(of[0]);
       if (!el) return 0;
       const axis = relation.type === "horizontal" ? 1 : 0;
-      const centre = (el.a[axis] + el.b[axis]) / 2;
+      // An end being dragged is the one that says where the line lies; only
+      // with both free does it level about its own middle.
+      const holdA = held.has(of[0] + ".a"), holdB = held.has(of[0] + ".b");
+      const centre = holdA && !holdB ? el.a[axis]
+                   : holdB && !holdA ? el.b[axis]
+                   : (el.a[axis] + el.b[axis]) / 2;
       const off = el.a[axis] - el.b[axis];
       el.a = el.a.slice(); el.b = el.b.slice();
       el.a[axis] = centre; el.b[axis] = centre;

@@ -1581,14 +1581,16 @@ export const CATALOGUE = [
     args: [ref("plane", "Plane", ["plane"]), real("radius", "Radius", 60, 0.5, 4000, 0.5)] },
   { type: "Polyline", guid: "9a1b2c30-0051-4c00-9e00-caf000000051", category: "curve",
     produces: "curve",
-    summary: "Straight segments through a list of points.",
-    args: [ref("points", "Points", ["point"]),
+    summary: "Straight segments through a list of points. Takes as many sources as "
+           + "you wire into it, in the order they were wired - shift-drag to add "
+           + "another rather than replace what is there.",
+    args: [refs("points", "Points", ["point"]),
            choice("closed", "Ends", ["Open", "Closed"], 0)] },
   { type: "Interpolate", guid: "9a1b2c30-0052-4c00-9e00-caf000000052", category: "curve",
     produces: "curve",
     summary: "One smooth B-spline through a list of points - the control curve a "
            + "lofted surface is laid on.",
-    args: [ref("points", "Points", ["point"]),
+    args: [refs("points", "Points", ["point"]),
            choice("closed", "Ends", ["Open", "Closed"], 0),
            real("degree", "Degree", 3, 1, 8, 1, "")] },
 
@@ -1617,7 +1619,7 @@ export const CATALOGUE = [
     produces: "point",
     summary: "Drops points straight down onto a surface, a solid or a mesh, and hands "
            + "back where they landed. The move that turns a flat plan into a site plan.",
-    args: [ref("points", "Points", ["point"]),
+    args: [refs("points", "Points", ["point"]),
            ref("onto", "Onto", ["solid", "plane", "mesh"]),
            real("lift", "Lift", 0, -2000, 2000, 1),
            choice("miss", "Points that miss", ["Drop them", "Leave them"], 0)] },
@@ -1794,7 +1796,7 @@ export const CATALOGUE = [
            + "another. The shape is built once and the copies are the same shape at a "
            + "different axis system, which is why a hundred cost about what one does.",
     args: [ref("shape", "Shape", ["solid", "curve"], true),
-           ref("points", "Points", ["point"]),
+           refs("points", "Points", ["point"]),
            ref("angles", "Turn each", ["number"]),
            real("turn", "Turn all", 0, -360, 360, 1, "°"),
            real("lift", "Lift", 0, -4000, 4000, 1)] },
@@ -2412,7 +2414,9 @@ export class Doc {
   //! Wiring. An input says what a source may *produce*, not which feature types
   //! it will take, so a component added later is accepted everywhere its output
   //! makes sense. A slider takes a wire too: any input at all accepts numbers.
-  setReference(f, key, target) {
+  //! \p only makes this the input's single wire rather than one more on it -
+  //! what dropping a wire on a multi-wire input without holding shift means.
+  setReference(f, key, target, only = false) {
     const spec = F.spec(f);
     const arg = spec && spec.args.find(a => a.key === key);
     if (!arg || arg.kind === "code" || arg.kind === "sketch")
@@ -2427,7 +2431,7 @@ export class Doc {
         throw new Error(F.name(target) + " already depends on " + F.name(f));
     }
     if (arg.kind === "refs") {
-      const already = F.references(f, key);
+      const already = only ? [] : F.references(f, key);
       F.setReferences(f, key, target ? [...already, target] : already);
     } else {
       F.setReference(f, key, target);

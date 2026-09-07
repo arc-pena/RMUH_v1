@@ -35,13 +35,13 @@ export async function createHttpKernel(base) {
       return this.post("/api/model", typeof model === "string" ? model : JSON.stringify(model));
     },
     setParameter(id, key, value) { return this.post("/api/param", { id, key, value }); },
-    setReference(id, key, target, remove = false) {
-      return this.post("/api/reference", { id, key, target, remove });
+    setReference(id, key, target, remove = false, only = false) {
+      return this.post("/api/reference", { id, key, target, remove, only });
     },
     setCode(id, key, text) { return this.post("/api/code", { id, key, text }); },
     setSketch(id, key, drawing) { return this.post("/api/sketch", { id, key, drawing }); },
     moveVertex(id, index, offset) { return this.post("/api/vertex", { id, index, offset }); },
-    addFeature(type, refs) { return this.post("/api/feature", { type, refs }); },
+    addFeature(type, refs, id) { return this.post("/api/feature", { type, refs, id }); },
     deleteFeature(id) { return this.post("/api/delete", { id }); },
     rename(id, name) { return this.post("/api/rename", { id, name }); },
     mesh(ids) {

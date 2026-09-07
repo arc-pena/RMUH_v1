@@ -790,6 +790,11 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     return verticesOf(F.shape(source));
   }
 
+  //! Every point arriving on an input, from every wire on it, in the order they
+  //! were wired. One source or five reads the same to whatever consumes it,
+  //! which is what lets three separate points make a polyline.
+  const pointsOf = (f, key) => F.references(f, key).flatMap(pointsFrom);
+
   const compoundOf = shapes => {
     const builder = new oc.TopoDS_Builder();
     const compound = new oc.TopoDS_Compound();
@@ -1010,10 +1015,10 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   }
 
   builders.Polyline = {
-    precondition: f => pointsFrom(F.reference(f, "points")).length < 2
+    precondition: f => pointsOf(f, "points").length < 2
       ? "a polyline needs at least two points" : null,
     build: f => {
-      const list = pointsFrom(F.reference(f, "points"));
+      const list = pointsOf(f, "points");
       return { shape: shapeApi().polyline(list, { closed: Feature_choice(f, "closed") === 1 }),
                data: points(list) };
     },
@@ -1250,10 +1255,10 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   };
 
   builders.Interpolate = {
-    precondition: f => pointsFrom(F.reference(f, "points")).length < 3
+    precondition: f => pointsOf(f, "points").length < 3
       ? "an interpolated curve needs at least three points" : null,
     build: f => {
-      const list = pointsFrom(F.reference(f, "points"));
+      const list = pointsOf(f, "points");
       const closed = Feature_choice(f, "closed") === 1;
       // Degree is what it means here: 1 is the polyline itself, higher degrees
       // ask for a finer sampling of the same spline.
@@ -2330,7 +2335,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
 
   builders.Drape = {
     precondition: f => {
-      if (!F.reference(f, "points")) return "no points to drape";
+      if (!F.references(f, "points").length) return "no points to drape";
       if (!F.reference(f, "onto")) return "nothing to drape them onto";
       return null;
     },
@@ -2338,7 +2343,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     //! overhang lands on the top of it, the way a building sits on a hill
     //! rather than inside it.
     build: f => {
-      const plan = pointsFrom(F.reference(f, "points"));
+      const plan = pointsOf(f, "points");
       if (!plan.length) throw new Error("that input carries no points");
       const triangles = targetTriangles(F.reference(f, "onto"), "target");
       if (!triangles.length) throw new Error("the target has no surface to land on");
@@ -2377,9 +2382,8 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       const shape = F.reference(f, "shape");
       if (!shape) return "no shape to place";
       if (!F.shape(shape)) return F.name(shape) + " has not been built";
-      const at = F.reference(f, "points");
-      if (!at) return "no points to place it at";
-      if (!pointsFrom(at).length) return F.name(at) + " carries no points";
+      if (!F.references(f, "points").length) return "no points to place it at";
+      if (!pointsOf(f, "points").length) return "nothing wired into Points carries any";
       return null;
     },
     //! One shape, many locations. Each copy is the same TopoDS_Shape with a
@@ -2387,7 +2391,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     //! so the cost of the hundredth copy is a matrix, not a rebuild.
     build: f => {
       const shape = F.shape(F.reference(f, "shape"));
-      const at = pointsFrom(F.reference(f, "points"));
+      const at = pointsOf(f, "points");
       const angles = F.reference(f, "angles");
       const turns = angles ? (F.data(angles) || { values: [] }).values : [];
       const base = F.real(f, "turn", 0);
@@ -2693,24 +2697,28 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
 
     //! Wiring. An input that takes one wire is set; an input that takes several
     //! gets another. Passing no target clears - all of them, or the one named.
-    async setReference(id, key, target, remove = false) {
+    async setReference(id, key, target, remove = false, only = false) {
       const f = doc.find(id);
       if (!f) throw new Error("no feature '" + id + "'");
       if (remove || !target) doc.clearReference(f, key, target ? doc.find(target) : null);
-      else doc.setReference(f, key, doc.find(target));
+      else doc.setReference(f, key, doc.find(target), only);
       return state(doc.recompute(false));
     },
 
-    async addFeature(type, refs = {}) {
+    async addFeature(type, refs = {}, id = null) {
       const spec = typeSpec(type);
       if (!spec) throw new Error('unknown feature type "' + type + '"');
-      const f = doc.addFeature(type);
+      const f = doc.addFeature(type, id);
       try {
         for (const [key, id] of Object.entries(refs)) {
           if (!id) continue;
-          const target = doc.find(id);
-          if (!target) throw new Error("cannot point " + key + " at unknown feature '" + id + "'");
-          doc.setReference(f, key, target);
+          // An input that gathers takes a list: several things picked by hand
+          // are wired in the order they were picked.
+          for (const one of Array.isArray(id) ? id : [id]) {
+            const target = doc.find(one);
+            if (!target) throw new Error("cannot point " + key + " at unknown feature '" + one + "'");
+            doc.setReference(f, key, target);
+          }
         }
       } catch (err) {
         doc.deleteFeature(f);
