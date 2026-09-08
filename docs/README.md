@@ -194,6 +194,56 @@ Opened from a file or served by a local kernel there is nobody to ask, and the
 bar says so rather than pretending — the one thing in this program that does
 not work everywhere the rest of it does.
 
+## Four things about the viewport
+
+All four came out of trying to build a shopping centre — 32 metres of
+millimetres — and finding that it could not be done.
+
+**A slider's range is how far the handle travels, not a cap on the value.** A
+cube's runs to 4000 mm and a point's to ±2000, which is right for dragging and
+wrong for a building: setting `dx` to 9000 silently stored 4000, and the only
+sign was a model that came out the wrong size. A *wired* number was never
+clamped, so it was inconsistent as well. Values now go in as given — the
+drivers guard themselves, which is what preconditions are for — and the slider
+track stretches to hold whatever it is showing, rounded to a number a person
+would have picked. A choice is still bounded, because there really is no fifth
+option out of four.
+
+**Fit frames what you can see, not the canvas.** The panels float *over* the
+model rather than beside it, so fitting to the whole canvas puts a third of the
+part under the tree and the definition panel — which is what "fit doesn't fit"
+looked like. It now measures the clear rectangle between whatever panels are
+open and frames into that, aiming off-centre by however far off-centre that
+rectangle is. Measured on a 32 × 22 × 22 m section: entirely inside the free
+rectangle, filling 78% of it.
+
+The distance itself is now arithmetic rather than a fudge. A bounding *sphere*
+(so the framing does not change as the model is turned) and the narrower of the
+two half-angles the free rectangle subtends:
+
+```
+distance = radius / sin(min(halfV, halfH)) × 1.06
+```
+
+The old one multiplied the box diagonal by 1.9. And the clipping planes and the
+wheel's reach are now multiples of how big the scene is rather than fixed
+numbers — `far` was 40 000 mm and the wheel stopped at 8 000, so a building was
+pushed straight through the far plane and one turn of the wheel put the camera
+back inside it.
+
+**Panning grabs the model.** It was moving the camera with the drag, so the
+model went the other way. It now moves the camera *against* the drag, by
+exactly what one pixel is worth at the distance being looked at — so the point
+under the cursor stays under the cursor. Dragging 200 px right and 100 px down
+moves the model 226 px and 115 px, the residual being the parallax of a corner
+nearer than the pivot.
+
+**The AI panel follows what it builds, and folds away.** While a request is
+running the view re-fits after every edit, because the first thing it adds is
+usually nowhere near where the camera happens to be pointing. The working
+folds down to the prompt alone — a long log covers the middle of the viewport,
+which is the whole reason — and says how many lines are behind it.
+
 ## Undo, and what it is a stack of
 
 Every edit already goes through one channel, and the document is already one

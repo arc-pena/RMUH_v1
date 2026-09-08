@@ -2,7 +2,7 @@ import { createWasmKernel } from "./wasm-kernel.js";
 import { createHttpKernel } from "./http-kernel.js";
 import { ENVIRONMENTS, FINISHES, Showroom, findFinish } from "./showroom.js";
 import { Mdl } from "./mdl.js";
-import { acceptsFrom, dataLines, SAMPLES } from "./ocaf.js";
+import { acceptsFrom, dataLines, SAMPLES, sliderSpan } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
 import { Agent, agentTrouble } from "./agent.js";
 import { SKETCH_CLICKS, SKETCH_RELATIONS, SKETCH_TYPES, nextSketchId, readSketch,
@@ -141,7 +141,35 @@ function buildGround() {
 }
 
 /* ------------------------------------------------------------ orbit + zoom */
-const view = { target: new THREE.Vector3(0, 0, 40), distance: 460, yaw: -0.72, pitch: 0.62 };
+
+//! Panning is grabbing the model, not pushing the camera: the point under the
+//! cursor stays under the cursor. So the camera moves the OTHER way from the
+//! drag, and it moves by exactly what one pixel is worth at the distance being
+//! looked at - which is what makes it feel like dragging a sheet of paper
+//! rather than nudging a view.
+function pan(dx, dy) {
+  const height = renderer.domElement.clientHeight || 1;
+  const perPixel = 2 * view.distance
+    * Math.tan((camera.fov * Math.PI / 180) / 2) / height;
+  const out = new THREE.Vector3().subVectors(camera.position, view.target).normalize();
+  const right = new THREE.Vector3().crossVectors(camera.up, out);
+  // Straight down on the model, "right" is undefined from the world up; take it
+  // from the yaw instead, which always knows which way round the view is.
+  if (right.lengthSq() < 1e-8) right.set(-Math.sin(view.yaw), Math.cos(view.yaw), 0);
+  right.normalize();
+  const up = new THREE.Vector3().crossVectors(out, right).normalize();
+  view.target.addScaledVector(right, -dx * perPixel)
+             .addScaledVector(up, dy * perPixel);
+}
+//! Set while something is building the model on its own, so the viewport keeps
+//! up with it rather than staring at where the part used to be.
+let following = false;
+
+const view = { target: new THREE.Vector3(0, 0, 40), distance: 460, yaw: -0.72, pitch: 0.62,
+               // How big the scene is. Every limit below is a multiple of it
+               // rather than a number in millimetres, so the same controls work
+               // on a bracket and on a building.
+               span: 200 };
 const STANDARD_VIEWS = {
   iso:   { yaw: -0.72, pitch: 0.62 },
   top:   { yaw: -Math.PI / 2, pitch: 1.5 },
@@ -157,6 +185,104 @@ function placeCamera() {
     view.target.z + view.distance * sp);
   camera.up.set(0, 0, 1);
   camera.lookAt(view.target);
+  // The clipping planes follow the camera rather than being fixed. A shopping
+  // centre is thirty metres of millimetres and a bracket is a hundred of them;
+  // one pair of planes cannot hold both, and a fixed far plane meant the
+  // building simply vanished when the view was pulled back far enough to see
+  // it - which looked like "fit does not fit".
+  const span = Math.max(view.span, 1);
+  camera.near = Math.max(0.05, Math.min(view.distance * 0.02, span * 0.02));
+  camera.far = view.distance + span * 6;
+  camera.updateProjectionMatrix();
+}
+
+//! Everything that would be photographed: the built shapes that are showing,
+//! leaving out the datums, whose drawn size is arbitrary and would swamp a
+//! small part. When there is nothing but datums, they are what there is.
+function sceneBounds() {
+  const box = new THREE.Box3();
+  let any = false;
+  for (const [id, { group }] of shapes) {
+    const entry = feature(id);
+    if (!group.visible || !entry || entry.category === "datum") continue;
+    box.expandByObject(group); any = true;
+  }
+  if (!any) for (const [, { group }] of shapes)
+    if (group.visible) { box.expandByObject(group); any = true; }
+  return any && !box.isEmpty() ? box : null;
+}
+
+//! The part of the canvas you can actually see. The panels float over the
+//! model rather than sitting beside it, so a fit to the whole canvas puts a
+//! third of the part underneath them - which is what "it does not fit" looked
+//! like. Framing to this rectangle instead is the difference.
+function freeRect() {
+  const width = renderer.domElement.clientWidth, height = renderer.domElement.clientHeight;
+  const whole = { x: 0, y: 0, w: width, h: height };
+  if (!width || !height) return whole;
+  // Every panel here is position: fixed, and offsetParent is null for those by
+  // definition - so asking it whether they are on screen said "no" every time
+  // and quietly gave back the whole canvas. The rectangle is the answer.
+  const showing = id => {
+    const el = document.getElementById(id);
+    if (!el || el.hidden) return null;
+    const box = el.getBoundingClientRect();
+    return box.width > 1 && box.height > 1 ? box : null;
+  };
+  const pad = 16;
+  let left = 0, right = width, top = 0, bottom = height;
+  for (const id of ["rail", "sketch-rail", "tree-panel"]) {
+    const box = showing(id);
+    if (box) left = Math.max(left, box.right + pad);
+  }
+  for (const id of ["def-panel"]) {
+    const box = showing(id);
+    if (box) right = Math.min(right, box.left - pad);
+  }
+  for (const id of ["chip", "sketch-bar"]) {
+    const box = showing(id);
+    if (box) top = Math.max(top, box.bottom + pad);
+  }
+  for (const id of ["ai-bar"]) {
+    const box = showing(id);
+    if (box) bottom = Math.min(bottom, box.top - pad);
+  }
+  const rect = { x: left, y: top, w: right - left, h: bottom - top };
+  // Panels crowding in from every side leave nothing worth aiming at; the
+  // whole canvas is a better answer than a sliver.
+  if (rect.w < width * 0.3 || rect.h < height * 0.3) return whole;
+  return rect;
+}
+
+//! How far back the camera has to stand for a sphere of \p radius to fit
+//! \p rect, and where to aim so it lands in the middle of it. The window is
+//! usually wider than it is tall, so the vertical angle is the one that crops -
+//! but not always, and which one it is is what a fit has to answer. That is
+//! the whole calculation; the old one multiplied the box diagonal by 1.9.
+function frameFor(radius, rect) {
+  const width = renderer.domElement.clientWidth || 1;
+  const height = renderer.domElement.clientHeight || 1;
+  const vertical = camera.fov * Math.PI / 180;
+  // The angles the free rectangle subtends, not the ones the canvas does.
+  const halfV = Math.atan(Math.tan(vertical / 2) * (rect.h / height));
+  const halfH = Math.atan(Math.tan(vertical / 2) * camera.aspect * (rect.w / width));
+  const distance = radius / Math.sin(Math.min(halfV, halfH)) * 1.06;
+  // And the offset that puts the middle of the rectangle where the middle of
+  // the canvas is, in the world, at the distance being looked at.
+  const perPixel = 2 * distance * Math.tan(vertical / 2) / height;
+  return {
+    distance,
+    shift: [(rect.x + rect.w / 2 - width / 2) * perPixel,
+            (rect.y + rect.h / 2 - height / 2) * perPixel],
+  };
+}
+
+//! How big what is on screen is, which is what the wheel's limits and the
+//! clipping planes are both measured against.
+function measureScene() {
+  const box = sceneBounds();
+  if (!box) return;
+  view.span = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 1);
 }
 
 (function bindControls() {
@@ -196,11 +322,7 @@ function placeCamera() {
       view.yaw -= dx * 0.008;
       view.pitch = Math.max(-1.53, Math.min(1.53, view.pitch + dy * 0.008));
     } else {
-      const scale = view.distance * 0.0016;
-      const away = new THREE.Vector3().subVectors(camera.position, view.target);
-      const right = new THREE.Vector3().crossVectors(away, camera.up).normalize();
-      const up = new THREE.Vector3().crossVectors(right, away).normalize();
-      view.target.addScaledVector(right, -dx * scale).addScaledVector(up, dy * scale);
+      pan(dx, dy);
     }
     placeCamera(); draw();
   });
@@ -240,7 +362,12 @@ function placeCamera() {
   el.addEventListener("contextmenu", event => event.preventDefault());
   el.addEventListener("wheel", event => {
     event.preventDefault();
-    view.distance = Math.max(20, Math.min(8000, view.distance * (1 + Math.sign(event.deltaY) * 0.12)));
+    // Measured against how big the scene is. Fixed stops at 20 and 8000 mm meant
+    // a thirty-metre building could not be pulled back far enough to be seen,
+    // and one turn of the wheel undid a fit.
+    const span = Math.max(view.span, 1);
+    view.distance = Math.max(span * 0.02, Math.min(span * 40,
+      view.distance * (1 + Math.sign(event.deltaY) * 0.12)));
     if (meshEdit.gizmo) refreshMeshEdit();
     placeCamera(); draw();
   }, { passive: false });
@@ -373,6 +500,13 @@ async function syncShapes() {
   paintSelection();
   refreshMeshEdit();
   refreshSketch();
+  // The wheel's reach and the clipping planes are both multiples of how big the
+  // scene is, so it has to be re-measured whenever the scene changes.
+  measureScene();
+  // While Claude is building, the view follows what it builds: the point of
+  // watching is seeing it, and the first thing it adds is usually nowhere near
+  // where the camera happens to be pointing.
+  if (following) fitView();
   draw();
   if (staging && showroom.ready) showroom.setScene(state.tree.features, streams);
 }
@@ -1279,19 +1413,27 @@ function pick(event) {
   if (event.shiftKey && id) pickAlso(id); else select(id, false);
 }
 
+//! Everything in view, and no further back than it has to be. The bounding
+//! sphere is used rather than the box because a sphere looks the same from
+//! every angle, so the framing does not change when the model is turned.
 function fitView() {
-  const box = new THREE.Box3();
-  let any = false;
-  for (const [id, { group }] of shapes) {
-    const entry = feature(id);
-    if (!group.visible || !entry || entry.category === "datum") continue;
-    box.expandByObject(group); any = true;
-  }
-  if (!any) for (const [, { group }] of shapes) if (group.visible) { box.expandByObject(group); any = true; }
-  if (!any || box.isEmpty()) return;
-  const size = box.getSize(new THREE.Vector3()).length() || 200;
-  view.target.copy(box.getCenter(new THREE.Vector3()));
-  view.distance = Math.max(120, size * 1.9);
+  const box = sceneBounds();
+  if (!box) return;
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  view.span = Math.max(sphere.radius, 1);
+  const framing = frameFor(view.span, freeRect());
+  view.target.copy(sphere.center);
+  view.distance = framing.distance;
+  // Aiming off-centre by the same amount the free rectangle is off-centre puts
+  // the part in the clear rather than behind a panel.
+  placeCamera();
+  const out = new THREE.Vector3().subVectors(camera.position, view.target).normalize();
+  const right = new THREE.Vector3().crossVectors(camera.up, out);
+  if (right.lengthSq() < 1e-8) right.set(-Math.sin(view.yaw), Math.cos(view.yaw), 0);
+  right.normalize();
+  const up = new THREE.Vector3().crossVectors(out, right).normalize();
+  view.target.addScaledVector(right, -framing.shift[0])
+             .addScaledVector(up, framing.shift[1]);
   placeCamera(); draw();
 }
 
@@ -2052,12 +2194,16 @@ function realField(entry, arg) {
   const from = entry.driven ? entry.driven[arg.key] : null;
   const count = entry.lists ? entry.lists[arg.key] : null;
 
+  // The declared range is how far the slider travels, not a limit on the value:
+  // a number typed or wired may be anywhere. So the track stretches to hold
+  // whatever it is actually showing, and the handle never sits lying at one end.
+  const span = sliderSpan(arg, value);
   field.innerHTML =
     '<div class="field-head"><label for="p-' + arg.key + '">' + arg.label + "</label>" +
     '<span class="value-box"><input type="number" id="n-' + arg.key + '" value="' + round(value) +
-    '" step="' + arg.step + '" min="' + arg.min + '" max="' + arg.max + '"' +
+    '" step="' + arg.step + '"' +
     (from ? " disabled" : "") + "><span class=\"unit\">" + (arg.unit || "") + "</span></span></div>" +
-    '<input type="range" id="p-' + arg.key + '" min="' + arg.min + '" max="' + arg.max +
+    '<input type="range" id="p-' + arg.key + '" min="' + span.min + '" max="' + span.max +
     '" step="' + arg.step + '" value="' + value + '"' + (from ? " disabled" : "") + ">";
 
   if (from) {
@@ -2666,6 +2812,8 @@ const agent = new Agent({
       .filter(f => f.error).map(f => f.id + ' "' + f.name + '": ' + f.error),
   }),
   onBusy: busy => {
+    following = busy;
+    if (busy) fitView();
     aiBar.classList.toggle("working", busy);
     document.getElementById("ai-stop").hidden = !busy;
     document.getElementById("ai-send").disabled = busy;
@@ -2683,6 +2831,13 @@ function aiSay(className, text) {
   aiLog.appendChild(line);
   aiLog.scrollTop = aiLog.scrollHeight;
   return line;
+}
+
+//! How many lines are behind the fold, so a shut panel still says there is
+//! something to look at.
+function aiCount() {
+  const fold = document.getElementById("ai-fold");
+  fold.dataset.count = aiLog.childElementCount || "";
 }
 
 //! What Claude is doing, as it does it. An edit that lands is one line of the
@@ -2709,6 +2864,7 @@ function aiEvent(event, running) {
     }
     aiLog.appendChild(line);
     aiLog.scrollTop = aiLog.scrollHeight;
+    aiCount();
     // The next thing it says starts a new line rather than growing this one.
     running.said = null;
   }
@@ -2728,6 +2884,18 @@ async function aiAsk() {
   }
 }
 
+//! The working is worth watching the first time and in the way the tenth, so
+//! it folds down to the prompt alone and stays that way until it is opened
+//! again. What is happening is still on screen: it is the model.
+function foldAI(shut) {
+  aiBar.classList.toggle("folded", shut);
+  const fold = document.getElementById("ai-fold");
+  fold.setAttribute("aria-pressed", shut ? "true" : "false");
+  fold.dataset.label = shut ? "Show what it is doing" : "Hide what it is doing";
+  remember("ocafcad/ai-fold", shut ? "shut" : "open");
+  aiLog.scrollTop = aiLog.scrollHeight;
+}
+
 function openAI(open) {
   aiBar.hidden = !open;
   document.getElementById("btn-ai").setAttribute("aria-pressed", open ? "true" : "false");
@@ -2742,6 +2910,8 @@ function openAI(open) {
   }
 }
 
+document.getElementById("ai-fold").addEventListener("click", () =>
+  foldAI(!aiBar.classList.contains("folded")));
 document.getElementById("btn-ai").addEventListener("click", () => openAI(aiBar.hidden));
 document.getElementById("ai-send").addEventListener("click", aiAsk);
 document.getElementById("ai-stop").addEventListener("click", () => {
@@ -3108,6 +3278,7 @@ addEventListener("keydown", event => {
   resize();
 
   if (recall("ocafcad/tree") === "off") treePanel.hidden = true;
+  foldAI(recall("ocafcad/ai-fold") === "shut");
 
   const params = new URLSearchParams(location.search);
   let remembered = null;

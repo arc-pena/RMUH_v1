@@ -564,6 +564,26 @@ body.staging #stage-ui { opacity: 1; pointer-events: auto; transform: translate(
   font-size: 12px; line-height: 1.55; scrollbar-width: thin;
 }
 .ai-log:empty { display: none; }
+/* Folded away: the prompt stays, the working goes. What is happening is still
+   on screen - it is the model. */
+#ai-bar.folded .ai-log { display: none; }
+.ai-fold {
+  flex: none; width: 22px; height: 22px; padding: 0; position: relative;
+  display: grid; place-items: center; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel-2); color: var(--ink-3);
+}
+.ai-fold:hover { color: var(--ink); }
+.ai-fold::before {
+  content: ""; width: 7px; height: 7px; border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translate(-1px, -1px);
+}
+#ai-bar.folded .ai-fold::before { transform: rotate(-135deg) translate(-1px, -1px); }
+/* Shut, with something behind it: say how much rather than hiding it silently. */
+#ai-bar.folded .ai-fold[data-count]:not([data-count=""])::after {
+  content: attr(data-count); position: absolute; left: 100%; margin-left: 5px;
+  font-family: var(--mono); font-size: 9.5px; color: var(--ink-3);
+}
 .ai-log > * { padding: 7px 13px; border-bottom: 1px solid var(--line-soft); }
 .ai-log .said { color: var(--ink); }
 .ai-log .asked { color: var(--ink-2); background: var(--panel-2); font-weight: 500; }
@@ -742,6 +762,8 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
 <section class="float" id="ai-bar" hidden>
   <div class="ai-log" id="ai-log"></div>
   <div class="ai-row">
+    <button class="ai-fold" id="ai-fold" aria-pressed="false"
+            data-label="Hide what it is doing" aria-label="Hide what it is doing"></button>
     <span class="ai-tag" id="ai-state">ask</span>
     <input id="ai-prompt" type="text" spellcheck="false" autocomplete="off"
            placeholder="a hillside villa with a lap pool and a cantilevered roof…"

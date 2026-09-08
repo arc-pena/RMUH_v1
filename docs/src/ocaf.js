@@ -2369,11 +2369,18 @@ export class Doc {
     const label = F.argLabel(f, key, true);
     let stored;
     if (arg.kind === "choice") {
+      // A choice really is bounded: there is no fifth option out of four.
       stored = Math.min(arg.options.length - 1, Math.max(0, Math.round(value)));
       label.attr.TDataStd_Integer = stored;
     } else {
-      // Out-of-range values reach the kernel as nonsense; stop them at the door.
-      stored = Math.min(arg.max, Math.max(arg.min, value));
+      // A number is not. What the catalogue declares is how far the SLIDER
+      // travels - a comfortable range for the thing at hand - and clamping to
+      // it meant a building could not be typed in at all: a 9 m wall silently
+      // became 4 m because a cube's slider stops there, and nothing said so.
+      // A wired number was never clamped, so this was inconsistent as well as
+      // wrong. The drivers guard themselves; that is what preconditions are for.
+      if (!Number.isFinite(value)) throw new Error("'" + key + "' must be a number");
+      stored = value;
       label.attr.TDataStd_Real = stored;
     }
     this.log.touch(label);
@@ -2817,6 +2824,21 @@ export function dataLines(data) {
   if (data.stride === 3)
     return F.triples(data).map(p => "(" + p.map(trimNumber).join(", ") + ")");
   return data.values.map(trimNumber);
+}
+
+//! How far a slider's track runs: what the catalogue suggests, opened out to
+//! hold the value if it is outside - and rounded to something a person would
+//! have chosen, so the track ends at 25 000 rather than at 22 143.
+export function sliderSpan(arg, value) {
+  let { min, max } = arg;
+  if (!Number.isFinite(value)) return { min, max };
+  const round = (v, up) => {
+    const size = Math.pow(10, Math.floor(Math.log10(Math.abs(v) || 1)));
+    return (up ? Math.ceil(v / size) : Math.floor(v / size)) * size;
+  };
+  if (value > max) max = round(value * 1.15, true);
+  if (value < min) min = round(value * (value < 0 ? 1.15 : 0.85), false);
+  return { min, max };
 }
 
 //! Keeps a value inside the range its declaration allows.

@@ -12,7 +12,7 @@
 // it can sit on a second screen the way Grasshopper does.
 
 import { MDL_OPS, parseEdits } from "./mdl.js";
-import { acceptsFrom } from "./ocaf.js";
+import { acceptsFrom, sliderSpan } from "./ocaf.js";
 
 const GRAPH_CSS = `
 :root {
@@ -1020,14 +1020,16 @@ export class GraphEditor {
     const row = doc.createElement("div");
     row.className = "g-row wired-row";
     row.style.display = "block";
+    // The declared range is how far the track travels, not a cap on the value.
+    const span = sliderSpan(arg, value);
     row.innerHTML =
       '<div style="display:flex;align-items:center;gap:6px">' +
         '<span class="g-lab">' + gesc(arg.label || key) + "</span>" +
         (count > 1 ? '<span class="g-sub" style="font-size:9px">×' + count + "</span>" : "") +
-        '<input class="g-num" type="number" step="' + arg.step + '" min="' + arg.min +
-        '" max="' + arg.max + '" value="' + gnum(value) + '"' + (from ? " disabled" : "") +
+        '<input class="g-num" type="number" step="' + arg.step + '" value="'
+        + gnum(value) + '"' + (from ? " disabled" : "") +
         "></div>" +
-      '<input class="g-rng" type="range" min="' + arg.min + '" max="' + arg.max +
+      '<input class="g-rng" type="range" min="' + span.min + '" max="' + span.max +
       '" step="' + arg.step + '" value="' + value + '"' + (from ? " disabled" : "") + ">";
 
     if (ports) {

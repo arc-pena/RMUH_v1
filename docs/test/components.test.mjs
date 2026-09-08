@@ -221,5 +221,43 @@ check("and not the circle, which reads none of it", !ran.includes(circle.id), ra
 check("but the cube does rebuild, because its corner is one of those points",
       ran.includes(cube.id), ran.join(","));
 
+console.log("\n8. a building fits in the numbers");
+{
+  // A catalogue slider stops where it is comfortable to drag - a cube's at
+  // 4000 mm, a point's at 2000. Clamping VALUES to that meant a nine-metre
+  // wall silently became four, and nothing said so: the only sign was a model
+  // that came out the wrong size. The range is how far the handle travels.
+  const spec = (await kernel.schema()).types.find(t => t.type === "Cube");
+  const dx = spec.args.find(a => a.key === "dx");
+  check("the declared range really is furniture-sized", dx.max <= 8000, String(dx.max));
+
+  const block = await mdl.run({ op: "add", type: "Cube", name: "Wall" });
+  for (const [key, value] of [["dx", 9000], ["dy", 22000], ["dz", 10000]])
+    await mdl.run({ op: "set", id: block.id, key, value });
+  const got = (await at(block.id)).values;
+  check("but a nine-metre wall is nine metres",
+    got.dx === 9000 && got.dy === 22000 && got.dz === 10000, JSON.stringify(got));
+
+  const far = await mdl.run({ op: "add", type: "Point", name: "Far corner" });
+  await mdl.run({ op: "set", id: far.id, key: "x", value: 23000 });
+  check("and a point can be twenty-three metres out",
+    (await at(far.id)).values.x === 23000, String((await at(far.id)).values.x));
+
+  // The slider still has to say something true about where it is.
+  const { sliderSpan } = await import("../src/ocaf.js");
+  check("the track stretches to hold it", sliderSpan(dx, 9000).max >= 9000,
+    JSON.stringify(sliderSpan(dx, 9000)));
+  check("and is left alone when it does not have to",
+    JSON.stringify(sliderSpan(dx, 80)) === JSON.stringify({ min: dx.min, max: dx.max }),
+    JSON.stringify(sliderSpan(dx, 80)));
+
+  // A choice is genuinely bounded - there is no fifth option out of four.
+  await mdl.run({ op: "set", id: block.id, key: "dx", value: 9000 });
+  const finish = await mdl.run({ op: "add", type: "Extrude", name: "Pad" });
+  await mdl.run({ op: "set", id: finish.id, key: "cap", value: 9 });
+  check("a choice is still held to its options",
+    (await at(finish.id)).values.cap === 1, String((await at(finish.id)).values.cap));
+}
+
 console.log(failures ? "\n" + failures + " FAILED" : "\nall good");
 process.exit(failures ? 1 : 0);
