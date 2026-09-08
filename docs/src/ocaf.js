@@ -1813,6 +1813,31 @@ export const CATALOGUE = [
            code("formula", "Formula",
                 "Math.sin(x * 0.02) * Math.cos(y * 0.02)")] },
 
+  /* --------------------------------------------------------- containers
+
+     A folder that is also a node. CATIA files wireframe and surfaces into
+     geometrical sets and solids into bodies, and the reason is not tidiness:
+     it is that a set has a boundary, so you can ask what crosses it. Anything
+     feeding the contents from outside is an input to the set, and that list is
+     the honest answer to "what does this depend on" for a group of forty nodes
+     that would otherwise have to be read one at a time.
+
+     Containers drive no geometry. They hold nothing, build nothing and consume
+     nothing - what is in one stays exactly as visible, as wired and as
+     rebuildable as it was - so filing a node away can never change the part. */
+  { type: "GeometricalSet", guid: "9a1b2c30-00a0-4c00-9e00-caf0000000a0",
+    category: "container", produces: "text",
+    summary: "A folder for wireframe and surfaces - points, lines, planes, curves, "
+           + "skins. Right-click it for what feeds it from outside. Deleting it keeps "
+           + "everything in it and hands it back to whatever the set was in.",
+    args: [] },
+  { type: "Body", guid: "9a1b2c30-00a1-4c00-9e00-caf0000000a1",
+    category: "container", produces: "text",
+    summary: "A folder for solids - the bodies you add to and remove from. Same as a "
+           + "geometrical set in every way but what belongs in it, which is the "
+           + "distinction the two factories draw.",
+    args: [] },
+
   /* --------------------------------------------------------- operations */
   { type: "Extrude", guid: "9a1b2c30-0070-4c00-9e00-caf000000070", category: "operation",
     produces: "solid",
@@ -1938,6 +1963,7 @@ export const CATEGORIES = [
   { key: "mesh",      label: "mesh" },
   { key: "analysis",  label: "analysis" },
   { key: "operation", label: "operations" },
+  { key: "container", label: "sets" },
 ];
 
 export const FIRST_ARG_TAG = 1, RESULT_TAG = 100, ERROR_TAG = 101, REVISION_TAG = 102;
@@ -1967,8 +1993,30 @@ export const APPEARANCE_TAG = 52;
 //! what it is, and this is what the plane came to.
 export const FRAME_TAG = 53;
 
+//! Which container a feature is filed under, as a TDF_Reference to it. It goes
+//! on the CHILD rather than as a list on the container for the reason OCAF
+//! itself puts a parent on a label: a feature belongs to exactly one set, and
+//! one place to write that is one place for it to be wrong. It is not an
+//! argument - a container drives no geometry - so it never reaches a driver and
+//! never orders a rebuild.
+export const PARENT_TAG = 54;
+
 const byType = new Map(CATALOGUE.map(t => [t.type, t]));
 const byGuid = new Map(CATALOGUE.map(t => [t.guid, t]));
+
+//! Checked at load, because a repeated guid does not fail - it makes one type
+//! quietly answer as another, and what you see is a feature refusing to accept
+//! an argument it plainly has. Cheap to check once; expensive to find.
+for (const [table, what] of [[byType, "type name"], [byGuid, "guid"]])
+  if (table.size !== CATALOGUE.length) {
+    const seen = new Set(), clash = [];
+    for (const t of CATALOGUE) {
+      const key = what === "guid" ? t.guid : t.type;
+      if (seen.has(key)) clash.push(t.type + " (" + key + ")");
+      seen.add(key);
+    }
+    throw new Error("two catalogue entries share a " + what + ": " + clash.join(", "));
+  }
 export const typeSpec = type => byType.get(type) || null;
 const argIndex = (spec, key) => spec.args.findIndex(a => a.key === key);
 
@@ -2124,6 +2172,16 @@ export const F = {
     const label = f.findChild(APPEARANCE_TAG, true);
     if (!appearance) label.attr.TDataStd_AsciiString = "";
     else label.attr.TDataStd_AsciiString = JSON.stringify(appearance);
+  },
+
+  parent(f) {
+    const label = f && f.findChild(PARENT_TAG);
+    return (label && label.attr.TDF_Reference) || null;
+  },
+  setParent(f, container) {
+    const label = f.findChild(PARENT_TAG, true);
+    if (container) label.attr.TDF_Reference = container;
+    else delete label.attr.TDF_Reference;
   },
 
   frame(f) {
@@ -2310,7 +2368,12 @@ export class Driver {
   //! That is what orders the graph: edit a cube and its fillet must follow.
   arguments(f) {
     const args = [];
-    const skip = new Set([RESULT_TAG, ERROR_TAG, REVISION_TAG, DATA_TAG]);
+    // PARENT_TAG carries a reference too, and it is deliberately not one of
+    // these: which folder a feature is filed in has nothing to do with what it
+    // is built from. Counting it would order the graph by the tree, make every
+    // member of a set depend on the set, and refuse to delete a container
+    // because everything in it "reads from" it.
+    const skip = new Set([RESULT_TAG, ERROR_TAG, REVISION_TAG, DATA_TAG, PARENT_TAG]);
     const walk = label => {
       for (const child of label.childList()) {
         if (label === f && skip.has(child.tag)) continue;
@@ -2451,7 +2514,78 @@ export class Doc {
     return out;
   }
 
+  /* ------------------------------------------------------------ containers
+
+     A container is a feature like any other - it is in the same flat list, in
+     the same rebuild order - and being in one is a single reference on the
+     member pointing back. Everything below is that one fact read different
+     ways.                                                                   */
+
+  isContainer(f) { return !!f && F.spec(f).category === "container"; }
+
+  //! What is filed directly in a container, in document order.
+  contents(container) {
+    return this.features().filter(f => F.parent(f) === container);
+  }
+
+  //! Everything in it, however deep - a set inside a set is still inside.
+  within(container) {
+    const out = [];
+    const walk = set => {
+      for (const f of this.contents(set)) { out.push(f); if (this.isContainer(f)) walk(f); }
+    };
+    walk(container);
+    return out;
+  }
+
+  //! File \p f under \p container, or at the top level when it is null. A set
+  //! cannot be put inside itself, at any depth: that is the one move that would
+  //! make a tree stop being one.
+  setParent(f, container) {
+    if (container) {
+      if (!this.isContainer(container))
+        throw new Error(F.name(container) + " is not a set - only a set holds things");
+      if (container === f) throw new Error("a set cannot be put inside itself");
+      for (let up = F.parent(container); up; up = F.parent(up))
+        if (up === f) throw new Error(F.name(container) + " is already inside " + F.name(f));
+    }
+    F.setParent(f, container || null);
+    this.log.touch(f);
+    if (container) this.log.touch(container);
+  }
+
+  //! What feeds a set from outside it: every feature that something inside
+  //! reads from and that is not itself inside. The boundary of the set, stated
+  //! as a list - which is the whole reason for drawing a boundary.
+  inputsOf(container) {
+    const inside = new Set([container, ...this.within(container)]);
+    const out = [];
+    for (const f of inside)
+      for (const source of this.wiresOf(f))
+        if (!inside.has(source) && !out.includes(source)) out.push(source);
+    return out;
+  }
+
+  //! And the other direction: what outside the set reads from something in it.
+  //! Deleting a set never touches these, because deleting a set never deletes
+  //! what is in it.
+  outputsOf(container) {
+    const inside = new Set([container, ...this.within(container)]);
+    return this.features().filter(f => !inside.has(f)
+      && this.wiresOf(f).some(source => inside.has(source)));
+  }
+
+  //! Removing the container and nothing else. What was in it is handed to
+  //! whatever the container was in, so a set is a way of holding things
+  //! together and never a way of losing them.
+  dissolve(container) {
+    const up = F.parent(container);
+    for (const f of this.contents(container)) this.setParent(f, up);
+    this.deleteFeature(container);
+  }
+
   deleteFeature(f) {
+    if (this.isContainer(f) && this.contents(f).length) { this.dissolve(f); return; }
     const readers = this.dependents(f);
     if (readers.length) throw new Error(F.name(readers[0]) + " still reads from " + F.name(f));
     const shape = F.shape(f);
@@ -2619,6 +2753,10 @@ export class Doc {
   recompute(all = false) {
     const report = { functions: 0, executed: [], skipped: [], failed: [] };
     if (all) for (const f of this.features()) this.log.touch(f);
+    // A set's summary is about the wiring around it, not about arguments it
+    // does not have, so nothing else would ever mark it stale. It costs a
+    // string to rebuild; it is rebuilt every pass.
+    for (const f of this.features()) if (this.isContainer(f)) this.log.touch(f);
 
     for (const f of this.order()) {
       const driver = this.driverOf(f);
@@ -2698,6 +2836,13 @@ export class Doc {
           revision: F.revision(f), built: !!F.shape(f), values, refs, labels, driven,
           lists, texts,
         };
+        const holder = F.parent(f);
+        if (holder) entry.parent = F.id(holder);
+        if (spec.category === "container") {
+          entry.contents = this.contents(f).map(F.id);
+          entry.inputs = this.inputsOf(f).map(F.id);
+          entry.outputs = this.outputsOf(f).map(F.id);
+        }
         // What it computed, summarised: enough for a node to show it and for a
         // Panel to print it, without moving a thousand numbers per redraw.
         const data = F.data(f);
@@ -2780,6 +2925,8 @@ export class Doc {
           }
         }
         const entry = { id: F.id(f), type: spec.type, name: F.name(f), args };
+        const holder = F.parent(f);
+        if (holder) entry.parent = F.id(holder);
         const appearance = F.appearance(f);
         if (appearance) entry.appearance = appearance;
         return entry;
@@ -2850,6 +2997,15 @@ export class Doc {
           F.setReference(f, key, target);
         }
       }
+    }
+    // Filed away last, once every feature exists: a set may be written after
+    // the things it holds, or before them, and neither should matter.
+    for (const entry of model.features) {
+      if (!entry.parent) continue;
+      const holder = doc.find(String(entry.parent));
+      if (!holder) throw new Error(entry.id + " is filed under an unknown set '"
+        + entry.parent + "'");
+      doc.setParent(doc.find(entry.id), holder);
     }
     return doc;
   }

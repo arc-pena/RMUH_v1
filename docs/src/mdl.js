@@ -130,6 +130,14 @@ export const MDL_OPS = [
     { op: "delete", id: "SP1" },
     (ctx, edit) => ctx.kernel.deleteFeature(needText(edit, "id"))),
 
+  modelOp("group", ["id", "into?"],
+    "File a feature under a set - a GeometricalSet or a Body - or leave `into` out to "
+    + "take it back to the top level. A set holds things; it never consumes them, so "
+    + "what is in one stays as visible, as wired and as rebuildable as it was.",
+    { op: "group", id: "CI1", into: "GS1" },
+    (ctx, edit) => ctx.kernel.setParent(needText(edit, "id"),
+                                        edit.into ? String(edit.into) : null)),
+
   modelOp("rename", ["id", "name"],
     "Rename a feature. The id is what references point at; the name is for people.",
     { op: "rename", id: "CB1", name: "Base block" },

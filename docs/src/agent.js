@@ -87,6 +87,11 @@ HOW TO WORK
 - What an input accepts is what a source PRODUCES, not its type name. Any
   number input can be driven by anything producing numbers.
 - Sizes are millimetres. Building-scale work is thousands of them.
+- Past about a dozen nodes, file them into sets as you go: a GeometricalSet for
+  wireframe and surfaces, a Body for solids, and "group" to put a node in one.
+  A set is a folder - it holds nothing, builds nothing and consumes nothing, so
+  it can never change the part - but it lets the person read forty nodes as
+  four groups, and it can say what feeds it from outside.
 - When you are finished, say in one or two sentences what you built and which
   numbers are worth turning.
 

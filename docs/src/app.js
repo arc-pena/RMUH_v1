@@ -1615,6 +1615,13 @@ const ICONS = {
               + '<path d="M1.8 8.4c2 0 2-4.4 4.1-4.4s2.1 4.4 4.2 4.4 2.1-3 4.1-3" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
               + '<path d="M3.6 11.2V9.4M7 11.2V6.6M10.4 11.2V9M13.6 11.2V7" stroke="currentColor" stroke-width=".85" opacity=".6"/>',
 
+  // A folder with wireframe in it: the open tab, and a curve and a point.
+  GeometricalSet: '<path d="M1.6 12.6V4.4h4.2l1.4 1.6h7.2v6.6z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>'
+                + '<path d="M3.6 10.6c1.8 0 2-2.4 3.8-2.4s2 2.4 3.8 2.4" fill="none" stroke="currentColor" stroke-width="1.1"/>'
+                + '<circle cx="12.4" cy="8.6" r="1.15" fill="currentColor"/>',
+  // The same folder with a body in it.
+  Body: '<path d="M1.6 12.6V4.4h4.2l1.4 1.6h7.2v6.6z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>'
+      + '<path d="M8 6.6l3.4 1.8v3.2L8 13.4l-3.4-1.8V8.4z" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/>',
   // A section carried along a rail: the rail, and the profile riding it.
   Sweep: '<path d="M1.8 11.6C4.4 11.6 5 4.6 8.2 4.6s3.8 4.4 6 4.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2.2 1.6"/>'
        + '<ellipse cx="5.4" cy="8.6" rx="1.5" ry="2.5" fill="none" stroke="currentColor" stroke-width="1.2"/>'
@@ -1691,6 +1698,21 @@ const svg = body => '<svg viewBox="0 0 16 16" aria-hidden="true">' + body + "</s
   addEventListener("pointerdown", hide, true);
   addEventListener("scroll", () => { if (shown) place(shown); }, true);
 })();
+// The menu goes away for anything that is not choosing from it: a click
+// elsewhere, a scroll, Escape, or the tree being rebuilt under it.
+addEventListener("pointerdown", event => {
+  const menu = document.getElementById("menu");
+  if (menu && !menu.hidden && !menu.contains(event.target)) closeMenu();
+}, true);
+addEventListener("scroll", () => {
+  const menu = document.getElementById("menu");
+  if (menu && !menu.hidden) closeMenu();
+}, true);
+addEventListener("keydown", event => {
+  const menu = document.getElementById("menu");
+  if (event.key === "Escape" && menu && !menu.hidden) { closeMenu(); event.stopPropagation(); }
+}, true);
+
 const escapeHtml = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const escapeAttr = s => escapeHtml(s).replace(/"/g, "&quot;");
 
@@ -1753,19 +1775,23 @@ function refreshToolbar() {
 
 /* ------------------------------------------------------- specification tree */
 function buildTree() {
+  closeMenu();
   const list = document.getElementById("tree");
   list.textContent = "";
   if (!state.tree) return;
 
   // The tree keeps CATIA's two sets and adds one: the features that compute
-  // rather than build have no place in a part body.
+  // rather than build have no place in a part body. Anything filed into a set
+  // of the user's own is drawn inside that set instead of here, so every
+  // feature appears exactly once however deeply it is put away.
+  const loose = state.tree.features.filter(f => !f.parent);
   const sets = [
-    { name: "Datums", features: state.tree.features.filter(f => f.category === "datum") },
+    { name: "Datums", features: loose.filter(f => f.category === "datum") },
     { name: "Parameters", optional: true,
-      features: state.tree.features.filter(f => f.category === "data") },
+      features: loose.filter(f => f.category === "data") },
     { name: "Meshes", optional: true,
-      features: state.tree.features.filter(f => f.category === "mesh") },
-    { name: "PartBody", features: state.tree.features.filter(f =>
+      features: loose.filter(f => f.category === "mesh") },
+    { name: "PartBody", features: loose.filter(f =>
         f.category !== "datum" && f.category !== "data" && f.category !== "mesh") },
   ];
 
@@ -1858,7 +1884,120 @@ function treeNode(entry) {
   li.addEventListener("keydown", event => {
     if (event.key === "Enter") { select(entry.id, true); event.preventDefault(); }
   });
+  li.addEventListener("contextmenu", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    openMenu(event, entry);
+  });
+
+  // A set carries its contents inside it. Nothing else about the node changes:
+  // a set is a folder, not an operation, so what is in one is drawn, wired and
+  // rebuilt exactly as it was before it was put away.
+  if (entry.category === "container") {
+    const inside = state.tree.features.filter(f => f.parent === entry.id);
+    const branch = document.createElement("ul");
+    branch.className = "branch";
+    if (!inside.length) {
+      const empty = document.createElement("li");
+      empty.className = "node";
+      empty.innerHTML = '<span class="kind" style="padding-left:22px">empty</span>';
+      branch.appendChild(empty);
+    }
+    for (const child of inside) branch.appendChild(treeNode(child));
+    const holder = document.createElement("li");
+    holder.className = "holds";
+    holder.append(li, branch);
+    return holder;
+  }
   return li;
+}
+
+//! One line in the status bar, in place of the selection readout. It lasts
+//! until the next selection changes, which is the next thing the reader does.
+function say(text) {
+  document.getElementById("status-sel").textContent = text;
+}
+
+/* ---------------------------------------------------------- context menu
+
+   Right-click on a node. A set is the reason this exists: it has a boundary,
+   so there are two questions worth asking of it that no slider can answer -
+   what crosses that boundary, and what happens if the set goes away.        */
+
+function closeMenu() {
+  const menu = document.getElementById("menu");
+  menu.hidden = true;
+  menu.textContent = "";
+}
+
+function openMenu(event, entry) {
+  const menu = document.getElementById("menu");
+  menu.textContent = "";
+  const item = (label, note, run) => {
+    const li = document.createElement("li");
+    li.innerHTML = '<span class="menu-label">' + escapeHtml(label) + "</span>"
+      + (note ? '<span class="menu-note">' + escapeHtml(note) + "</span>" : "");
+    li.addEventListener("click", () => { closeMenu(); run(); });
+    menu.appendChild(li);
+    return li;
+  };
+  const rule = () => menu.appendChild(document.createElement("hr"));
+
+  if (entry.category === "container") {
+    const inputs = (entry.inputs || []).map(id => (feature(id) || {}).name || id);
+    const outputs = (entry.outputs || []).map(id => (feature(id) || {}).name || id);
+    item("Inputs", inputs.length ? inputs.length + " from outside" : "nothing comes in",
+         () => showBoundary(entry));
+    if (outputs.length)
+      item("Read by", outputs.length + " outside", () => {
+        state.picked = entry.outputs.slice();
+        select(entry.outputs[0], false, true);
+        say(entry.name + " is read by " + outputs.join(", "));
+      });
+    rule();
+  }
+
+  // Where it lives. A set can hold a set, so the list is every container but
+  // this one and anything already inside it.
+  const containers = state.tree.features.filter(f => f.category === "container"
+    && f.id !== entry.id && !within(entry.id, f.id));
+  if (entry.parent) item("Take out of " + (feature(entry.parent) || {}).name, "to the top level",
+    () => edit({ op: "group", id: entry.id }));
+  for (const set of containers) {
+    if (set.id === entry.parent) continue;
+    item("Move into " + set.name, set.type === "Body" ? "solids" : "wireframe",
+      () => edit({ op: "group", id: entry.id, into: set.id }));
+  }
+  if (entry.parent || containers.length) rule();
+
+  item("Open definition", "", () => select(entry.id, true));
+  item(entry.category === "container" ? "Delete set" : "Delete",
+    entry.category === "container" ? "keeps what is in it" : "",
+    () => edit({ op: "delete", id: entry.id }));
+
+  menu.hidden = false;
+  // Placed after it is shown, so its measured size is the size it will be.
+  const box = menu.getBoundingClientRect();
+  menu.style.left = Math.min(event.clientX, innerWidth - box.width - 8) + "px";
+  menu.style.top = Math.min(event.clientY, innerHeight - box.height - 8) + "px";
+}
+
+//! Is \p id inside the set \p setId, at any depth? Asked so a set cannot be
+//! offered a home inside something it already contains.
+function within(setId, id) {
+  for (let f = feature(id); f; f = feature(f.parent))
+    if (f.parent === setId) return true;
+  return false;
+}
+
+//! What feeds a set from outside it, said out loud and picked in the tree, so
+//! the answer is something you can see as well as read.
+function showBoundary(entry) {
+  const inputs = entry.inputs || [];
+  if (!inputs.length) { say(entry.name + " takes nothing from outside itself"); return; }
+  state.picked = inputs.slice();
+  select(inputs[0], false, true);
+  say(entry.name + " is fed by " + inputs.map(id => (feature(id) || {}).name || id).join(", "));
 }
 
 /* -------------------------------------------------------- definition panel */
@@ -2529,13 +2668,19 @@ async function pushParameter(id, key, value, rebuildPanel = false) {
 async function addFeature(type) {
   if (!ready) return;
   const spec = schemaType(type);
+  // A set takes what is picked with it. That is how a group gets made anywhere
+  // else, and it saves the alternative - make an empty set, then move six
+  // things into it one at a time through the menu.
+  const taking = spec.category === "container" ? state.picked.slice() : [];
   // No refs: the edit wires the inputs itself, the way a CAD command does - the
   // selected body for an operation, the first datum of the right type for the
   // rest. Typing the same edit into the graph console gets the same wiring.
   const payload = await edit({ op: "add", type });
   if (!payload) return;
+  if (taking.length)
+    await mdl.runAll(taking.map(id => ({ op: "group", id, into: payload.id })));
   select(payload.id, true);
-  if (spec.category !== "datum") fitView();
+  if (spec.category !== "datum" && spec.category !== "container") fitView();
 }
 
 async function deleteFeature(id) {

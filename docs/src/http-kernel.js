@@ -43,6 +43,8 @@ export async function createHttpKernel(base) {
     moveVertex(id, index, offset) { return this.post("/api/vertex", { id, index, offset }); },
     addFeature(type, refs, id) { return this.post("/api/feature", { type, refs, id }); },
     deleteFeature(id) { return this.post("/api/delete", { id }); },
+    setParent(id, into) { return this.post("/api/group", { id, into }); },
+    inputsOf(id) { return this.get("/api/inputs?id=" + encodeURIComponent(id)); },
     rename(id, name) { return this.post("/api/rename", { id, name }); },
     mesh(ids) {
       return this.get("/api/mesh" + (ids && ids.length

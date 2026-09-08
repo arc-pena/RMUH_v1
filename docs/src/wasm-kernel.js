@@ -2827,6 +2827,25 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     },
   };
 
+  //! A container builds nothing, and that is the point of it. It holds no
+  //! geometry, consumes nothing and hides nothing: what is filed in a set stays
+  //! exactly as visible and as wired as it was, so putting a node away can
+  //! never change the part. What it computes is a sentence about itself - what
+  //! it holds and what crosses its boundary - which is what the tree and the
+  //! panel show when you ask.
+  builders.GeometricalSet = {
+    build: f => {
+      const inside = doc.within(f), feeds = doc.inputsOf(f), out = doc.outputsOf(f);
+      const count = (n, one, many) => n + " " + (n === 1 ? one : many);
+      return { data: text([
+        count(inside.length, "item", "items"),
+        feeds.length ? "in: " + feeds.map(F.name).join(", ") : "nothing comes in",
+        out.length ? "out: " + out.map(F.name).join(", ") : "nothing reads out of it",
+      ]) };
+    },
+  };
+  builders.Body = builders.GeometricalSet;
+
   const drivers = new Map();
   for (const spec of CATALOGUE) {
     const builder = builders[spec.type];
@@ -3030,6 +3049,30 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         throw err;
       }
       return { ...state(doc.recompute(false)), id: F.id(f) };
+    },
+
+    //! File a feature under a set, or at the top level when `into` is null.
+    //! One feature at a time, the way every other edit here works, so an undo
+    //! step is one move and the report says which.
+    async setParent(id, into) {
+      const f = doc.find(id);
+      if (!f) throw new Error("no feature '" + id + "'");
+      const holder = into ? doc.find(into) : null;
+      if (into && !holder) throw new Error("no set '" + into + "'");
+      doc.setParent(f, holder);
+      return state(doc.recompute(false));
+    },
+
+    //! Everything feeding a set's contents from outside it. Published rather
+    //! than worked out by the interface, because the answer depends on the
+    //! wiring and the wiring lives here.
+    async inputsOf(id) {
+      const f = doc.find(id);
+      if (!f) throw new Error("no feature '" + id + "'");
+      if (!doc.isContainer(f)) throw new Error(F.name(f) + " is not a set");
+      return { ok: true, inputs: doc.inputsOf(f).map(x => ({ id: F.id(x), name: F.name(x) })),
+               outputs: doc.outputsOf(f).map(x => ({ id: F.id(x), name: F.name(x) })),
+               contents: doc.within(f).map(x => ({ id: F.id(x), name: F.name(x) })) };
     },
 
     async deleteFeature(id) {
