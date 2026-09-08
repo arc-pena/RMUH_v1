@@ -39,6 +39,21 @@ export function catalogueBrief(schema) {
   }).join("\n");
 }
 
+//! The geometry API underneath the catalogue: the two factories and what each
+//! of them can do. A node is a driver and a driver is one factory call, so
+//! knowing the factories is knowing what the components are made of - which is
+//! what tells the difference between a component that is missing and one that
+//! is there under another name. It is also the honest answer to "can it do X":
+//! if no factory does X, no node does either.
+export function apiBrief(api) {
+  if (!api || !api.factories) return "";
+  return api.factories.map(factory =>
+    factory.name + " - " + factory.makes + "\n"
+    + factory.operations.map(op =>
+        "  " + op.name + "(" + op.takes + ") -> " + op.gives
+        + "\n      " + op.summary).join("\n")).join("\n\n");
+}
+
 //! What the assistant is told before it is asked anything. The rules are the
 //! ones a person working here would be given, and the first of them is the one
 //! this whole program is built on.
@@ -80,6 +95,16 @@ ${ops}
 
 THE COMPONENTS
 ${catalogueBrief(schema)}
+
+THE GEOMETRY UNDERNEATH THEM
+Every component above is a driver over one call into one of these two
+factories, split the way CATIA splits them: everything that is not a solid is
+hybrid, everything that is, is not. You cannot call these directly - you build
+by wiring components - but they say what the kernel can actually do, so a
+component you cannot find is either here under another name or genuinely not
+there. Do not invent a component that is not in the list above.
+
+${apiBrief(schema.api)}
 
 THE DOCUMENT AS IT STANDS
 ${JSON.stringify(model)}`;

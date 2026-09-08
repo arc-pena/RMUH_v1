@@ -26,8 +26,7 @@ import { CATALOGUE, Doc, Driver, F, clampTo, dataLines, kernelMessage, meshFaces
          typeSpec } from "./ocaf.js";
 import { sketchArcPoint, sketchChainEnds, sketchEnds, sketchLoops, sketchNesting,
          sketchOutline, solveSketch, splinePoints } from "./sketch.js";
-
-const CONFUSION = 1e-7;
+import { CONFUSION, V, factorySchema, makeFactories, turnAbout } from "./factory.js";
 
 export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm, onProgress }) {
   if (onProgress) onProgress("starting OpenCascade");
@@ -46,13 +45,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   const pnt = p => new oc.gp_Pnt(p[0], p[1], p[2]);
   const dir = d => new oc.gp_Dir(d[0], d[1], d[2]);
 
-  const length = v => Math.hypot(v[0], v[1], v[2]);
-  const V = {
-    add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
-    scale: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
-    cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
-    norm(a) { const l = Math.hypot(a[0], a[1], a[2]); return l < 1e-9 ? null : V.scale(a, 1 / l); },
-  };
+  const length = V.length;
   //! The point a feature stands for, read from what it computed rather than
   //! from its arguments. An input that says it accepts "point" then really does
   //! accept any of them - a Point of any kind, a point off a curve, a draped
@@ -76,17 +69,18 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   function resolvePlane(f) {
     const no = why => ({ ax: null, why });
     if (!f || F.spec(f).type !== "Plane") return no("that is not a plane");
+    //! Every branch ends here, and here means one HybridShapeFactory call.
+    //! The factory raises; a datum answers with a sentence instead, because a
+    //! plane that cannot be worked out is something to say, not to throw.
+    const made = build => {
+      try {
+        const ax = build();
+        return ax ? { ax, why: null } : no("that plane cannot be worked out");
+      } catch (e) { return no(describeError(e)); }
+    };
     const frame = (at, normal, xdir) => {
       if (!at || !normal) return no("that plane cannot be worked out");
-      const n = V.norm(normal);
-      if (!n) return no("the normal has no direction");
-      // gp_Ax2 projects the X direction onto the plane, so a rough one will do
-      // - but it must not be along the normal.
-      const across = xdir && V.norm(xdir);
-      const usable = across
-        && Math.abs(across[0] * n[0] + across[1] * n[1] + across[2] * n[2]) < 0.999;
-      return { ax: usable ? new oc.gp_Ax2(pnt(at), dir(n), dir(across))
-                          : new oc.gp_Ax2(pnt(at), dir(n)), why: null };
+      return made(() => HSF.planeNormal(at, normal, xdir));
     };
 
     switch (Feature_choice(f, "kind")) {
@@ -100,34 +94,20 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       case 2: {                                   // offset from another plane
         const parent = resolvePlane(F.reference(f, "from"));
         if (!parent.ax) return no(parent.why || "no plane to offset from");
-        const n = parent.ax.Direction(), at = parent.ax.Location(), x = parent.ax.XDirection();
-        const step = F.real(f, "offset", 100);
-        return frame([at.X() + n.X() * step, at.Y() + n.Y() * step, at.Z() + n.Z() * step],
-                     [n.X(), n.Y(), n.Z()], [x.X(), x.Y(), x.Z()]);
+        return made(() => HSF.planeOffset(parent.ax, F.real(f, "offset", 100)));
       }
       case 3: {                                   // halfway between two planes
         const a = resolvePlane(F.reference(f, "a"));
         const b = resolvePlane(F.reference(f, "b"));
         if (!a.ax || !b.ax) return no(a.why || b.why || "two planes are needed");
-        const na = a.ax.Direction(), nb = b.ax.Direction();
-        const pa = a.ax.Location(), pb = b.ax.Location();
-        // Facing each other and facing the same way both make sense; take the
-        // nearer of the two so the bisector never flips as one plane turns.
-        const sign = na.X() * nb.X() + na.Y() * nb.Y() + na.Z() * nb.Z() < 0 ? -1 : 1;
-        const between = [na.X() + nb.X() * sign, na.Y() + nb.Y() * sign, na.Z() + nb.Z() * sign];
-        if (length(between) < CONFUSION) return no("those two planes are back to back");
-        return frame([(pa.X() + pb.X()) / 2, (pa.Y() + pb.Y()) / 2, (pa.Z() + pb.Z()) / 2],
-                     between);
+        return made(() => HSF.planeMean(a.ax, b.ax));
       }
       case 4: {                                   // turned about an axis
         const parent = resolvePlane(F.reference(f, "turn"));
         if (!parent.ax) return no(parent.why || "no plane to turn");
         const spin = axisOf(F.reference(f, "axis"));
         if (!spin) return no("an axis is needed to turn about");
-        const angle = F.real(f, "angle", 45) * Math.PI / 180;
-        const at = parent.ax.Location(), n = parent.ax.Direction();
-        return frame([at.X(), at.Y(), at.Z()],
-                     turnAbout([n.X(), n.Y(), n.Z()], spin.along, angle));
+        return made(() => HSF.planeRotate(parent.ax, spin.along, F.real(f, "angle", 45)));
       }
       default: {                                  // an origin and a normal
         const origin = readPoint(F.reference(f, "origin"));
@@ -149,33 +129,10 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   //! Turning a plane wants one and so does an axis of revolution, and neither
   //! cares which of the two it was given.
   function axisOf(f) {
-    const straight = readVector(f);
-    if (straight && length(straight) > CONFUSION)
-      return { at: [0, 0, 0], along: V.norm(straight) };
-    const shape = f && F.shape(f);
-    if (!shape) return null;
-    const ends = verticesOf(shape);
-    if (ends.length >= 2) {
-      const along = V.norm([ends[ends.length - 1][0] - ends[0][0],
-                            ends[ends.length - 1][1] - ends[0][1],
-                            ends[ends.length - 1][2] - ends[0][2]]);
-      if (along) return { at: ends[0], along };
-    }
+    const found = HSF.axisOf(f && F.shape(f), readVector(f));
+    if (found) return found;
     const on = alongCurve(f, 0.5);
     return on && on.tangent ? { at: on.at, along: on.tangent } : null;
-  }
-
-  //! Rodrigues: \p v turned \p angle about \p axis. Four lines, and the only
-  //! reason a plane can be turned without a transform and a re-read.
-  function turnAbout(v, axis, angle) {
-    const k = V.norm(axis);
-    if (!k) return v;
-    const c = Math.cos(angle), s = Math.sin(angle);
-    const dot = v[0] * k[0] + v[1] * k[1] + v[2] * k[2];
-    const cross = V.cross(k, v);
-    return [v[0] * c + cross[0] * s + k[0] * dot * (1 - c),
-            v[1] * c + cross[1] * s + k[1] * dot * (1 - c),
-            v[2] * c + cross[2] * s + k[2] * dot * (1 - c)];
   }
 
   //! Where a line starts and which way it goes, whichever way it was asked
@@ -265,6 +222,26 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     return Math.max(1e-3, (box ? box.diagonal : 100) * 2e-3);
   };
 
+  /* ---------------------------------------------------------- the API
+
+     Every driver below builds its shape by calling one of these two and
+     nothing else. That is the whole point of them: a driver's job is to read
+     its arguments off the document and hand them over, so "point on a curve"
+     and "point at the centre" cannot end up with two different ideas of what a
+     curve is. The handful of things a factory needs that only the document
+     side knows how to do - reading a wire off a shape, meshing one - are
+     handed in rather than reached for, so the factories stay geometry.        */
+
+  const kit = {
+    wireOf: shape => wireFrom(shape),
+    verticesOf: shape => verticesOf(shape),
+    compoundOf: shapes => compoundOf(shapes),
+    tessellationOf: (shape, deflection) => tessellationOf(shape, deflection),
+    deflectionFor: shape => deflectionFor(shape),
+    smallestSolidExtent: shape => smallestSolidExtent(shape),
+  };
+  const { hybrid: HSF, shape: SF } = makeFactories(oc, kit);
+
   /* ------------------------------------------------------------ drivers */
 
   const release = shape => { try { shape.delete(); } catch (e) { /* already gone */ } };
@@ -291,76 +268,44 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   function alongCurve(f, t) {
     const shape = f && F.shape(f);
     if (!shape) return null;
-    try {
-      const curve = new oc.BRepAdaptor_CompCurve(wireOf(f, "curve"));
-      const first = curve.FirstParameter(), last = curve.LastParameter();
-      const u = first + (last - first) * Math.max(0, Math.min(1, t));
-      const p = curve.Value(u);
-      const d = new oc.gp_Vec();
-      curve.D1(u, new oc.gp_Pnt(), d);
-      const at = [p.X(), p.Y(), p.Z()];
-      const tangent = V.norm([d.X(), d.Y(), d.Z()]);
-      return { at, tangent };
-    } catch (e) { return null; }
+    try { return HSF.pointOnCurve(shape, t); } catch (e) { return null; }
   }
 
   //! The centre of a circular or elliptical edge, taken from the curve itself
   //! rather than from a bounding box - so half an arc still says where its
   //! centre is, which a box cannot.
   function centreOf(shape) {
-    const explorer = new oc.TopExp_Explorer(shape, EDGE, ANY);
-    while (explorer.More()) {
-      try {
-        const curve = new oc.BRepAdaptor_Curve(oc.TopoDS.Edge(explorer.Current()));
-        const kind = curve.GetType();
-        const at = kind === oc.GeomAbs_CurveType.GeomAbs_Circle ? curve.Circle().Location()
-                 : kind === oc.GeomAbs_CurveType.GeomAbs_Ellipse ? curve.Ellipse().Location()
-                 : null;
-        if (at) { explorer.delete(); return [at.X(), at.Y(), at.Z()]; }
-      } catch (e) { /* not a conic; try the next edge */ }
-      explorer.Next();
-    }
-    explorer.delete();
-    // Nothing round in it: the middle of what there is, which is what a person
-    // pointing at a rectangle means by its centre.
-    const box = new oc.Bnd_Box();
-    oc.BRepBndLib.Add(shape, box, true);
-    if (box.IsVoid()) return null;
-    const lo = box.CornerMin(), hi = box.CornerMax();
-    return [(lo.X() + hi.X()) / 2, (lo.Y() + hi.Y()) / 2, (lo.Z() + hi.Z()) / 2];
+    try { return HSF.pointCenter(shape); } catch (e) { return null; }
   }
 
-  //! The vertex of a shape that reaches furthest along a direction. Read off
-  //! the tessellation as well as the vertices, so the far end of a curved face
-  //! is found and not just its corners.
-  function extremeOf(shape, along, furthest = true) {
-    const dir = V.norm(along);
-    if (!dir) return null;
-    let best = null, score = furthest ? -Infinity : Infinity;
-    const consider = p => {
-      const d = p[0] * dir[0] + p[1] * dir[1] + p[2] * dir[2];
-      if (furthest ? d > score : d < score) { score = d; best = p; }
-    };
-    for (const p of verticesOf(shape)) consider(p);
-    // The same tessellation the viewport draws, so the far end found here is
-    // the far end you can see - a cylinder's side counts, not only its rims.
-    const tolerance = deflectionFor(shape);
-    const sweep = (run) => {
-      for (let i = 0; i + 2 < run.length; i += 3) consider([run[i], run[i + 1], run[i + 2]]);
+  //! Every point OpenCascade meshed a shape down to - the same tessellation the
+  //! viewport draws. Asking the drawn shape where its far end is beats asking
+  //! its vertices, because a cylinder's side is not a vertex.
+  function tessellationOf(shape, deflection) {
+    const out = [];
+    const push = run => {
+      for (let i = 0; i + 2 < run.length; i += 3) out.push([run[i], run[i + 1], run[i + 2]]);
     };
     try {
       if (countSubShapes(shape, FACE) > 0) {
-        const faces = oc.ReplicadMeshExtractor.extract(shape, tolerance, 0.3, false);
-        sweep(readFloats(faces.getVerticesPtr(), faces.getVerticesSize()));
+        const faces = oc.ReplicadMeshExtractor.extract(shape, deflection, 0.3, false);
+        push(readFloats(faces.getVerticesPtr(), faces.getVerticesSize()));
         faces.delete();
       }
       if (countSubShapes(shape, EDGE) > 0) {
-        const edges = oc.ReplicadEdgeMeshExtractor.extract(shape, tolerance, 0.3);
-        sweep(readFloats(edges.getLinesPtr(), edges.getLinesSize()));
+        const edges = oc.ReplicadEdgeMeshExtractor.extract(shape, deflection, 0.3);
+        push(readFloats(edges.getLinesPtr(), edges.getLinesSize()));
         edges.delete();
       }
     } catch (e) { /* the vertices alone, then */ }
-    return best;
+    return out;
+  }
+
+  //! The point of a shape that reaches furthest along a direction - vertices
+  //! and tessellation both, so the far end of a curved face is found and not
+  //! just its corners.
+  function extremeOf(shape, along, furthest = true) {
+    try { return HSF.pointExtreme(shape, along, furthest); } catch (e) { return null; }
   }
 
   //! Where two shapes come closest, and how far apart they are there. Zero
@@ -368,16 +313,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   //! with one call - which is as well, because this build carries no curve-to-
   //! curve intersector.
   function nearestBetween(a, b) {
-    try {
-      const gap = new oc.BRepExtrema_DistShapeShape();
-      gap.LoadS1(a);
-      gap.LoadS2(b);
-      gap.Perform();
-      if (!gap.IsDone() || gap.NbSolution() < 1) return null;
-      const p = gap.PointOnShape1(1), q = gap.PointOnShape2(1);
-      return { at: [(p.X() + q.X()) / 2, (p.Y() + q.Y()) / 2, (p.Z() + q.Z()) / 2],
-               gap: gap.Value() };
-    } catch (e) { return null; }
+    try { return HSF.pointBetween(a, b); } catch (e) { return null; }
   }
 
   const builders = {
@@ -429,8 +365,8 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
           rows = zip([F.reals(f, "x", 0), F.reals(f, "y", 0), F.reals(f, "z", 0)]);
         }
         const shape = rows.length === 1
-          ? new oc.BRepBuilderAPI_MakeVertex(pnt(rows[0])).Shape()
-          : compoundOf(rows.map(vertexAt));
+          ? HSF.pointVertex(rows[0])
+          : HSF.join(rows.map(row => HSF.pointVertex(row)));
         return { shape, data: points(rows) };
       },
     },
@@ -442,9 +378,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       // the parameters, where it is read from.
       build: f => {
         const v = [F.real(f, "dx"), F.real(f, "dy"), F.real(f, "dz")];
-        const unit = v.map(c => (c / length(v)) * 100);
-        return { shape: new oc.BRepBuilderAPI_MakeEdge(pnt([0, 0, 0]), pnt(unit)).Shape(),
-                 data: vectors([v]) };
+        return { shape: HSF.lineFrom([0, 0, 0], v, 0, 100), data: vectors([v]) };
       },
     },
 
@@ -471,18 +405,10 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
           // "until", and says so when the two never meet.
           const stop = planeAxis(F.reference(f, "until"));
           if (!stop) throw new Error("no plane to run into");
-          const origin = stop.Location(), normal = stop.Direction();
-          const n = [normal.X(), normal.Y(), normal.Z()];
-          const denominator = n[0] * along[0] + n[1] * along[1] + n[2] * along[2];
-          if (Math.abs(denominator) < CONFUSION)
-            throw new Error("the line runs along that plane, so it never reaches it");
-          const away = [origin.X() - at[0], origin.Y() - at[1], origin.Z() - at[2]];
-          to = (away[0] * n[0] + away[1] * n[1] + away[2] * n[2]) / denominator;
+          to = HSF.lineDistanceToPlane(at, along, stop);
           from = 0;
         }
-        if (Math.abs(to - from) < CONFUSION) throw new Error("the line has no length");
-        const end = k => [at[0] + along[0] * k, at[1] + along[1] * k, at[2] + along[2] * k];
-        return new oc.BRepBuilderAPI_MakeEdge(pnt(end(from)), pnt(end(to))).Shape();
+        return HSF.lineFrom(at, along, from, to);
       },
     },
 
@@ -494,9 +420,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       build: f => {
         const axis = planeAxis(f);
         if (!axis) throw new Error("that plane cannot be worked out");
-        const half = F.real(f, "size", 160) / 2;
-        const plane = new oc.gp_Pln(new oc.gp_Ax3(axis));
-        return new oc.BRepBuilderAPI_MakeFace(plane, -half, half, -half, half).Shape();
+        return HSF.planeFace(axis, F.real(f, "size", 160));
       },
     },
 
@@ -514,8 +438,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         const placement = plane
           ? new oc.gp_Ax2(pnt(corner), plane.Direction(), plane.XDirection())
           : new oc.gp_Ax2(pnt(corner), dir([0, 0, 1]));
-        return new oc.BRepPrimAPI_MakeBox(placement,
-          F.real(f, "dx", 80), F.real(f, "dy", 80), F.real(f, "dz", 80)).Shape();
+        return SF.box(placement, F.real(f, "dx", 80), F.real(f, "dy", 80), F.real(f, "dz", 80));
       },
     },
 
@@ -525,9 +448,8 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         if (F.real(f, "radius", 50) <= CONFUSION) return "radius must be positive";
         return null;
       },
-      build: f => new oc.BRepPrimAPI_MakeSphere(
-        new oc.gp_Ax2(pnt(readPoint(F.reference(f, "center"))), dir([0, 0, 1])),
-        F.real(f, "radius", 50)).Shape(),
+      build: f => SF.sphere(HSF.planeNormal(readPoint(F.reference(f, "center")), [0, 0, 1]),
+                            F.real(f, "radius", 50)),
     },
 
     Fillet: {
@@ -551,23 +473,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
                + trim(smallest) + " mm across, so the limit is " + trim(smallest / 2) + " mm";
         return null;
       },
-      build: f => {
-        const body = F.shape(F.reference(f, "body"));
-        const radius = F.real(f, "radius", 10);
-
-        const maker = new oc.BRepFilletAPI_MakeFillet(body, oc.ChFi3d_FilletShape.ChFi3d_Rational);
-        const explorer = new oc.TopExp_Explorer(body, EDGE, ANY);
-        while (explorer.More()) { maker.Add(radius, oc.TopoDS.Edge(explorer.Current())); explorer.Next(); }
-        explorer.delete();
-
-        maker.Build(new oc.Message_ProgressRange());
-        if (!maker.IsDone()) throw new Error("the fillet did not converge at " + trim(radius) + " mm");
-
-        const shape = maker.Shape();
-        if (!shape || shape.IsNull() || countSubShapes(shape, FACE) === 0)
-          throw new Error("the fillet produced an empty shape at " + trim(radius) + " mm");
-        return shape;
-      },
+      build: f => SF.fillet(F.shape(F.reference(f, "body")), F.real(f, "radius", 10)),
     },
   };
 
@@ -702,28 +608,21 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     throw new Error("the " + what + " must be a wire");
   }
 
+  //! The script API. A script is written by hand, so this reads the way a
+  //! person writes - `cylinder(r, h, { at, axis })` rather than a placement
+  //! built first - but every one of these that a factory already does is that
+  //! factory call with the arguments unpacked. The ergonomics are here; the
+  //! geometry is not.
   function shapeApi() {
     const api = {
-      box(dx, dy, dz, opts) {
-        return new oc.BRepPrimAPI_MakeBox(axisSystem(opts),
-          positive(dx, "box width"), positive(dy, "box depth"), positive(dz, "box height")).Shape();
-      },
+      box(dx, dy, dz, opts) { return SF.box(axisSystem(opts), dx, dy, dz); },
 
       //! A full cylinder, or a pie slice when an angle in degrees is given.
       cylinder(radius, height, opts = {}) {
-        const axis = axisSystem(opts);
-        const r = positive(radius, "cylinder radius");
-        const h = positive(height, "cylinder height");
-        return opts.angle === undefined
-          ? new oc.BRepPrimAPI_MakeCylinder(axis, r, h).Shape()
-          : new oc.BRepPrimAPI_MakeCylinder(axis, r, h,
-              positive(opts.angle, "cylinder angle") * Math.PI / 180).Shape();
+        return SF.cylinder(axisSystem(opts), radius, height, opts.angle);
       },
 
-      sphere(radius, opts) {
-        return new oc.BRepPrimAPI_MakeSphere(axisSystem(opts),
-          positive(radius, "sphere radius")).Shape();
-      },
+      sphere(radius, opts) { return SF.sphere(axisSystem(opts), radius); },
 
       //! An annular sector: a pie slice with its middle bored out. A stair
       //! tread, in other words.
@@ -798,33 +697,15 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       },
 
       ellipse(major, minor, opts = {}) {
-        const a = positive(major, "ellipse major radius");
-        const b = positive(minor, "ellipse minor radius");
-        if (b > a) throw new Error("an ellipse's minor radius cannot exceed its major radius");
-        const edge = new oc.BRepBuilderAPI_MakeEdge(
-          new oc.gp_Elips(axisSystem(opts), a, b)).Edge();
-        return new oc.BRepBuilderAPI_MakeWire(edge).Wire();
+        return HSF.ellipse(axisSystem(opts), major, minor);
       },
 
-      circle(radius, opts = {}) {
-        const edge = new oc.BRepBuilderAPI_MakeEdge(
-          new oc.gp_Circ(axisSystem(opts), positive(radius, "circle radius"))).Edge();
-        return new oc.BRepBuilderAPI_MakeWire(edge).Wire();
-      },
+      circle(radius, opts = {}) { return HSF.circle(axisSystem(opts), radius); },
 
       //! A wire through a run of points, closed or not.
       polyline(points, opts = {}) {
-        if (!Array.isArray(points) || points.length < 2)
-          throw new Error("a polyline needs at least two points");
-        const maker = new oc.BRepBuilderAPI_MakeWire();
-        const run = opts.closed ? points.concat([points[0]]) : points;
-        for (let i = 0; i < run.length - 1; i++) {
-          if (length([run[i + 1][0] - run[i][0], run[i + 1][1] - run[i][1],
-                      run[i + 1][2] - run[i][2]]) < CONFUSION) continue;
-          maker.Add(new oc.BRepBuilderAPI_MakeEdge(pnt(run[i]), pnt(run[i + 1])).Edge());
-        }
-        if (!maker.IsDone()) throw new Error("those points do not make a wire");
-        return maker.Wire();
+        if (!Array.isArray(points)) throw new Error("a polyline needs a list of points");
+        return HSF.polyline(points, opts.closed === true);
       },
 
       //! A rectangle centred on `at`, lying in the plane normal to `axis`. Its
@@ -849,7 +730,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
                             { closed: true });
       },
 
-      face(wire) { return new oc.BRepBuilderAPI_MakeFace(wire, true).Face(); },
+      face(wire) { return HSF.fill(wire); },
 
       //! Sweeps a profile along a spine. The default keeps the profile upright
       //! the whole way - a handrail does not roll over as it turns - which is
@@ -872,19 +753,16 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       //! Lofts through a run of profiles - the way the neck thread of the
       //! OpenCascade bottle is made.
       loft(profiles, opts = {}) {
-        const list = [].concat(profiles).filter(Boolean);
-        if (list.length < 2) throw new Error("a loft needs at least two profiles");
-        const maker = new oc.BRepOffsetAPI_ThruSections(
-          opts.solid !== false, opts.ruled === true, 1e-6);
-        for (const wire of list) maker.AddWire(asWire(wire, "loft profile"));
-        maker.Build(new oc.Message_ProgressRange());
-        if (!maker.IsDone()) throw new Error("the loft did not succeed");
-        return maker.Shape();
+        const list = [].concat(profiles).filter(Boolean).map(w => asWire(w, "loft profile"));
+        return opts.solid !== false ? SF.loft(list, opts.ruled === true)
+                                    : HSF.loft(list, opts.ruled === true);
       },
 
-      prism(face, along) {
-        return new oc.BRepPrimAPI_MakePrism(face,
-          new oc.gp_Vec(along[0], along[1], along[2]), false, true).Shape();
+      //! Sweeps a face or a wire straight along a vector. A face gives a body,
+      //! a wire gives a skin, which is the difference between the two factories
+      //! stated as an argument rather than as a choice.
+      prism(base, along) {
+        return base.ShapeType() === FACE ? SF.pad(base, along) : HSF.extrude(base, along);
       },
 
       //! A round tube through a run of points: a cylinder per segment, a sphere
@@ -908,52 +786,25 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       },
 
       move(shape, by) {
-        const trsf = new oc.gp_Trsf();
-        trsf.SetTranslation(new oc.gp_Vec(asNumber(by[0], "dx"), asNumber(by[1], "dy"),
-                                          asNumber(by[2], "dz")));
-        return shape.Moved(new oc.TopLoc_Location(trsf));
+        return SF.move(shape, [asNumber(by[0], "dx"), asNumber(by[1], "dy"),
+                               asNumber(by[2], "dz")]);
       },
 
       rotate(shape, degrees, opts = {}) {
-        const trsf = new oc.gp_Trsf();
-        trsf.SetRotation(new oc.gp_Ax1(pnt(opts.at || [0, 0, 0]), dir(opts.axis || [0, 0, 1])),
-                         asNumber(degrees, "angle") * Math.PI / 180);
-        return shape.Moved(new oc.TopLoc_Location(trsf));
+        return SF.rotate(shape, opts.at || [0, 0, 0], opts.axis || [0, 0, 1],
+                         asNumber(degrees, "angle"));
       },
 
-      cut(a, b) { return api.boolean(oc.BRepAlgoAPI_Cut, a, b, "cut"); },
-      fuse(a, b) { return api.boolean(oc.BRepAlgoAPI_Fuse, a, b, "fuse"); },
-      common(a, b) { return api.boolean(oc.BRepAlgoAPI_Common, a, b, "common"); },
-      boolean(Operation, a, b, name) {
-        const operation = new Operation(a, b, new oc.Message_ProgressRange());
-        operation.Build(new oc.Message_ProgressRange());
-        if (!operation.IsDone()) throw new Error("the " + name + " did not succeed");
-        return operation.Shape();
-      },
+      cut(a, b) { return SF.remove(a, b); },
+      fuse(a, b) { return SF.add(a, b); },
+      common(a, b) { return SF.intersect(a, b); },
 
-      fillet(shape, radius) {
-        const r = positive(radius, "fillet radius");
-        const smallest = smallestSolidExtent(shape);
-        if (Number.isFinite(smallest) && r >= smallest / 2)
-          throw new Error("a " + trim(r) + " mm fillet does not fit a body "
-                        + trim(smallest) + " mm across");
-        const maker = new oc.BRepFilletAPI_MakeFillet(shape, oc.ChFi3d_FilletShape.ChFi3d_Rational);
-        const explorer = new oc.TopExp_Explorer(shape, EDGE, ANY);
-        while (explorer.More()) { maker.Add(r, oc.TopoDS.Edge(explorer.Current())); explorer.Next(); }
-        explorer.delete();
-        maker.Build(new oc.Message_ProgressRange());
-        if (!maker.IsDone()) throw new Error("the fillet did not converge");
-        return maker.Shape();
-      },
+      fillet(shape, radius) { return SF.fillet(shape, radius); },
 
       compound(shapes) {
         const list = [].concat(shapes).filter(Boolean);
         if (!list.length) throw new Error("nothing to assemble");
-        const builder = new oc.TopoDS_Builder();
-        const compound = new oc.TopoDS_Compound();
-        builder.MakeCompound(compound);
-        for (const shape of list) builder.Add(compound, shape);
-        return compound;
+        return SF.assemble(list);
       },
     };
     return api;
@@ -1234,8 +1085,10 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
 
   //! The wire of a curve-producing feature. An edge is promoted; anything else
   //! is refused by name rather than crashing the builder it was handed to.
-  function wireOf(source, what) {
-    const shape = source && F.shape(source);
+  //! Whatever a shape offers, as one wire. The factories take shapes, so this
+  //! is the form they are handed; the feature form below is the same thing with
+  //! the label read off first.
+  function wireFrom(shape, what = "curve") {
     if (!shape) throw new Error("the " + what + " has not been built");
     if (shape.ShapeType() === oc.TopAbs_ShapeEnum.TopAbs_WIRE) return oc.TopoDS.Wire(shape);
     if (shape.ShapeType() === oc.TopAbs_ShapeEnum.TopAbs_EDGE)
@@ -1248,6 +1101,8 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     if (!any) throw new Error("the " + what + " has no edges");
     return maker.Wire();
   }
+
+  const wireOf = (source, what) => wireFrom(source && F.shape(source), what);
 
   function firstFace(shape, what) {
     if (!shape) throw new Error("the " + what + " has not been built");
@@ -1297,12 +1152,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       if (F.real(f, "radius", 60) <= CONFUSION) return "radius must be positive";
       return null;
     },
-    build: f => {
-      const axis = planeAxis(F.reference(f, "plane"));
-      const edge = new oc.BRepBuilderAPI_MakeEdge(
-        new oc.gp_Circ(axis, F.real(f, "radius", 60))).Edge();
-      return new oc.BRepBuilderAPI_MakeWire(edge).Wire();
-    },
+    build: f => HSF.circle(planeAxis(F.reference(f, "plane")), F.real(f, "radius", 60)),
   };
 
   //! Catmull-Rom through the points, parameterised by index so the curve may
@@ -1332,7 +1182,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       ? "a polyline needs at least two points" : null,
     build: f => {
       const list = pointsOf(f, "points");
-      return { shape: shapeApi().polyline(list, { closed: Feature_choice(f, "closed") === 1 }),
+      return { shape: HSF.polyline(list, Feature_choice(f, "closed") === 1),
                data: points(list) };
     },
   };
@@ -2738,21 +2588,24 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       return null;
     },
     build: f => {
-      const api = shapeApi();
       const source = F.shape(F.reference(f, "profile"));
-      const solid = Feature_choice(f, "cap") === 0;
       const v = V.norm(readVector(F.reference(f, "direction")));
       const along = V.scale(v, F.real(f, "distance", 120));
 
-      // Solid or surface is a real choice, not a hint. A pad is swept from the
-      // faces of the profile - every one of them, so a sketch of six closed
-      // loops pads into six bodies rather than the first. A surface is swept
-      // from the wires, so the same sketch on "Surface" gives six tubes; a
-      // profile that arrived as a face has its own outlines taken back off it.
-      const bases = solid ? capped(f, source) : outlines(f, source);
-      if (!bases.length) throw new Error("the profile has nothing to extrude");
-      const swept = bases.map(base => api.prism(base, along));
-      return swept.length === 1 ? swept[0] : api.compound(swept);
+      // Solid or surface is a real choice, not a hint, and the two factories
+      // are where it is made. A pad is swept from the faces of the profile -
+      // every one of them, so a sketch of six closed loops pads into six bodies
+      // rather than the first. A surface is swept from the wires, so the same
+      // sketch on "Surface" gives six tubes; a profile that arrived as a face
+      // has its own outlines taken back off it.
+      if (Feature_choice(f, "cap") === 0) {
+        const faces = capped(f, source);
+        if (!faces.length) throw new Error("the profile has nothing to extrude");
+        return SF.pad(HSF.join(faces), along);
+      }
+      const wires = outlines(f, source);
+      if (!wires.length) throw new Error("the profile has nothing to extrude");
+      return HSF.extrude(HSF.join(wires), along);
     },
   };
 
@@ -2764,9 +2617,12 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         if (!F.shape(section)) return F.name(section) + " has not been built";
       return null;
     },
-    build: f => shapeApi().loft(
-      F.references(f, "sections").map(s => wireOf(s, "section")),
-      { solid: Feature_choice(f, "cap") === 0, ruled: Feature_choice(f, "ruled") === 1 }),
+    build: f => {
+      const sections = F.references(f, "sections").map(s => wireOf(s, "section"));
+      const ruled = Feature_choice(f, "ruled") === 1;
+      return Feature_choice(f, "cap") === 0 ? SF.loft(sections, ruled)
+                                            : HSF.loft(sections, ruled);
+    },
   };
 
   builders.Boolean = {
@@ -2781,10 +2637,9 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       return null;
     },
     build: f => {
-      const api = shapeApi();
       const a = F.shape(F.reference(f, "a")), b = F.shape(F.reference(f, "b"));
       const op = Feature_choice(f, "op");
-      const shape = op === 0 ? api.fuse(a, b) : op === 1 ? api.cut(a, b) : api.common(a, b);
+      const shape = op === 0 ? SF.add(a, b) : op === 1 ? SF.remove(a, b) : SF.intersect(a, b);
       if (countSubShapes(shape, FACE) === 0)
         throw new Error("the two bodies do not meet, so the result is empty");
       return shape;
@@ -2835,7 +2690,7 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       if (list.length < 2) throw new Error("nothing of that curve lands on the target");
       const smooth = Feature_choice(f, "fit") === 0;
       const run = smooth && list.length > 3 ? catmullRom(list, false, 3) : list;
-      return { shape: shapeApi().polyline(run, { closed: false }), data: points(list) };
+      return { shape: HSF.polyline(run, false), data: points(list) };
     },
   };
 
@@ -2951,7 +2806,11 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     kind: "wasm",
     description: "OpenCascade (WebAssembly), in this page",
 
-    async schema() { return schemaJson(); },
+    //! What this kernel is: its catalogue of nodes, and the API those nodes are
+    //! built out of. Two halves of one answer - a node is a driver and a driver
+    //! is one factory call - so they are published together and anything
+    //! reading the kernel, the node editor or the assistant, gets both.
+    async schema() { return { ...schemaJson(), api: factorySchema({ hybrid: HSF, shape: SF }) }; },
     async tree() { return { ok: true, tree: doc.treeJson() }; },
     async model() { return doc.modelJson(); },
 
