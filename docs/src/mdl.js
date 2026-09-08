@@ -57,7 +57,17 @@ export async function defaultRefs(ctx, type) {
   const picked = ((ctx.picked ? ctx.picked() : []) || [])
     .map(id => features.find(f => f.id === id)).filter(Boolean);
   const refs = {};
+  //! An argument only shown for one setting of a choice is only WIRED for that
+  //! setting. A point by coordinates has no curve to sit on, so guessing one for
+  //! it invents a dependency the driver never reads - and, in a document where
+  //! that curve is downstream, a cycle out of nothing.
+  const applies = arg => {
+    if (!arg.showWhen) return true;
+    const governs = (spec.args || []).find(a => a.key === arg.showWhen.key);
+    return !governs || governs.default === arg.showWhen.equals;
+  };
   for (const arg of (spec ? spec.args : [])) {
+    if (!applies(arg)) continue;
     // An input that gathers bodies is left empty: one section is not a loft, and
     // guessing the second is worse than guessing nothing. An input that takes
     // several wires but consumes nothing - the points of a polyline - is wired

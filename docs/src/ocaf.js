@@ -1482,26 +1482,85 @@ const when = (arg, key, equals) => ({ ...arg, showWhen: { key, equals } });
 //! ocaf/src/Schema.cxx entry for entry, GUIDs included.
 export const CATALOGUE = [
   /* ------------------------------------------------------------- datums */
+  //! One point node, not five. What it is a point OF is a choice on it, and the
+  //! arguments change with the choice - the way a CAD modeller has always done
+  //! it, and the reason the toolbar has one point button rather than a menu of
+  //! them. Every kind still produces a point, so nothing downstream cares which
+  //! one it was. Kind 0 is the plain one, so a file written before this loads
+  //! unchanged.
   { type: "Point", guid: "9a1b2c30-0001-4c00-9e00-caf000000001", category: "datum",
     produces: "point",
-    summary: "A location in space. Drives origins and centres. Wire a list of numbers "
-           + "into a coordinate and it becomes a row of points.",
-    args: [real("x", "X", 0, -2000, 2000, 0.5), real("y", "Y", 0, -2000, 2000, 0.5),
-           real("z", "Z", 0, -2000, 2000, 0.5)] },
+    summary: "A location in space, found whichever way suits: typed in, along a curve, "
+           + "the centre of a circle, the far end of something in a direction, or where "
+           + "two curves come closest. Wire a list of numbers into a coordinate and one "
+           + "point becomes a row of them.",
+    args: [choice("kind", "Point", ["Coordinates", "On a curve", "Centre of",
+                                    "Extreme along", "Between two curves"], 0),
+           when(real("x", "X", 0, -2000, 2000, 0.5), "kind", 0),
+           when(real("y", "Y", 0, -2000, 2000, 0.5), "kind", 0),
+           when(real("z", "Z", 0, -2000, 2000, 0.5), "kind", 0),
+           when(ref("curve", "Curve", ["curve"]), "kind", 1),
+           when(real("at", "Along it", 0.5, 0, 1, 0.01, ""), "kind", 1),
+           when(ref("of", "Circle or arc", ["curve"]), "kind", 2),
+           when(ref("shape", "Shape", ["curve", "plane", "solid", "mesh"]), "kind", 3),
+           when(ref("along", "Direction", ["vector"]), "kind", 3),
+           when(choice("end", "Which end", ["Furthest along", "Furthest back"], 0), "kind", 3),
+           when(ref("first", "First curve", ["curve"]), "kind", 4),
+           when(ref("second", "Second curve", ["curve"]), "kind", 4)] },
   { type: "Vector", guid: "9a1b2c30-0002-4c00-9e00-caf000000002", category: "datum",
     produces: "vector",
     summary: "A direction. Orients lines, planes and the solids placed on them.",
     args: [real("dx", "dX", 0, -100, 100, 0.1, ""), real("dy", "dY", 0, -100, 100, 0.1, ""),
            real("dz", "dZ", 1, -100, 100, 0.1, "")] },
+  //! One line node, the same way. What it runs between is a choice; how far it
+  //! runs is another. A line may be cut by a length either side of where it
+  //! starts, or stopped dead on a plane - which is what a construction line
+  //! usually wants and cannot say with a number.
   { type: "Line", guid: "9a1b2c30-0003-4c00-9e00-caf000000003", category: "datum",
     produces: "curve",
-    summary: "A bounded line: a start point, a direction, a length.",
-    args: [ref("origin", "Start point", ["point"]), ref("direction", "Direction", ["vector"]),
-           real("length", "Length", 100, 1, 4000, 1)] },
+    summary: "A straight line, found whichever way suits: from a point along a "
+           + "direction, between two points, normal to a plane, tangent to a curve, or "
+           + "the axis of a cylinder. Its ends are two lengths from where it starts, or "
+           + "a plane it runs into.",
+    args: [choice("kind", "Line", ["Point and direction", "Between two points",
+                                   "Normal to a plane", "Tangent to a curve",
+                                   "Axis of"], 0),
+           when(ref("origin", "Start point", ["point"]), "kind", 0),
+           when(ref("direction", "Direction", ["vector"]), "kind", 0),
+           when(ref("from", "From point", ["point"]), "kind", 1),
+           when(ref("to", "To point", ["point"]), "kind", 1),
+           when(ref("plane", "Plane", ["plane"]), "kind", 2),
+           when(ref("at", "Through point", ["point"]), "kind", 2),
+           when(ref("curve", "Curve", ["curve"]), "kind", 3),
+           when(real("along", "Along it", 0.5, 0, 1, 0.01, ""), "kind", 3),
+           when(ref("shape", "Cylinder or cone", ["solid", "plane"]), "kind", 4),
+           choice("limit", "Ends", ["Two lengths", "Onto a plane"], 0),
+           when(real("start", "Back to", 0, -4000, 4000, 1), "limit", 0),
+           when(real("length", "Forward to", 100, -4000, 4000, 1), "limit", 0),
+           when(ref("until", "Until", ["plane"]), "limit", 1)] },
+  //! And one plane node. Offsetting a plane, bisecting two, standing one on the
+  //! end of a curve and turning one about an axis are four different questions
+  //! with the same answer, so they are four settings of one node rather than
+  //! four nodes.
   { type: "Plane", guid: "9a1b2c30-0004-4c00-9e00-caf000000004", category: "datum",
     produces: "plane",
-    summary: "A planar datum: an origin point and a normal vector.",
-    args: [ref("origin", "Origin", ["point"]), ref("normal", "Normal", ["vector"]),
+    summary: "A planar datum, found whichever way suits: an origin and a normal, square "
+           + "across a curve, offset from another plane, halfway between two, or one "
+           + "turned about an axis.",
+    args: [choice("kind", "Plane", ["Origin and normal", "Normal to a curve",
+                                    "Offset from a plane", "Between two planes",
+                                    "Turned about an axis"], 0),
+           when(ref("origin", "Origin", ["point"]), "kind", 0),
+           when(ref("normal", "Normal", ["vector"]), "kind", 0),
+           when(ref("curve", "Curve", ["curve"]), "kind", 1),
+           when(real("at", "Along it", 0.5, 0, 1, 0.01, ""), "kind", 1),
+           when(ref("from", "Plane", ["plane"]), "kind", 2),
+           when(real("offset", "Offset", 100, -4000, 4000, 1), "kind", 2),
+           when(ref("a", "First plane", ["plane"]), "kind", 3),
+           when(ref("b", "Second plane", ["plane"]), "kind", 3),
+           when(ref("turn", "Plane", ["plane"]), "kind", 4),
+           when(ref("axis", "Axis", ["vector", "curve"]), "kind", 4),
+           when(real("angle", "Angle", 45, -360, 360, 1, "°"), "kind", 4),
            real("size", "Display size", 160, 10, 2000, 5)] },
 
   /* --------------------------------------------------------------- data
@@ -2114,7 +2173,10 @@ export const F = {
     return label;
   },
 
-  resultLabel: (f, create = false) => f.findChild(RESULT_TAG, create),
+  resultLabel: (f, create = false) => (f ? f.findChild(RESULT_TAG, create) : null),
+  //! What a feature built, or null. Asking an input that is not wired what it
+  //! built is a fair question with a plain answer - and since an argument shown
+  //! only for one setting of a choice is routinely unwired, it is asked often.
   shape(f) {
     const result = F.resultLabel(f);
     return result ? result.attr.TNaming_NamedShape || null : null;

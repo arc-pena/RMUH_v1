@@ -53,18 +53,175 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
     norm(a) { const l = Math.hypot(a[0], a[1], a[2]); return l < 1e-9 ? null : V.scale(a, 1 / l); },
   };
-  const readPoint = f => (f && F.spec(f) && F.spec(f).type === "Point")
-    ? [F.real(f, "x"), F.real(f, "y"), F.real(f, "z")] : null;
-  const readVector = f => (f && F.spec(f) && F.spec(f).type === "Vector")
-    ? [F.real(f, "dx"), F.real(f, "dy"), F.real(f, "dz")] : null;
+  //! The point a feature stands for, read from what it computed rather than
+  //! from its arguments. An input that says it accepts "point" then really does
+  //! accept any of them - a Point of any kind, a point off a curve, a draped
+  //! site - instead of only the one feature type that happened to spell its
+  //! coordinates x, y and z.
+  const readPoint = f => {
+    const data = f && F.data(f);
+    return data && data.kind === "point" && data.values.length >= 3
+      ? [data.values[0], data.values[1], data.values[2]] : null;
+  };
+  const readVector = f => {
+    const data = f && F.data(f);
+    return data && data.kind === "vector" && data.values.length >= 3
+      ? [data.values[0], data.values[1], data.values[2]] : null;
+  };
 
-  //! A plane datum resolved to a gp_Ax2, or null when its inputs are missing.
-  function planeAxis(planeFeature) {
-    if (!planeFeature || F.spec(planeFeature).type !== "Plane") return null;
-    const origin = readPoint(F.reference(planeFeature, "origin"));
-    const normal = readVector(F.reference(planeFeature, "normal"));
-    if (!origin || !normal || length(normal) < CONFUSION) return null;
-    return new oc.gp_Ax2(pnt(origin), dir(normal));
+  //! A plane datum resolved, whichever way it was asked for. One answer, not
+  //! two: either the frame or the sentence saying why there isn't one. A flag
+  //! that switched between them could not survive being called recursively -
+  //! "fine" and "broken" both came back as null - so it does not exist.
+  function resolvePlane(f) {
+    const no = why => ({ ax: null, why });
+    if (!f || F.spec(f).type !== "Plane") return no("that is not a plane");
+    const frame = (at, normal, xdir) => {
+      if (!at || !normal) return no("that plane cannot be worked out");
+      const n = V.norm(normal);
+      if (!n) return no("the normal has no direction");
+      // gp_Ax2 projects the X direction onto the plane, so a rough one will do
+      // - but it must not be along the normal.
+      const across = xdir && V.norm(xdir);
+      const usable = across
+        && Math.abs(across[0] * n[0] + across[1] * n[1] + across[2] * n[2]) < 0.999;
+      return { ax: usable ? new oc.gp_Ax2(pnt(at), dir(n), dir(across))
+                          : new oc.gp_Ax2(pnt(at), dir(n)), why: null };
+    };
+
+    switch (Feature_choice(f, "kind")) {
+      case 1: {                                   // square across a curve
+        const curve = F.reference(f, "curve");
+        if (!F.shape(curve)) return no("no curve to stand across");
+        const on = alongCurve(curve, F.real(f, "at", 0.5));
+        if (!on || !on.tangent) return no("that curve cannot be walked along");
+        return frame(on.at, on.tangent);
+      }
+      case 2: {                                   // offset from another plane
+        const parent = resolvePlane(F.reference(f, "from"));
+        if (!parent.ax) return no(parent.why || "no plane to offset from");
+        const n = parent.ax.Direction(), at = parent.ax.Location(), x = parent.ax.XDirection();
+        const step = F.real(f, "offset", 100);
+        return frame([at.X() + n.X() * step, at.Y() + n.Y() * step, at.Z() + n.Z() * step],
+                     [n.X(), n.Y(), n.Z()], [x.X(), x.Y(), x.Z()]);
+      }
+      case 3: {                                   // halfway between two planes
+        const a = resolvePlane(F.reference(f, "a"));
+        const b = resolvePlane(F.reference(f, "b"));
+        if (!a.ax || !b.ax) return no(a.why || b.why || "two planes are needed");
+        const na = a.ax.Direction(), nb = b.ax.Direction();
+        const pa = a.ax.Location(), pb = b.ax.Location();
+        // Facing each other and facing the same way both make sense; take the
+        // nearer of the two so the bisector never flips as one plane turns.
+        const sign = na.X() * nb.X() + na.Y() * nb.Y() + na.Z() * nb.Z() < 0 ? -1 : 1;
+        const between = [na.X() + nb.X() * sign, na.Y() + nb.Y() * sign, na.Z() + nb.Z() * sign];
+        if (length(between) < CONFUSION) return no("those two planes are back to back");
+        return frame([(pa.X() + pb.X()) / 2, (pa.Y() + pb.Y()) / 2, (pa.Z() + pb.Z()) / 2],
+                     between);
+      }
+      case 4: {                                   // turned about an axis
+        const parent = resolvePlane(F.reference(f, "turn"));
+        if (!parent.ax) return no(parent.why || "no plane to turn");
+        const spin = axisOf(F.reference(f, "axis"));
+        if (!spin) return no("an axis is needed to turn about");
+        const angle = F.real(f, "angle", 45) * Math.PI / 180;
+        const at = parent.ax.Location(), n = parent.ax.Direction();
+        return frame([at.X(), at.Y(), at.Z()],
+                     turnAbout([n.X(), n.Y(), n.Z()], spin.along, angle));
+      }
+      default: {                                  // an origin and a normal
+        const origin = readPoint(F.reference(f, "origin"));
+        const normal = readVector(F.reference(f, "normal"));
+        if (!origin) return no("origin point is missing");
+        if (!normal || length(normal) < CONFUSION) return no("normal vector is missing or null");
+        return frame(origin, normal);
+      }
+    }
+  }
+
+  //! The frame, or null - what every driver that stands something on a plane
+  //! has always asked for.
+  const planeAxis = f => resolvePlane(f).ax;
+  //! And why there isn't one, for the precondition to say out loud.
+  const planeTrouble = f => resolvePlane(f).why;
+
+  //! A direction, from a vector or from whatever a curve happens to run along.
+  //! Turning a plane wants one and so does an axis of revolution, and neither
+  //! cares which of the two it was given.
+  function axisOf(f) {
+    const straight = readVector(f);
+    if (straight && length(straight) > CONFUSION)
+      return { at: [0, 0, 0], along: V.norm(straight) };
+    const shape = f && F.shape(f);
+    if (!shape) return null;
+    const ends = verticesOf(shape);
+    if (ends.length >= 2) {
+      const along = V.norm([ends[ends.length - 1][0] - ends[0][0],
+                            ends[ends.length - 1][1] - ends[0][1],
+                            ends[ends.length - 1][2] - ends[0][2]]);
+      if (along) return { at: ends[0], along };
+    }
+    const on = alongCurve(f, 0.5);
+    return on && on.tangent ? { at: on.at, along: on.tangent } : null;
+  }
+
+  //! Rodrigues: \p v turned \p angle about \p axis. Four lines, and the only
+  //! reason a plane can be turned without a transform and a re-read.
+  function turnAbout(v, axis, angle) {
+    const k = V.norm(axis);
+    if (!k) return v;
+    const c = Math.cos(angle), s = Math.sin(angle);
+    const dot = v[0] * k[0] + v[1] * k[1] + v[2] * k[2];
+    const cross = V.cross(k, v);
+    return [v[0] * c + cross[0] * s + k[0] * dot * (1 - c),
+            v[1] * c + cross[1] * s + k[1] * dot * (1 - c),
+            v[2] * c + cross[2] * s + k[2] * dot * (1 - c)];
+  }
+
+  //! Where a line starts and which way it goes, whichever way it was asked
+  //! for. Same shape of answer as the plane, for the same reason.
+  function resolveLine(f) {
+    const no = why => ({ ray: null, why });
+    const ray = (at, along) => {
+      const unit = V.norm(along);
+      if (!at || !unit) return no("that line has no direction");
+      return { ray: { at, along: unit }, why: null };
+    };
+    switch (Feature_choice(f, "kind")) {
+      case 1: {
+        const a = readPoint(F.reference(f, "from")), b = readPoint(F.reference(f, "to"));
+        if (!a || !b) return no("two points are needed");
+        const along = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        if (length(along) < CONFUSION) return no("those two points are the same point");
+        return ray(a, along);
+      }
+      case 2: {
+        const plane = resolvePlane(F.reference(f, "plane"));
+        if (!plane.ax) return no(plane.why || "no plane to stand on");
+        const n = plane.ax.Direction(), at = plane.ax.Location();
+        const through = readPoint(F.reference(f, "at"));
+        return ray(through || [at.X(), at.Y(), at.Z()], [n.X(), n.Y(), n.Z()]);
+      }
+      case 3: {
+        const curve = F.reference(f, "curve");
+        if (!F.shape(curve)) return no("no curve to be tangent to");
+        const on = alongCurve(curve, F.real(f, "along", 0.5));
+        if (!on || !on.tangent) return no("that curve cannot be walked along");
+        return ray(on.at, on.tangent);
+      }
+      case 4: {
+        const spin = axisOf(F.reference(f, "shape"));
+        if (!spin) return no("nothing there has an axis");
+        return ray(spin.at, spin.along);
+      }
+      default: {
+        const at = readPoint(F.reference(f, "origin"));
+        const along = readVector(F.reference(f, "direction"));
+        if (!at) return no("start point is missing");
+        if (!along || length(along) < CONFUSION) return no("direction vector is missing or null");
+        return ray(at, along);
+      }
+    }
   }
 
   function countSubShapes(shape, kind) {
@@ -129,13 +286,148 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     return kernelMessage(err);
   }
 
+  //! Where a curve is, a fraction of the way along it. The whole wire, not one
+  //! edge, so a chained profile reads as one curve the way it looks.
+  function alongCurve(f, t) {
+    const shape = f && F.shape(f);
+    if (!shape) return null;
+    try {
+      const curve = new oc.BRepAdaptor_CompCurve(wireOf(f, "curve"));
+      const first = curve.FirstParameter(), last = curve.LastParameter();
+      const u = first + (last - first) * Math.max(0, Math.min(1, t));
+      const p = curve.Value(u);
+      const d = new oc.gp_Vec();
+      curve.D1(u, new oc.gp_Pnt(), d);
+      const at = [p.X(), p.Y(), p.Z()];
+      const tangent = V.norm([d.X(), d.Y(), d.Z()]);
+      return { at, tangent };
+    } catch (e) { return null; }
+  }
+
+  //! The centre of a circular or elliptical edge, taken from the curve itself
+  //! rather than from a bounding box - so half an arc still says where its
+  //! centre is, which a box cannot.
+  function centreOf(shape) {
+    const explorer = new oc.TopExp_Explorer(shape, EDGE, ANY);
+    while (explorer.More()) {
+      try {
+        const curve = new oc.BRepAdaptor_Curve(oc.TopoDS.Edge(explorer.Current()));
+        const kind = curve.GetType();
+        const at = kind === oc.GeomAbs_CurveType.GeomAbs_Circle ? curve.Circle().Location()
+                 : kind === oc.GeomAbs_CurveType.GeomAbs_Ellipse ? curve.Ellipse().Location()
+                 : null;
+        if (at) { explorer.delete(); return [at.X(), at.Y(), at.Z()]; }
+      } catch (e) { /* not a conic; try the next edge */ }
+      explorer.Next();
+    }
+    explorer.delete();
+    // Nothing round in it: the middle of what there is, which is what a person
+    // pointing at a rectangle means by its centre.
+    const box = new oc.Bnd_Box();
+    oc.BRepBndLib.Add(shape, box, true);
+    if (box.IsVoid()) return null;
+    const lo = box.CornerMin(), hi = box.CornerMax();
+    return [(lo.X() + hi.X()) / 2, (lo.Y() + hi.Y()) / 2, (lo.Z() + hi.Z()) / 2];
+  }
+
+  //! The vertex of a shape that reaches furthest along a direction. Read off
+  //! the tessellation as well as the vertices, so the far end of a curved face
+  //! is found and not just its corners.
+  function extremeOf(shape, along, furthest = true) {
+    const dir = V.norm(along);
+    if (!dir) return null;
+    let best = null, score = furthest ? -Infinity : Infinity;
+    const consider = p => {
+      const d = p[0] * dir[0] + p[1] * dir[1] + p[2] * dir[2];
+      if (furthest ? d > score : d < score) { score = d; best = p; }
+    };
+    for (const p of verticesOf(shape)) consider(p);
+    // The same tessellation the viewport draws, so the far end found here is
+    // the far end you can see - a cylinder's side counts, not only its rims.
+    const tolerance = deflectionFor(shape);
+    const sweep = (run) => {
+      for (let i = 0; i + 2 < run.length; i += 3) consider([run[i], run[i + 1], run[i + 2]]);
+    };
+    try {
+      if (countSubShapes(shape, FACE) > 0) {
+        const faces = oc.ReplicadMeshExtractor.extract(shape, tolerance, 0.3, false);
+        sweep(readFloats(faces.getVerticesPtr(), faces.getVerticesSize()));
+        faces.delete();
+      }
+      if (countSubShapes(shape, EDGE) > 0) {
+        const edges = oc.ReplicadEdgeMeshExtractor.extract(shape, tolerance, 0.3);
+        sweep(readFloats(edges.getLinesPtr(), edges.getLinesSize()));
+        edges.delete();
+      }
+    } catch (e) { /* the vertices alone, then */ }
+    return best;
+  }
+
+  //! Where two shapes come closest, and how far apart they are there. Zero
+  //! means they cross, so this answers "the intersection" and "the near point"
+  //! with one call - which is as well, because this build carries no curve-to-
+  //! curve intersector.
+  function nearestBetween(a, b) {
+    try {
+      const gap = new oc.BRepExtrema_DistShapeShape();
+      gap.LoadS1(a);
+      gap.LoadS2(b);
+      gap.Perform();
+      if (!gap.IsDone() || gap.NbSolution() < 1) return null;
+      const p = gap.PointOnShape1(1), q = gap.PointOnShape2(1);
+      return { at: [(p.X() + q.X()) / 2, (p.Y() + q.Y()) / 2, (p.Z() + q.Z()) / 2],
+               gap: gap.Value() };
+    } catch (e) { return null; }
+  }
+
   const builders = {
     //! Wire a list of numbers into a coordinate and one point becomes a row of
     //! them: the shortest list repeats its last value, which is the rule
     //! everything downstream of here follows.
+    //! One node, five ways of finding a point. Whichever it is, the answer goes
+    //! out as a point and nothing downstream knows the difference - which is
+    //! the reason for having one node rather than five.
     Point: {
+      precondition: f => {
+        const kind = Feature_choice(f, "kind");
+        if (kind === 1 && !F.shape(F.reference(f, "curve"))) return "no curve to sit on";
+        if (kind === 2 && !F.shape(F.reference(f, "of"))) return "nothing to find the centre of";
+        if (kind === 3) {
+          if (!F.shape(F.reference(f, "shape"))) return "nothing to measure";
+          if (!readVector(F.reference(f, "along"))) return "a direction is needed to be extreme along";
+        }
+        if (kind === 4 && !(F.shape(F.reference(f, "first")) && F.shape(F.reference(f, "second"))))
+          return "two curves are needed";
+        return null;
+      },
       build: f => {
-        const rows = zip([F.reals(f, "x", 0), F.reals(f, "y", 0), F.reals(f, "z", 0)]);
+        const kind = Feature_choice(f, "kind");
+        let rows = null;
+        if (kind === 1) {
+          const on = alongCurve(F.reference(f, "curve"), F.real(f, "at", 0.5));
+          if (!on) throw new Error("that curve cannot be walked along");
+          rows = [on.at];
+        } else if (kind === 2) {
+          const at = centreOf(F.shape(F.reference(f, "of")));
+          if (!at) throw new Error("nothing round to take the centre of");
+          rows = [at];
+        } else if (kind === 3) {
+          const at = extremeOf(F.shape(F.reference(f, "shape")),
+                               readVector(F.reference(f, "along")),
+                               Feature_choice(f, "end") === 0);
+          if (!at) throw new Error("nothing to be extreme");
+          rows = [at];
+        } else if (kind === 4) {
+          const meet = nearestBetween(F.shape(F.reference(f, "first")),
+                                      F.shape(F.reference(f, "second")));
+          if (!meet) throw new Error("those two never come near each other");
+          rows = [meet.at];
+        } else {
+          // Coordinates. Wire a list of numbers into one and a point becomes a
+          // row of them: the shortest list repeats its last value, the rule
+          // everything downstream of here follows.
+          rows = zip([F.reals(f, "x", 0), F.reals(f, "y", 0), F.reals(f, "z", 0)]);
+        }
         const shape = rows.length === 1
           ? new oc.BRepBuilderAPI_MakeVertex(pnt(rows[0])).Shape()
           : compoundOf(rows.map(vertexAt));
@@ -156,31 +448,52 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       },
     },
 
+    //! Where the line runs is one question; how far it runs is another, and the
+    //! second one has an answer a number cannot give - stop on that plane. So
+    //! the two are separate settings and every combination of them works.
     Line: {
-      precondition: f => {
-        if (!readPoint(F.reference(f, "origin"))) return "start point is missing";
-        const v = readVector(F.reference(f, "direction"));
-        if (!v || length(v) < CONFUSION) return "direction vector is missing or null";
-        if (F.real(f, "length", 100) <= CONFUSION) return "length must be positive";
-        return null;
-      },
+      precondition: f => resolveLine(f).why,
       build: f => {
-        const origin = readPoint(F.reference(f, "origin"));
-        const v = readVector(F.reference(f, "direction"));
-        const scale = F.real(f, "length", 100) / length(v);
-        const end = [origin[0] + v[0] * scale, origin[1] + v[1] * scale, origin[2] + v[2] * scale];
-        return new oc.BRepBuilderAPI_MakeEdge(pnt(origin), pnt(end)).Shape();
+        const answer = resolveLine(f);
+        if (!answer.ray) throw new Error(answer.why);
+        const { at, along } = answer.ray;
+        // Between two points means between them: the ends are the points, so
+        // the lengths are read off rather than typed in.
+        let from = F.real(f, "start", 0), to = F.real(f, "length", 100);
+        if (Feature_choice(f, "kind") === 1 && Feature_choice(f, "limit") === 0) {
+          const a = readPoint(F.reference(f, "from")), b = readPoint(F.reference(f, "to"));
+          from = 0;
+          to = length([b[0] - a[0], b[1] - a[1], b[2] - a[2]]);
+        }
+        if (Feature_choice(f, "limit") === 1) {
+          // Run into the plane instead of to a length: how far along the
+          // direction the plane is, which is the only sensible reading of
+          // "until", and says so when the two never meet.
+          const stop = planeAxis(F.reference(f, "until"));
+          if (!stop) throw new Error("no plane to run into");
+          const origin = stop.Location(), normal = stop.Direction();
+          const n = [normal.X(), normal.Y(), normal.Z()];
+          const denominator = n[0] * along[0] + n[1] * along[1] + n[2] * along[2];
+          if (Math.abs(denominator) < CONFUSION)
+            throw new Error("the line runs along that plane, so it never reaches it");
+          const away = [origin.X() - at[0], origin.Y() - at[1], origin.Z() - at[2]];
+          to = (away[0] * n[0] + away[1] * n[1] + away[2] * n[2]) / denominator;
+          from = 0;
+        }
+        if (Math.abs(to - from) < CONFUSION) throw new Error("the line has no length");
+        const end = k => [at[0] + along[0] * k, at[1] + along[1] * k, at[2] + along[2] * k];
+        return new oc.BRepBuilderAPI_MakeEdge(pnt(end(from)), pnt(end(to))).Shape();
       },
     },
 
     Plane: {
       precondition: f => {
-        if (!planeAxis(f)) return "origin point or normal vector is missing";
         if (F.real(f, "size", 160) <= CONFUSION) return "display size must be positive";
-        return null;
+        return planeTrouble(f);
       },
       build: f => {
         const axis = planeAxis(f);
+        if (!axis) throw new Error("that plane cannot be worked out");
         const half = F.real(f, "size", 160) / 2;
         const plane = new oc.gp_Pln(new oc.gp_Ax3(axis));
         return new oc.BRepBuilderAPI_MakeFace(plane, -half, half, -half, half).Shape();
