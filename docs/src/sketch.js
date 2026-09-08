@@ -39,6 +39,12 @@ export const SKETCH_RELATIONS = [
     hint: "two lines meet at a right angle" },
   { key: "tangent",       label: "Tangent",       takes: 2, of: "any",
     hint: "a line touches a circle, or two circles touch" },
+  //! Three, and they are not the same kind of thing: the point first, then the
+  //! two curves it sits on. Every other relation here moves what it names to
+  //! satisfy itself; this one moves only the point, because a crossing is a
+  //! fact about the two curves rather than something to be negotiated with.
+  { key: "intersect",     label: "Intersection",  takes: 3, of: "point and two",
+    hint: "a point sits where two curves cross" },
 ];
 
 export const EMPTY_SKETCH = { elements: [], constraints: [] };
@@ -338,8 +344,12 @@ export function sketchRelationMarks(drawing) {
   return (drawing.constraints || []).map((c, at) => {
     const points = (c.of || []).map(spot).filter(Boolean);
     if (!points.length) return null;
-    const p = points.reduce((sum, q) => [sum[0] + q[0], sum[1] + q[1]], [0, 0])
-                    .map(v => v / points.length);
+    // Most marks sit between what they govern. An intersection sits ON its
+    // point: that IS the constraint, and averaging it with the middles of two
+    // long curves would put the mark somewhere neither of them goes.
+    const p = c.type === "intersect" ? points[0]
+      : points.reduce((sum, q) => [sum[0] + q[0], sum[1] + q[1]], [0, 0])
+              .map(v => v / points.length);
     return { at, type: c.type, of: c.of, p, on: points };
   }).filter(Boolean);
 }
@@ -647,8 +657,65 @@ function applyRelation(relation, index, handle, moveTo, held = new Set()) {
       }
       return 0;
     }
+    //! The point goes to the crossing. Two curves may cross more than once - a
+    //! line through a circle crosses it twice - so it goes to the crossing
+    //! NEAREST where it already is, which is the one you pointed at when you
+    //! asked for it and the one it stays on as the curves move.
+    case "intersect": {
+      const point = handle(of[0]);
+      const a = index.get(of[1]), b = index.get(of[2]);
+      if (!point || !a || !b) return 0;
+      const at = crossings(a, b);
+      if (!at.length) return 0;
+      let best = at[0], reach = Infinity;
+      for (const p of at) {
+        const away = sub(p, point.p);
+        const d = dot(away, away);
+        if (d < reach) { reach = d; best = p; }
+      }
+      moveTo(point, sketchRound(best));
+      return reach;
+    }
     default: return 0;
   }
+}
+
+//! Where two elements of a drawing cross, by id. The viewport asks so it can
+//! put a point at one before handing it to the solver; the solver asks the
+//! same question of the same code, which is why the point it draws and the
+//! point it settles on are the same point.
+export function sketchCrossings(drawing, a, b) {
+  const index = byId(drawing);
+  const one = index.get(a), two = index.get(b);
+  return one && two ? crossings(one, two).map(sketchRound) : [];
+}
+
+//! Every place two elements cross, found on the polylines they are drawn as.
+//! Sampled rather than solved - a circle is 128 chords here - which puts a
+//! crossing within a fraction of a millimetre at any scale a sketch is drawn
+//! at, and works the same for an arc, a spline and an oblong as for a line.
+function crossings(a, b) {
+  const one = sketchOutline(a, 128), two = sketchOutline(b, 128);
+  const out = [];
+  for (let i = 0; i + 1 < one.length; i++)
+    for (let j = 0; j + 1 < two.length; j++) {
+      const hit = segmentsMeet(one[i], one[i + 1], two[j], two[j + 1]);
+      if (hit) out.push(hit);
+    }
+  return out;
+}
+
+//! Where two segments cross, or null. Parallel is null, and so is a crossing
+//! that would be off the end of either.
+function segmentsMeet(p1, p2, p3, p4) {
+  const r = sub(p2, p1), s = sub(p4, p3);
+  const denominator = r[0] * s[1] - r[1] * s[0];
+  if (Math.abs(denominator) < 1e-12) return null;
+  const away = sub(p3, p1);
+  const t = (away[0] * s[1] - away[1] * s[0]) / denominator;
+  const u = (away[0] * r[1] - away[1] * r[0]) / denominator;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return add(p1, mul(r, t));
 }
 
 /* ------------------------------------------------------------- housekeeping */

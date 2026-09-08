@@ -7,7 +7,8 @@
 // off a sketch is a solid with a volume you can predict on paper.
 import { createWasmKernel } from "../src/wasm-kernel.js";
 import { EMPTY_SKETCH, SKETCH_CLICKS, SKETCH_TYPES, readSketch, sketchDirectionAt,
-         sketchElement, sketchEnds, sketchLoops, sketchRelation, sketchSummary,
+         sketchCrossings, sketchElement, sketchEnds, sketchLoops, sketchRelation,
+         sketchRelationMarks, sketchSummary,
          sketchTangentArc, solveSketch } from "../src/sketch.js";
 import { Mdl } from "../src/mdl.js";
 import { readFileSync } from "fs";
@@ -357,6 +358,63 @@ console.log("\n12. the sample the sketcher ships with");
     (await measure("EX3", 1)) + " vs " + (chain * 40).toFixed(2));
   check("and the part is real geometry",
     (await kernel.mesh(["FI1"])).features[0].triangles > 2000);
+}
+
+console.log("\n13. a point held where two curves cross");
+{
+  // A line straight through a circle crosses it twice, so which crossing is
+  // meant matters: it is the one the point is already nearest, and it stays
+  // that one as the curves move.
+  const drawing = {
+    elements: [
+      { id: "L1", type: "line", a: [-200, 0], b: [200, 0] },
+      { id: "C1", type: "circle", c: [0, 0], r: 60 },
+      { id: "P1", type: "point", p: [40, 8] },
+    ],
+    constraints: [sketchRelation("intersect", ["P1.p", "L1", "C1"])],
+  };
+  const at = d => solveSketch(d, 12).drawing.elements.find(e => e.id === "P1").p;
+  const near = (p, want) => Math.abs(p[0] - want[0]) < 0.01 && Math.abs(p[1] - want[1]) < 0.01;
+  check("the point goes to the crossing it is nearest", near(at(drawing), [60, 0]),
+    JSON.stringify(at(drawing)));
+
+  const other = JSON.parse(JSON.stringify(drawing));
+  other.elements[2].p = [-40, 8];
+  check("started on the other side it takes the other crossing",
+    near(at(other), [-60, 0]), JSON.stringify(at(other)));
+
+  // The crossing is a fact about the two curves, so growing one moves the
+  // point and nothing else.
+  const bigger = JSON.parse(JSON.stringify(drawing));
+  bigger.elements[1].r = 150;
+  const moved = solveSketch(bigger, 12).drawing;
+  check("growing the circle takes the point with it",
+    near(moved.elements.find(e => e.id === "P1").p, [150, 0]),
+    JSON.stringify(moved.elements.find(e => e.id === "P1").p));
+  check("and neither curve was moved to suit it",
+    moved.elements[0].a[0] === -200 && moved.elements[1].c[0] === 0);
+
+  // Curves that never meet leave it alone rather than throwing it somewhere.
+  const apart = JSON.parse(JSON.stringify(drawing));
+  apart.elements[0].a = [-200, 500];
+  apart.elements[0].b = [200, 500];
+  const still = solveSketch(apart, 12).drawing.elements.find(e => e.id === "P1").p;
+  check("two that never meet leave the point where it was", near(still, [40, 8]),
+    JSON.stringify(still));
+
+  check("the mark sits on the point, not between the three things it names",
+    near(sketchRelationMarks(drawing)[0].p, [40, 8]),
+    JSON.stringify(sketchRelationMarks(drawing)[0].p));
+
+  check("a file that carries one reads it back",
+    readSketch(JSON.stringify(drawing)).constraints.length === 1);
+  check("and one written with too few names is dropped rather than half-read",
+    readSketch({ elements: drawing.elements,
+                 constraints: [{ type: "intersect", of: ["P1.p", "L1"] }] }).constraints.length === 0);
+
+  check("the crossings are found by id as well",
+    sketchCrossings(drawing, "L1", "C1").length === 2,
+    JSON.stringify(sketchCrossings(drawing, "L1", "C1")));
 }
 
 console.log(failures ? "\n" + failures + " failed" : "\nall checks passed");

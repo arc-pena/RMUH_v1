@@ -245,8 +245,14 @@ export const MDL_OPS = [
           ? sketchTangentArc(start, along, end, id) : null;
         drawing.elements.push(made || sketchElement("line", id, [start, end]));
       } else {
-        if (clicks.length < Math.max(2, wanted))
-          throw new Error(type + " needs " + (wanted || "at least two") + " points in \"at\"");
+        // A spline takes as many as it is given and wants at least two; every
+        // other kind wants exactly what SKETCH_CLICKS says. Demanding two of
+        // everything meant a point - which takes ONE click - could never be
+        // drawn through this op at all.
+        const least = wanted || 2;
+        if (clicks.length < least)
+          throw new Error(type + " needs " + (wanted ? wanted : "at least two")
+            + (least === 1 ? " point" : " points") + ' in "at"');
         drawing.elements.push(sketchElement(type, id, clicks));
       }
       return ctx.kernel.setSketch(edit.id, null, drawing);

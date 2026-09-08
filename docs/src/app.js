@@ -6,7 +6,7 @@ import { acceptsFrom, dataLines, SAMPLES, sliderSpan } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
 import { Agent, agentTrouble } from "./agent.js";
 import { SKETCH_CLICKS, SKETCH_RELATIONS, SKETCH_TYPES, nextSketchId, readSketch,
-         sketchDirectionAt, sketchElement, sketchHandleAt, sketchHandles,
+         sketchCrossings, sketchDirectionAt, sketchElement, sketchHandleAt, sketchHandles,
          sketchMoveHandle, sketchOutline, sketchRelationMarks,
          sketchTangentArc } from "./sketch.js";
 
@@ -918,7 +918,7 @@ function refreshSketch() {
     const size = snapReach() * 0.42;
     const glyph = new THREE.LineSegments(
       new THREE.BufferGeometry().setFromPoints(
-        RELATION_GLYPH[mark.type].map(([u, v]) =>
+        (RELATION_GLYPH[mark.type] || RELATION_GLYPH.coincident).map(([u, v]) =>
           sketchToWorld([mark.draw[0] + u * size, mark.draw[1] + v * size], frame))),
       new THREE.LineBasicMaterial({ color: colour, depthTest: false }));
     glyph.renderOrder = 8;
@@ -1008,8 +1008,8 @@ function sketchHint() {
   }
   if (sketcher.tool === "select") {
     if (sketcher.picked.length)
-      return sketcher.picked.length + " picked · apply a relation, or Esc";
-    return "select · drag an end to move it · click to pick, then relate";
+      return sketcher.picked.length + " picked · apply a relation, Delete, or Esc";
+    return "select · drag an end to move it · click to pick, then relate or Delete";
   }
   const wanted = SKETCH_CLICKS[sketcher.tool] || 0;
   const smooth = tangentHere();
@@ -1183,6 +1183,16 @@ function dropSketchHandle(event) {
 //! One thing picked in the drawing - an end, or a whole element. Shift adds
 //! and takes away; without it a pick is a set of one. Written once because a
 //! click on a handle and a click on an element arrive by different roads.
+//! Delete on what is picked. A handle belongs to an element, so picking an end
+//! and pressing Delete takes the segment it is an end of - which is what a
+//! person who has just dragged that end means by it.
+function dropPicked() {
+  const gone = [...new Set(sketcher.picked.map(ref => String(ref).split(".")[0]))];
+  if (!gone.length) return;
+  sketcher.picked = [];
+  mdl.runAll(gone.map(element => ({ op: "erase", id: sketcher.id, element })));
+}
+
 function pickInSketch(want, add) {
   if (!want) { if (!add) sketcher.picked = []; refreshSketch(); return; }
   if (!add) {
@@ -1203,12 +1213,23 @@ function dropRelation() {
   edit({ op: "unrelate", id: sketcher.id, at });
 }
 
+//! How many of what a relation is waiting for. Intersection is the odd one:
+//! it takes three, but you only pick TWO - the curves - because the point is
+//! the thing it makes rather than a thing you had to have already.
+const relationWants = spec =>
+  spec.key === "intersect" ? { picks: 2, kind: "element", what: "curves" }
+  : spec.of === "handle" ? { picks: spec.takes, kind: "handle", what: "ends" }
+  : { picks: spec.takes, kind: "element",
+      what: spec.of === "line" ? "lines" : "elements" };
+
+const usableFor = spec => {
+  const wants = relationWants(spec);
+  return sketcher.picked.filter(p => p.includes(".") === (wants.kind === "handle"));
+};
+
 const relationReady = key => {
   const spec = SKETCH_RELATIONS.find(r => r.key === key);
-  if (!spec) return false;
-  const wanted = spec.of === "handle";
-  const usable = sketcher.picked.filter(p => p.includes(".") === wanted);
-  return usable.length >= spec.takes;
+  return !!spec && usableFor(spec).length >= relationWants(spec).picks;
 };
 
 //! Select first, then say what should hold - the way every parametric sketcher
@@ -1217,17 +1238,35 @@ const relationReady = key => {
 function putRelation(key) {
   const spec = SKETCH_RELATIONS.find(r => r.key === key);
   if (!spec) return;
-  const wanted = spec.of === "handle";
-  const usable = sketcher.picked.filter(p => p.includes(".") === wanted);
-  if (usable.length < spec.takes) {
+  const wants = relationWants(spec);
+  const usable = usableFor(spec);
+  if (usable.length < wants.picks) {
     document.getElementById("sketch-hint").textContent =
-      spec.label + " · pick " + spec.takes + " "
-      + (wanted ? "ends" : spec.of === "line" ? "lines" : "elements") + " first";
+      spec.label + " · pick " + wants.picks + " " + wants.what + " first";
     return;
   }
-  const of = usable.slice(0, spec.takes);
+  const picked = usable.slice(0, wants.picks);
   sketcher.picked = [];
-  edit({ op: "relate", id: sketcher.id, type: key, of });
+  if (key !== "intersect") {
+    edit({ op: "relate", id: sketcher.id, type: key, of: picked });
+    return;
+  }
+  // The point is drawn first, at a crossing, and then held to it. Drawn there
+  // rather than anywhere and left to the solver, because two curves may cross
+  // twice and the one it starts nearest is the one it stays on.
+  const drawing = sketchDrawing();
+  const at = sketchCrossings(drawing, picked[0], picked[1]);
+  if (!at.length) {
+    document.getElementById("sketch-hint").textContent =
+      spec.label + " · those two do not cross";
+    refreshSketch();
+    return;
+  }
+  const id = nextSketchId(drawing);
+  mdl.runAll([
+    { op: "draw", id: sketcher.id, type: "point", at: [at[0]], as: id },
+    { op: "relate", id: sketcher.id, type: "intersect", of: [id + ".p", picked[0], picked[1]] },
+  ]);
 }
 
 /* -------------------------------------------------------------- the rail */
@@ -1459,6 +1498,8 @@ const RELATION_GLYPH = {
   tangent:    [[-0.9, -0.7], [0.9, -0.7],
                [-0.5, -0.7], [-0.5, -0.3], [-0.5, -0.3], [0, 0.3],
                [0, 0.3], [0.5, -0.3], [0.5, -0.3], [0.5, -0.7]],
+  // A cross: two strokes meeting where the point is.
+  intersect:  [[-0.85, -0.85], [0.85, 0.85], [-0.85, 0.85], [0.85, -0.85]],
 };
 
 const SKETCH_ICONS = {
@@ -1478,6 +1519,10 @@ const SKETCH_ICONS = {
   parallel: '<path d="M3.4 13.6L7.6 2.4M8.8 13.6L13 2.4" stroke="currentColor" stroke-width="1.4"/>',
   perpendicular: '<path d="M3 13h10M4.6 13V3" stroke="currentColor" stroke-width="1.4"/><path d="M4.6 10.6h2.4v2.4" fill="none" stroke="currentColor" stroke-width="1"/>',
   tangent: '<circle cx="9" cy="9" r="4.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M1.6 4.6h12.8" stroke="currentColor" stroke-width="1.4"/>',
+  // Two curves crossing, and the point that is the crossing.
+  intersect: '<path d="M2 3.2c4.6 0 4.6 9.6 9.2 9.6" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+           + '<path d="M2 12.8c4.6 0 4.6-9.6 9.2-9.6" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+           + '<circle cx="6.6" cy="8" r="2.1" fill="currentColor"/>',
 };
 
 const ICONS = {
@@ -3410,10 +3455,11 @@ addEventListener("keydown", event => {
   if (event.key === "t" || event.key === "T") toggleTree();
   if (event.key === "g" || event.key === "G") graph.toggle();
   if (event.key === "a" || event.key === "A") openAI(aiBar.hidden);
-  if (sketching() && sketcher.relation >= 0 &&
-      (event.key === "Delete" || event.key === "Backspace")) {
+  if (sketching() && (event.key === "Delete" || event.key === "Backspace")) {
+    // A relation's mark is drawn over the drawing and picked ahead of it, so
+    // Delete means the relation when one is picked and the segments otherwise.
     event.preventDefault();
-    dropRelation();
+    if (sketcher.relation >= 0) dropRelation(); else dropPicked();
     return;
   }
   if (event.key === "Enter" && sketching()) { endSketchRun(); return; }
