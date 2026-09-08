@@ -134,6 +134,29 @@ export function makeFactories(oc, kit) {
     return face.Face();
   };
 
+  //! A solid whose faces face out. A shell thickened from a surface whose
+  //! normals happen to point inwards comes back inside out - it measures a
+  //! NEGATIVE volume, and every boolean after it is then working with a void
+  //! rather than a body. Cheap to detect and cheap to put right.
+  const rightWayOut = shape => {
+    const props = new oc.GProp_GProps();
+    oc.BRepGProp.VolumeProperties(shape, props, false, false, false);
+    return props.Mass() < 0 ? shape.Reversed() : shape;
+  };
+
+  //! A surface moved along its own normal. Both factories reach for it - the
+  //! hybrid one to publish it, the solid one on its way to a thickness - so it
+  //! is declared once, here, rather than in either table.
+  const offsetSurfaceOf = (surface, distance) => {
+    if (Math.abs(distance) < CONFUSION) return surface;
+    const made = new oc.BRepOffsetAPI_MakeOffsetShape();
+    made.PerformByJoin(surface, distance, CONFUSION * 10,
+      oc.BRepOffset_Mode.BRepOffset_Skin, false, false,
+      oc.GeomAbs_JoinType.GeomAbs_Arc, false);
+    if (!made.IsDone()) throw new Error("that surface will not offset by that much");
+    return made.Shape();
+  };
+
   //! The one loft, used by both factories: a skin here, a body there.
   const thruSections = (sections, ruled, solid) => {
     if (sections.length < 2) throw new Error("a loft needs at least two sections");
@@ -419,6 +442,11 @@ export function makeFactories(oc, kit) {
         return shape;
       } },
 
+    { name: "offsetSurface", takes: "surface, distance", gives: "shape",
+      summary: "A surface moved a distance along its own normal - still a skin, not a "
+             + "body. What a thickness is measured from when it grows both ways.",
+      run: (surface, distance) => offsetSurfaceOf(surface, distance) },
+
     { name: "project", takes: "points, onto", gives: "points",
       summary: "Points pulled onto the nearest place on a shape. Sampling, not an "
              + "exact projection - this build carries no BRepProj_Projection - but "
@@ -549,17 +577,25 @@ export function makeFactories(oc, kit) {
       } },
 
     { name: "thickness", takes: "surface, thickness, both", gives: "solid",
-      summary: "A surface given a thickness, so a skin becomes a body. Either side "
-             + "of the surface, or all on one side.",
+      summary: "A surface given a thickness, so a skin becomes a body. Thickening is "
+             + "not offsetting: an offset surface is another skin, and it is "
+             + "MakeThickSolid that closes the two skins into something with a volume. "
+             + "Both sides moves the surface back half the thickness first, so the "
+             + "surface ends up down the middle of what it made. Which side a "
+             + "one-sided thickness grows towards is the surface's own normal; the "
+             + "sign of the thickness is how you say the other one.",
       run: (surface, thickness, both = false) => {
         const t = Math.abs(thickness);
         if (t < CONFUSION) throw new Error("the thickness must not be zero");
-        const made = new oc.BRepOffsetAPI_MakeOffsetShape();
-        made.PerformByJoin(surface, both ? t / 2 : t, CONFUSION * 10,
-          oc.BRepOffset_Mode.BRepOffset_Skin, false, false,
-          oc.GeomAbs_JoinType.GeomAbs_Arc, true);
+        const from = both ? offsetSurfaceOf(surface, -t / 2 * Math.sign(thickness || 1))
+                          : surface;
+        const made = new oc.BRepOffsetAPI_MakeThickSolid();
+        made.MakeThickSolidBySimple(from, thickness < 0 ? -t : t);
         if (!made.IsDone()) throw new Error("that surface will not thicken");
-        return made.Shape();
+        const shape = made.Shape();
+        if (!shape || shape.IsNull() || count(shape, SOLID) === 0)
+          throw new Error("thickening that surface by " + thickness + " leaves no body");
+        return rightWayOut(shape);
       } },
 
     { name: "draft", takes: "solid, faces, neutral, direction, degrees", gives: "solid",

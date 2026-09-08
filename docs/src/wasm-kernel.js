@@ -2584,13 +2584,26 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       if (!profile) return "no profile to extrude";
       if (!F.shape(profile)) return F.name(profile) + " has not been built";
       if (!readVector(F.reference(f, "direction"))) return "a direction vector is needed";
+      if (Feature_choice(f, "limit") === 1) {
+        if (!F.reference(f, "until")) return "no plane to extrude up to";
+        return planeTrouble(F.reference(f, "until"));
+      }
       if (Math.abs(F.real(f, "distance", 120)) <= CONFUSION) return "distance must not be zero";
       return null;
     },
     build: f => {
       const source = F.shape(F.reference(f, "profile"));
       const v = V.norm(readVector(F.reference(f, "direction")));
-      const along = V.scale(v, F.real(f, "distance", 120));
+      // How far is either a number or a plane. "Up to that face" is the
+      // measurement a person actually has, and it keeps being true when the
+      // plane moves - which a number typed once does not.
+      const reach = Feature_choice(f, "limit") === 1
+        ? HSF.lineDistanceToPlane(HSF.pointCenter(source), v,
+                                  planeAxis(F.reference(f, "until")))
+        : F.real(f, "distance", 120);
+      if (Math.abs(reach) < CONFUSION)
+        throw new Error("the profile is already on that plane, so there is nothing to extrude");
+      const along = V.scale(v, reach);
 
       // Solid or surface is a real choice, not a hint, and the two factories
       // are where it is made. A pad is swept from the faces of the profile -
@@ -2691,6 +2704,126 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       const smooth = Feature_choice(f, "fit") === 0;
       const run = smooth && list.length > 3 ? catmullRom(list, false, 3) : list;
       return { shape: HSF.polyline(run, false), data: points(list) };
+    },
+  };
+
+  //! Sweeping along a rail rather than along a direction. The profile is
+  //! capped for a body and left open for a skin, which is the same choice
+  //! Extrude offers and made in the same place.
+  builders.Sweep = {
+    precondition: f => {
+      for (const [key, what] of [["profile", "profile"], ["spine", "rail"]]) {
+        const source = F.reference(f, key);
+        if (!source) return "no " + what + " to sweep" + (key === "spine" ? " along" : "");
+        if (!F.shape(source)) return F.name(source) + " has not been built";
+      }
+      return null;
+    },
+    build: f => {
+      const source = F.shape(F.reference(f, "profile"));
+      const spine = F.shape(F.reference(f, "spine"));
+      if (Feature_choice(f, "cap") === 0) {
+        const faces = capped(f, source);
+        if (!faces.length) throw new Error("the profile does not close, so it has no body to sweep");
+        return HSF.join(faces.map(face => HSF.sweep1(face, spine)));
+      }
+      const wires = outlines(f, source);
+      if (!wires.length) throw new Error("the profile has nothing to sweep");
+      return HSF.join(wires.map(wire => HSF.sweep1(wire, spine)));
+    },
+  };
+
+  builders.ParallelCurve = {
+    precondition: f => {
+      const curve = F.reference(f, "curve");
+      if (!curve) return "no curve to offset";
+      if (!F.shape(curve)) return F.name(curve) + " has not been built";
+      const support = F.reference(f, "support");
+      if (support && !F.shape(support)) return F.name(support) + " has not been built";
+      return null;
+    },
+    //! The support is asked for only when it is needed, the way CATIA asks: a
+    //! curve that is already flat carries its own plane, and one that lies on
+    //! a surface has to be told which surface or the offset leaves it.
+    build: f => {
+      const support = F.reference(f, "support");
+      const face = support ? firstFace(F.shape(support), "support") : null;
+      return HSF.parallelCurve(F.shape(F.reference(f, "curve")),
+                               F.real(f, "distance", 100), face);
+    },
+  };
+
+  builders.ThickSurface = {
+    precondition: f => {
+      const source = F.reference(f, "surface");
+      if (!source) return "no surface to thicken";
+      if (!F.shape(source)) return F.name(source) + " has not been built";
+      if (countSubShapes(F.shape(source), FACE) === 0)
+        return F.name(source) + " is a curve, not a surface - fill it or extrude it first";
+      if (Math.abs(F.real(f, "thickness", 200)) <= CONFUSION) return "thickness must not be zero";
+      return null;
+    },
+    build: f => SF.thickness(F.shape(F.reference(f, "surface")),
+                             F.real(f, "thickness", 200),
+                             Feature_choice(f, "sides") === 1),
+  };
+
+  builders.Intersect = {
+    precondition: f => {
+      for (const key of ["a", "b"]) {
+        const source = F.reference(f, key);
+        if (!source) return "both are needed - " + key.toUpperCase() + " is empty";
+        if (!F.shape(source)) return F.name(source) + " has not been built";
+      }
+      return null;
+    },
+    build: f => {
+      const shape = HSF.intersect(F.shape(F.reference(f, "a")), F.shape(F.reference(f, "b")));
+      const marks = verticesOf(shape);
+      // A section that came out as points is a point: say so in the data as
+      // well as in the shape, so it can drive anything that wants one.
+      return marks.length && countSubShapes(shape, EDGE) === 0
+        ? { shape, data: points(marks) } : shape;
+    },
+  };
+
+  builders.Draft = {
+    precondition: f => {
+      const body = F.reference(f, "body");
+      if (!body) return "no body to draft";
+      if (!F.shape(body)) return F.name(body) + " has not been built";
+      if (countSubShapes(F.shape(body), FACE) === 0) return F.name(body) + " has no faces";
+      const neutral = F.reference(f, "neutral");
+      if (!neutral) return "a neutral plane is needed - it is the height the draft turns about";
+      const trouble = planeTrouble(neutral);
+      if (trouble) return trouble;
+      if (Math.abs(F.real(f, "angle", 5)) <= CONFUSION) return "an angle of zero drafts nothing";
+      return null;
+    },
+    //! Which faces to lean over is the driver's question, not the factory's:
+    //! it is read off the document, the way every other argument is. "Sides"
+    //! means the faces that run along the pull rather than across it - the
+    //! walls of a pad, not its top and bottom.
+    build: f => {
+      const body = F.shape(F.reference(f, "body"));
+      const neutral = planeAxis(F.reference(f, "neutral"));
+      const pull = readVector(F.reference(f, "direction"))
+        || [neutral.Direction().X(), neutral.Direction().Y(), neutral.Direction().Z()];
+      const sidesOnly = Feature_choice(f, "faces") === 0;
+      const along = V.norm(pull);
+
+      const chosen = [];
+      for (const face of subShapes(body, FACE, oc.TopoDS.Face)) {
+        if (!sidesOnly) { chosen.push(face); continue; }
+        const surface = new oc.BRepAdaptor_Surface(face);
+        if (surface.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Plane) continue;
+        const n = surface.Plane().Axis().Direction();
+        if (Math.abs(V.dot([n.X(), n.Y(), n.Z()], along)) < 0.5) chosen.push(face);
+      }
+      if (!chosen.length)
+        throw new Error("no face of that body runs along the pull direction - "
+                      + "check the direction, or draft all faces");
+      return SF.draft(body, chosen, neutral, along, F.real(f, "angle", 5));
     },
   };
 

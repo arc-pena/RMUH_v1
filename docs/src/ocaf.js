@@ -1822,7 +1822,9 @@ export const CATALOGUE = [
            + "use when the profile is a rib, a wall or a skin rather than a body.",
     args: [ref("profile", "Profile", ["curve", "plane"], true),
            ref("direction", "Direction", ["vector"]),
-           real("distance", "Distance", 120, -4000, 4000, 1),
+           choice("limit", "Limit", ["Distance", "Up to plane"], 0),
+           when(real("distance", "Distance", 120, -4000, 4000, 1), "limit", 0),
+           when(ref("until", "Up to", ["plane"]), "limit", 1),
            choice("cap", "Result", ["Solid", "Surface"], 0)] },
   { type: "Loft", guid: "9a1b2c30-0071-4c00-9e00-caf000000071", category: "operation",
     produces: "solid",
@@ -1844,6 +1846,51 @@ export const CATALOGUE = [
     args: [ref("curve", "Curve", ["curve"]), ref("onto", "Onto", ["plane", "solid"]),
            real("samples", "Samples", 40, 4, 400, 1, ""),
            choice("fit", "Result", ["Smooth", "Segments"], 0)] },
+  //! One rail, one profile. The other half of extruding: a wall follows a
+  //! direction, a handrail follows a curve, and everything with a constant
+  //! section is one of the two.
+  { type: "Sweep", guid: "9a1b2c30-0077-4c00-9e00-caf000000077", category: "operation",
+    produces: "solid",
+    summary: "Sweeps a profile along one rail, keeping its angle to the rail the whole "
+           + "way - a handrail, a gutter, a moulding, a road. On Solid the profile is "
+           + "capped first, so a closed profile comes out as a body.",
+    args: [ref("profile", "Profile", ["curve"], true),
+           ref("spine", "Rail", ["curve"], true),
+           choice("cap", "Result", ["Solid", "Surface"], 0)] },
+  { type: "ParallelCurve", guid: "9a1b2c30-0078-4c00-9e00-caf000000078", category: "curve",
+    produces: "curve",
+    summary: "A curve offset from another by a distance. A flat curve needs nothing "
+           + "else and is offset in its own plane; a curve lying on a surface needs "
+           + "that surface as a support, and is offset within it so it stays on it. "
+           + "A setback, a kerb line, a second rail.",
+    args: [ref("curve", "Curve", ["curve"], true),
+           real("distance", "Distance", 100, -4000, 4000, 1),
+           ref("support", "Support", ["solid", "plane"])] },
+  { type: "ThickSurface", guid: "9a1b2c30-0079-4c00-9e00-caf000000079", category: "operation",
+    produces: "solid",
+    summary: "Gives a surface a thickness, so a skin becomes a body - a slab from a "
+           + "roof, a wall from a swept ribbon. Either all on one side of the surface "
+           + "or half each way.",
+    args: [ref("surface", "Surface", ["solid", "curve", "plane"], true),
+           real("thickness", "Thickness", 200, -2000, 2000, 1),
+           choice("sides", "Grow", ["One side", "Both sides"], 0)] },
+  { type: "Intersect", guid: "9a1b2c30-007a-4c00-9e00-caf00000007a", category: "operation",
+    produces: "curve",
+    summary: "Where two things cross, as wireframe: the section curve of a plane "
+           + "through a solid, the line two surfaces share, the point two curves meet "
+           + "at. It cuts nothing - it only says where.",
+    args: [ref("a", "A", ANY, true), ref("b", "B", ANY, true)] },
+  { type: "Draft", guid: "9a1b2c30-007b-4c00-9e00-caf00000007b", category: "operation",
+    produces: "solid",
+    summary: "Leans the sides of a body over by an angle, hinged where they meet a "
+           + "neutral plane - what makes a moulded part come out of its mould, and "
+           + "what puts a batter on a wall. Sides drafts the faces that run along the "
+           + "pull direction and leaves the top and bottom alone.",
+    args: [ref("body", "Body", ["solid"], true),
+           ref("neutral", "Neutral plane", ["plane"], true),
+           ref("direction", "Pull", ["vector"]),
+           real("angle", "Angle", 5, -60, 60, 0.5, "\u00b0"),
+           choice("faces", "Faces", ["Sides", "All"], 0)] },
   { type: "Join", guid: "9a1b2c30-0074-4c00-9e00-caf000000074", category: "operation",
     produces: "solid",
     summary: "Gathers several shapes into one without cutting or fusing them - the group "

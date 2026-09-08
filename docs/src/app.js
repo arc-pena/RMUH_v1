@@ -1615,6 +1615,25 @@ const ICONS = {
               + '<path d="M1.8 8.4c2 0 2-4.4 4.1-4.4s2.1 4.4 4.2 4.4 2.1-3 4.1-3" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
               + '<path d="M3.6 11.2V9.4M7 11.2V6.6M10.4 11.2V9M13.6 11.2V7" stroke="currentColor" stroke-width=".85" opacity=".6"/>',
 
+  // A section carried along a rail: the rail, and the profile riding it.
+  Sweep: '<path d="M1.8 11.6C4.4 11.6 5 4.6 8.2 4.6s3.8 4.4 6 4.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2.2 1.6"/>'
+       + '<ellipse cx="5.4" cy="8.6" rx="1.5" ry="2.5" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+       + '<ellipse cx="11.6" cy="6.6" rx="1.5" ry="2.5" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/>',
+  // The same curve twice, a constant distance apart.
+  ParallelCurve: '<path d="M1.6 10.4c3.2 0 3.6-5.2 6.4-5.2s3.2 5.2 6.4 5.2" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+               + '<path d="M1.6 13.4c3.2 0 3.6-5.2 6.4-5.2s3.2 5.2 6.4 5.2" fill="none" stroke="currentColor" stroke-width="1.15" stroke-dasharray="2 1.6"/>',
+  // A skin, and the wall it becomes.
+  ThickSurface: '<path d="M1.8 5.4C4.6 5.4 5 2.4 8 2.4s3.4 3 6.2 3" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+              + '<path d="M1.8 9.4C4.6 9.4 5 6.4 8 6.4s3.4 3 6.2 3" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+              + '<path d="M1.8 5.4v4M14 5.4v4" stroke="currentColor" stroke-width="1.15"/>',
+  // Two things crossing, and the crossing marked.
+  Intersect: '<path d="M2 4.2h12M2 11.8h12" stroke="currentColor" stroke-width="1.15" opacity=".5"/>'
+           + '<path d="M4.2 2.2l7.6 11.6" stroke="currentColor" stroke-width="1.3"/>'
+           + '<circle cx="5.5" cy="4.2" r="1.5" fill="currentColor"/><circle cx="10.5" cy="11.8" r="1.5" fill="currentColor"/>',
+  // A wall with a batter on it, hinged on the neutral line.
+  Draft: '<path d="M4.4 12.6L6.4 3.4h3.2l2 9.2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'
+       + '<path d="M1.4 12.6h13.2" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2.2 1.6"/>'
+       + '<path d="M6.4 3.4v9.2" stroke="currentColor" stroke-width="1" opacity=".45"/>',
   Project: '<path d="M3 4.4C5 4.4 5 1.8 8 1.8s3 2.6 5 2.6" fill="none" stroke="currentColor" stroke-width="1.2"/>'
          + '<path d="M1.6 12.4h12.8" stroke="currentColor" stroke-width="1.2"/>'
          + '<path d="M3 6v4.6M8 3.4v7M13 6v4.6" stroke="currentColor" stroke-width="1" stroke-dasharray="1.6 1.8" opacity=".7"/>',
