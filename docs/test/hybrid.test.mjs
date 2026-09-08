@@ -36,7 +36,7 @@ const vector = async (dx, dy, dz) => {
   return id;
 };
 //! Length, area or volume of whatever it is wired to.
-const QUANTITY = { length: 0, area: 1, volume: 2 };
+const QUANTITY = { length: 0, area: 1, volume: 2, "size x": 3, "size y": 4, "size z": 5 };
 const gaugeOf = async (id, what) => {
   const gauge = await add("Measure", { shape: id });
   await set(gauge, "quantity", QUANTITY[what]);
@@ -123,6 +123,89 @@ console.log("\n3. a curve offset from another");
   check("offsetting by nothing hands the curve back",
     close(await gaugeOf(offset, "length"), 2 * Math.PI * 1000, 2),
     (await gaugeOf(offset, "length")).toFixed(1));
+}
+
+console.log("\n3b. offsetting what a sketch drew");
+{
+  await fresh();
+  const origin = await point(0, 0, 0);
+  const up = await vector(0, 0, 1);
+  const plane = await add("Plane", { origin, normal: up });
+  const sketch = await add("Sketch", { plane, origin });
+  const draw = elements => kernel.setSketch(sketch, null, { elements, constraints: [] });
+  const line = (id, a, b) => ({ id, type: "line", a, b });
+
+  // An L-shaped spine: 400 along u, then 300 along v. Open at both ends.
+  await draw([line("e1", [0, 0], [400, 0]), line("e2", [400, 0], [400, 300])]);
+  check("the spine is as long as it is drawn", close(await gaugeOf(sketch, "length"), 700, 0.01),
+    String(await gaugeOf(sketch, "length")));
+
+  const off = await add("ParallelCurve", { curve: sketch });
+  await set(off, "distance", 50);
+  check("an open spine offsets", !(await err(off)), await err(off));
+  // Outside the corner the offset rounds it: the two legs, plus a quarter of a
+  // circle of the offset radius. Inside, the corner is mitred and each leg
+  // loses the offset.
+  const out = await gaugeOf(off, "length");
+  check("outside the corner it gains a quarter arc",
+    close(out, 700 + Math.PI * 50 / 2, 0.05), out.toFixed(2) + " vs "
+      + (700 + Math.PI * 50 / 2).toFixed(2));
+  await set(off, "distance", -50);
+  const back = await gaugeOf(off, "length");
+  check("inside it, the corner is mitred and it loses one offset per leg",
+    close(back, 700 - 100, 0.05), back.toFixed(2) + " vs 600.00");
+  //! THE test for this node. Told an open spine is closed, OpenCascade walks
+  //! out along one side, round the end and back along the other - a racetrack
+  //! that builds, has no error on it, and measures THE SAME for +50 as for
+  //! -50. Nothing downstream would ever notice, so the check is here.
+  check("and the two sides are different curves, not one loop round both",
+    Math.abs(out - back) > 100, out.toFixed(2) + " vs " + back.toFixed(2));
+
+  // Several runs on one sketch: each is offset as itself. Poured into a single
+  // wire they make a broken one, which OpenCascade answers with "command not
+  // done" rather than with anything you could act on.
+  await draw([line("e1", [0, 0], [400, 0]), line("e2", [400, 0], [400, 300]),
+              line("e3", [0, 900], [400, 900]), line("e4", [400, 900], [400, 1200])]);
+  await set(off, "distance", 50);
+  check("two separate runs on one sketch both offset",
+    close(await gaugeOf(off, "length"), 2 * (700 + Math.PI * 50 / 2), 0.1),
+    (await gaugeOf(off, "length")).toFixed(2));
+
+  // One straight segment lies in every plane through it, so which side is
+  // fifty away has no answer - except that a sketch wrote down its plane.
+  await draw([line("e1", [0, 0], [400, 0])]);
+  await set(off, "distance", 50);
+  check("a lone straight segment offsets, because the sketch knows its plane",
+    !(await err(off)) && close(await gaugeOf(off, "length"), 400, 0.01),
+    (await err(off)) || String(await gaugeOf(off, "length")));
+
+  // And it goes sideways in the sketch's plane, one way then the other. The
+  // length alone cannot show that - a line moved anywhere is still 400 long -
+  // so the two offsets and the original are measured together: how far apart
+  // they stand is what the offset actually did.
+  const other = await add("ParallelCurve", { curve: sketch });
+  await set(other, "distance", -50);
+  const spread = await add("Join", { parts: sketch });
+  await kernel.setReference(spread, "parts", off, false, false);
+  await kernel.setReference(spread, "parts", other, false, false);
+  check("it goes sideways in the plane, and the sign says which side",
+    close(await gaugeOf(spread, "size y"), 100, 0.01),
+    (await gaugeOf(spread, "size y")).toFixed(3) + " across, want 100");
+  check("all three are still 400 long - it moved them, it did not stretch them",
+    close(await gaugeOf(spread, "length"), 1200, 0.01),
+    String(await gaugeOf(spread, "length")));
+
+  // A closed loop is the other half, and it is exact both ways.
+  await draw([line("e1", [0, 0], [400, 0]), line("e2", [400, 0], [400, 300]),
+              line("e3", [400, 300], [0, 300]), line("e4", [0, 300], [0, 0])]);
+  await set(off, "distance", 50);
+  check("a closed loop grows by a full circle of the offset",
+    close(await gaugeOf(off, "length"), 1400 + 2 * Math.PI * 50, 0.05),
+    (await gaugeOf(off, "length")).toFixed(2));
+  await set(off, "distance", -50);
+  check("and shrinks by the offset off each of its eight corners",
+    close(await gaugeOf(off, "length"), 1000, 0.05),
+    (await gaugeOf(off, "length")).toFixed(2));
 }
 
 console.log("\n4. a surface given a thickness");

@@ -134,6 +134,49 @@ export function makeFactories(oc, kit) {
     return face.Face();
   };
 
+  //! Where a wire starts and where it stops, walked as one curve. Not its
+  //! vertices: a wire's ends are the two the edges do not share, and picking
+  //! those out of a chain of forty is work the adaptor has already done.
+  const endsOf = wire => {
+    const walk = new oc.BRepAdaptor_CompCurve(wire);
+    const a = walk.Value(walk.FirstParameter()), b = walk.Value(walk.LastParameter());
+    return [[a.X(), a.Y(), a.Z()], [b.X(), b.Y(), b.Z()]];
+  };
+
+  //! The direction of a wire that is one straight edge, or null if it is not
+  //! one. Both halves of the question in one answer, because the caller wants
+  //! the direction the moment the answer is yes.
+  const straightRun = wire => {
+    const edges = each(wire, EDGE, oc.TopoDS.Edge);
+    if (edges.length !== 1) return null;
+    try {
+      const walk = new oc.BRepAdaptor_Curve(edges[0]);
+      if (walk.GetType() !== oc.GeomAbs_CurveType.GeomAbs_Line) return null;
+      // BRepAdaptor_Curve::Line() would say it outright, but gp_Lin is not
+      // bound in this build - so the direction comes off the two ends, which
+      // for a straight edge is the same answer.
+      const [from, to] = endsOf(wire);
+      return V.norm(V.sub(to, from));
+    } catch (e) { return null; }
+  };
+
+  //! A shape somewhere else, under a location rather than rebuilt.
+  const shapeMoved = (shape, by) => {
+    const move = new oc.gp_Trsf();
+    move.SetTranslation(new oc.gp_Vec(by[0], by[1], by[2]));
+    return shape.Moved(new oc.TopLoc_Location(move));
+  };
+
+  //! Does this wire come back to where it started? Asked of the geometry
+  //! rather than of TopoDS_Shape::Closed(), which is a flag somebody has to
+  //! have set and which an assembled wire usually has not.
+  const closedWire = wire => {
+    try {
+      const [from, to] = endsOf(wire);
+      return V.length(V.sub(to, from)) < 1e-4;
+    } catch (e) { return false; }
+  };
+
   //! A solid whose faces face out. A shell thickened from a surface whose
   //! normals happen to point inwards comes back inside out - it measures a
   //! NEGATIVE volume, and every boolean after it is then working with a void
@@ -416,30 +459,57 @@ export function makeFactories(oc, kit) {
         return face;
       } },
 
-    { name: "parallelCurve", takes: "curve, distance, support", gives: "shape",
+    { name: "parallelCurve", takes: "curve, distance, support, normal", gives: "shape",
       summary: "A curve offset from another. A flat curve needs nothing else and is "
              + "offset in its own plane; a curve lying on a surface is offset in that "
              + "surface, so it stays on it - which is exactly when CATIA asks for a "
-             + "support and when it does not.",
-      run: (curve, distance, support) => {
+             + "support and when it does not. The normal is for the one shape that "
+             + "cannot say: a single straight run lies in EVERY plane through it, so "
+             + "which side is fifty away is a question it has no answer to.",
+      run: (curve, distance, support, normal) => {
         if (Math.abs(distance) < CONFUSION) return curve;
         const join = oc.GeomAbs_JoinType.GeomAbs_Arc;
-        let maker;
-        if (support) {
-          // Offsetting IN a face, not beside it: OpenCascade works in the
-          // face's own parameter space, so the result hugs a curved wall
-          // instead of leaving it.
-          maker = new oc.BRepOffsetAPI_MakeOffset(support, join, false);
-          maker.AddWire(wireOf(curve));
-        } else {
-          maker = new oc.BRepOffsetAPI_MakeOffset(wireOf(curve), join, false);
+        // A sketch hands over everything drawn on it, which may be several
+        // separate runs. Poured into one wire they make a broken one, and
+        // OpenCascade answers a broken wire with "command not done" - so each
+        // run is offset as itself and the results go back together.
+        const wires = each(curve, WIRE, oc.TopoDS.Wire);
+        const runs = wires.length ? wires : [wireOf(curve)];
+        const out = [];
+        for (const wire of runs) {
+          // The third argument is isOpenResult, and it is the whole difference
+          // between a parallel curve and a racetrack. Told an open spine is
+          // closed, OpenCascade walks out along one side, round the end and
+          // back along the other - which builds, and measures the same for
+          // +50 as for -50, so nothing downstream would ever notice.
+          const open = !closedWire(wire);
+          // The one run that cannot be offset by asking OpenCascade: a single
+          // straight edge lies in every plane through it, so there is no side
+          // to go to. Told which plane, the answer is a translation - which is
+          // all an offset of a straight line ever was.
+          const sideways = open && count(wire, EDGE) === 1 && straightRun(wire);
+          if (sideways) {
+            if (!normal) throw new Error(
+              "a single straight segment lies in every plane through it, so there is "
+              + "no one side to offset it to - draw another segment, or wire a support");
+            const across = V.norm(V.cross(normal, sideways));
+            if (!across) throw new Error("that segment runs along its own support");
+            out.push(shapeMoved(wire, V.scale(across, distance)));
+            continue;
+          }
+          const maker = support
+            ? new oc.BRepOffsetAPI_MakeOffset(support, join, open)
+            : new oc.BRepOffsetAPI_MakeOffset(wire, join, open);
+          if (support) maker.AddWire(wire);
+          maker.Perform(distance, 0);
+          const made = maker.IsDone() && maker.Shape();
+          if (!made || made.IsNull() || count(made, EDGE) === 0)
+            throw new Error(runs.length > 1
+              ? "one of those " + runs.length + " runs will not offset by " + distance
+              : "that curve cannot be offset by " + distance);
+          out.push(made);
         }
-        maker.Perform(distance, 0);
-        if (!maker.IsDone()) throw new Error("that curve cannot be offset by that much");
-        const shape = maker.Shape();
-        if (!shape || shape.IsNull() || count(shape, EDGE) === 0)
-          throw new Error("offsetting by " + distance + " leaves nothing of that curve");
-        return shape;
+        return out.length === 1 ? out[0] : compoundOf(out);
       } },
 
     { name: "offsetSurface", takes: "surface, distance", gives: "shape",
@@ -650,11 +720,7 @@ export function makeFactories(oc, kit) {
     { name: "move", takes: "shape, by", gives: "shape",
       summary: "A shape somewhere else. The same shape under a different location, "
              + "so a hundred copies cost a matrix each rather than a rebuild.",
-      run: (shape, by) => {
-        const move = new oc.gp_Trsf();
-        move.SetTranslation(new oc.gp_Vec(by[0], by[1], by[2]));
-        return shape.Moved(new oc.TopLoc_Location(move));
-      } },
+      run: (shape, by) => shapeMoved(shape, by) },
 
     { name: "rotate", takes: "shape, at, axis, degrees", gives: "shape",
       summary: "A shape turned about an axis through a point.",

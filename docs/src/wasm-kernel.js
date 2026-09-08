@@ -2746,10 +2746,15 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     //! curve that is already flat carries its own plane, and one that lies on
     //! a surface has to be told which surface or the offset leaves it.
     build: f => {
+      const source = F.reference(f, "curve");
       const support = F.reference(f, "support");
       const face = support ? firstFace(F.shape(support), "support") : null;
-      return HSF.parallelCurve(F.shape(F.reference(f, "curve")),
-                               F.real(f, "distance", 100), face);
+      // A sketch writes down the plane it was drawn on, so a spine drawn as one
+      // straight segment still knows which way is sideways. Without that it is
+      // a question with no answer, and the factory says so rather than picking.
+      const frame = !face && F.frame(source);
+      return HSF.parallelCurve(F.shape(source), F.real(f, "distance", 100), face,
+                               frame ? frame.normal : null);
     },
   };
 
