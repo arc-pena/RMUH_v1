@@ -5,6 +5,8 @@ import { Mdl } from "./mdl.js";
 import { acceptsFrom, dataLines, SAMPLES, sliderSpan } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
 import { Agent, agentTrouble } from "./agent.js";
+import { PluginHost } from "./plugin.js";
+import { CLIMATE } from "./climate-plugin.js";
 import { SKETCH_CLICKS, SKETCH_RELATIONS, SKETCH_TYPES, nextSketchId, readSketch,
          sketchCrossings, sketchDirectionAt, sketchElement, sketchHandleAt, sketchHandles,
          sketchMoveHandle, sketchOutline, sketchRelationMarks,
@@ -1548,6 +1550,8 @@ const ICONS = {
   Ribbon: '<path d="M5.2 4.4L2 8l3.2 3.6M10.8 4.4L14 8l-3.2 3.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
         + '<path d="M6.3 10.6c1-3.6 2.2-5 3.4-5s1.5 1.1 0 1.1" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>'
         + '<path d="M6.3 8.6c1.1-2.6 2-3.6 3-3.6" fill="none" stroke="currentColor" stroke-width=".9" stroke-linecap="round" opacity=".6"/>',
+  packages: '<path d="M2.4 5.2L8 2.4l5.6 2.8v5.6L8 13.6l-5.6-2.8z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>'
+          + '<path d="M2.4 5.2L8 8l5.6-2.8M8 8v5.6" fill="none" stroke="currentColor" stroke-width="1.05"/>',
   undo: '<path d="M3.4 7.6h6.2a3.6 3.6 0 010 7.2H6.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6.2 4.2L2.8 7.6l3.4 3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
   redo: '<path d="M12.6 7.6H6.4a3.6 3.6 0 000 7.2h3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9.8 4.2l3.4 3.4-3.4 3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
   Fillet: '<path d="M2.5 13.5V8a5.5 5.5 0 015.5-5.5h5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 2.5h5.5M2.5 2.5v5.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2"/>',
@@ -1791,6 +1795,7 @@ function buildToolbar() {
   document.getElementById("ai-close").innerHTML = svg(ICONS.close);
   document.getElementById("btn-undo").innerHTML = svg(ICONS.undo);
   document.getElementById("btn-redo").innerHTML = svg(ICONS.redo);
+  document.getElementById("btn-packages").innerHTML = svg(ICONS.packages);
   refreshSteps();
 }
 
@@ -2775,6 +2780,9 @@ function select(id, openDefinition, keep = false) {
 //! panels, then fetch the triangles for whatever it rebuilt.
 function applyState(payload, options = {}) {
   if (payload.tree) state.tree = payload.tree;
+  // An analysis is about a shape. Change the shape and it is about something
+  // that is no longer there - and a stale one looks exactly like a fresh one.
+  if (payload.tree && analysis) analysis.invalidate();
   if (payload.report) state.report = payload.report;
   buildTree();
   buildLog();
@@ -3016,9 +3024,13 @@ const agent = new Agent({
   // shows and the same one a sample loads. There is only one of it.
   read: async () => ({
     schema: state.schema,
+    // What is on the shelf as well as what is loaded, so the answer to "can it
+    // do a sun study" is "load the Climate package" rather than an invented
+    // node or a flat no.
+    packages: packages.schema(),
     model: await kernel.model(),
     errors: (state.tree ? state.tree.features : [])
-      .filter(f => f.error).map(f => f.id + ' "' + f.name + '": ' + f.error),
+      .filter(f => f.error).map(f => f.id + ' \"' + f.name + '\": ' + f.error),
   }),
   onBusy: busy => {
     following = busy;
@@ -3259,6 +3271,164 @@ function leaveShowroom() {
   buildTree(); buildPanel(); refreshToolbar();
 }
 
+/* ==========================================================================
+   Packages.
+
+   A package is off until it is asked for. What it gets when it is asked for is
+   this kit: the kernel, the document language, and the pieces of the viewport
+   it needs to draw over the model. It is deliberately the real ones rather than
+   a smaller copy - a package's node is a node, and a package's view draws in
+   the same scene everything else does.
+   ========================================================================== */
+
+let analysis = null;                      // the loaded Analyse view, if any
+
+const packageKit = {
+  get kernel() { return kernel; },
+  mdl,
+  THREE, world, scene, camera,
+  streams: () => streams,
+  tree: () => state.tree || { features: [] },
+  hidden: () => state.hidden,
+  theme: () => THEME,
+  draw: () => draw(),
+  fitView: () => fitView(),
+
+  //! The model's own meshes, hidden while something is drawn over them. Not the
+  //! whole world group: a package's own drawing is in there too, and hiding
+  //! that would hide the thing being looked at.
+  setModelVisible(on) {
+    for (const { group } of shapes.values()) group.visible = on;
+    draw();
+  },
+
+  //! Frame something that is not the model. A package's own drawing can be far
+  //! bigger than the part it is about - a sun dome over a doorknob - and
+  //! fitView only knows about the model's own meshes, so it would leave the
+  //! camera inside it looking at nothing.
+  frameOn(centre, radius) {
+    view.span = Math.max(radius, 1);
+    view.target.set(centre[0], centre[1], centre[2]);
+    view.distance = frameFor(view.span, freeRect()).distance;
+    placeCamera();
+    draw();
+  },
+
+  toolkit: () => kernel.toolkit(),
+  installDrivers: (specs, builders) => kernel.installDrivers(specs, builders),
+  removeDrivers: specs => kernel.removeDrivers(specs),
+  typesInUse: types => kernel.typesInUse(types),
+};
+
+const packages = new PluginHost(packageKit, { onChange: () => afterPackages() });
+
+//! A package that adds nodes has changed the catalogue, so everything built
+//! from the catalogue is stale: the rail, the graph's menu, and what the
+//! assistant is told it can use.
+async function afterPackages() {
+  state.schema = await kernel.schema();
+  buildToolbar();
+  refreshToolbar();
+  buildPackages();
+  const view = packages.views()[0] || null;
+  analysis = view && view.live ? view.live.view : null;
+  const button = document.getElementById("btn-analyse");
+  const sep = document.getElementById("sep-analyse");
+  button.hidden = sep.hidden = !analysis;
+  if (!analysis && analysing) leaveAnalyse();
+}
+
+function buildPackages() {
+  const host = document.getElementById("packages");
+  const schema = packages.schema();
+  const row = (entry, on) => {
+    const adds = [];
+    if (entry.nodes && entry.nodes.length) adds.push(entry.nodes.join(" · "));
+    if (entry.view) adds.push(entry.view + " mode");
+    const item = document.createElement("div");
+    item.className = "pkg" + (on ? " on" : "");
+    item.innerHTML = '<div class="pkg-text"><b>' + escapeHtml(entry.name) + "</b><span>"
+      + escapeHtml(entry.summary) + "</span>"
+      + (adds.length ? '<div class="pkg-adds">' + escapeHtml(adds.join("  ·  ")) + "</div>" : "")
+      + "</div>";
+    const button = document.createElement("button");
+    button.textContent = on ? "Loaded" : "Load";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = on ? "putting away…" : "loading…";
+      try { await packages.toggle(entry.id); }
+      catch (err) {
+        const note = document.createElement("div");
+        note.className = "pkg-note";
+        note.textContent = err.message;
+        host.appendChild(note);
+        buildPackagesSoon();
+      } finally { button.disabled = false; }
+    });
+    item.appendChild(button);
+    return item;
+  };
+  host.textContent = "";
+  const title = document.createElement("h3");
+  title.textContent = "Packages";
+  host.appendChild(title);
+  for (const entry of schema.loaded) host.appendChild(row(entry, true));
+  for (const entry of schema.available) host.appendChild(row(entry, false));
+  if (!schema.loaded.length && !schema.available.length) {
+    const empty = document.createElement("div");
+    empty.className = "pkg-note";
+    empty.style.color = "var(--ink-3)";
+    empty.textContent = "nothing on the shelf";
+    host.appendChild(empty);
+  }
+}
+
+//! A refusal is worth reading, so the list is not rebuilt out from under it.
+let packagesPending = null;
+function buildPackagesSoon() {
+  clearTimeout(packagesPending);
+  packagesPending = setTimeout(buildPackages, 4000);
+}
+
+document.getElementById("btn-packages").addEventListener("click", event => {
+  const host = document.getElementById("packages");
+  const opening = host.hidden;
+  if (opening) buildPackages();
+  host.hidden = !opening;
+  event.currentTarget.setAttribute("aria-pressed", opening ? "true" : "false");
+});
+addEventListener("pointerdown", event => {
+  const host = document.getElementById("packages");
+  if (host.hidden) return;
+  if (host.contains(event.target) || event.target.closest("#btn-packages")) return;
+  host.hidden = true;
+  document.getElementById("btn-packages").setAttribute("aria-pressed", "false");
+}, true);
+
+/* ------------------------------------------------------------- Analyse */
+
+let analysing = false;
+
+function enterAnalyse() {
+  if (!analysis) return;
+  if (staging) leaveShowroom();
+  if (sketching()) leaveSketch();
+  analysing = true;
+  document.getElementById("btn-analyse").setAttribute("aria-pressed", "true");
+  analysis.enter();
+}
+
+function leaveAnalyse() {
+  if (!analysing) return;
+  analysing = false;
+  document.getElementById("btn-analyse").setAttribute("aria-pressed", "false");
+  if (analysis) analysis.leave();
+}
+
+document.getElementById("btn-analyse").addEventListener("click", () => {
+  if (analysing) leaveAnalyse(); else enterAnalyse();
+});
+
 document.getElementById("btn-stage").addEventListener("click", enterShowroom);
 document.getElementById("btn-stage-exit").addEventListener("click", leaveShowroom);
 document.getElementById("btn-stage-ground").addEventListener("click", event => {
@@ -3465,8 +3635,15 @@ addEventListener("keydown", event => {
   if (event.key === "Enter" && sketching()) { endSketchRun(); return; }
   if (event.key === "Escape") {
     sampleMenu.hidden = true;
+    const shelf = document.getElementById("packages");
+    if (!shelf.hidden) {
+      shelf.hidden = true;
+      document.getElementById("btn-packages").setAttribute("aria-pressed", "false");
+      return;
+    }
     if (!aiBar.hidden) { openAI(false); return; }
     if (staging) return leaveShowroom();
+    if (analysing) return leaveAnalyse();
     // Out of the sketcher a step at a time: the half-drawn element, then what
     // is picked, then the sketch itself.
     if (sketching()) {

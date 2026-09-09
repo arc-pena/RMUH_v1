@@ -1477,6 +1477,12 @@ const choice = (key, label, options, def = 0) =>
 //! one feature carries two patterns without two features in the tree.
 const when = (arg, key, equals) => ({ ...arg, showWhen: { key, equals } });
 
+//! The same builders, handed out - because a package declares its nodes in
+//! exactly the form the catalogue above is written in, and a second way of
+//! spelling an argument is a second thing that can be wrong about one.
+export const ARG = { real, ref, refs, choice, text, code, edits, drawing, when,
+                     ANY, KINDS };
+
 //! One table drives the toolbar, the label layout (an argument's index here is
 //! its OCAF child tag), the sliders and the neutral file format. It mirrors
 //! ocaf/src/Schema.cxx entry for entry, GUIDs included.
@@ -2001,22 +2007,45 @@ export const FRAME_TAG = 53;
 //! never orders a rebuild.
 export const PARENT_TAG = 54;
 
-const byType = new Map(CATALOGUE.map(t => [t.type, t]));
-const byGuid = new Map(CATALOGUE.map(t => [t.guid, t]));
+const byType = new Map();
+const byGuid = new Map();
 
-//! Checked at load, because a repeated guid does not fail - it makes one type
-//! quietly answer as another, and what you see is a feature refusing to accept
-//! an argument it plainly has. Cheap to check once; expensive to find.
-for (const [table, what] of [[byType, "type name"], [byGuid, "guid"]])
-  if (table.size !== CATALOGUE.length) {
-    const seen = new Set(), clash = [];
-    for (const t of CATALOGUE) {
-      const key = what === "guid" ? t.guid : t.type;
-      if (seen.has(key)) clash.push(t.type + " (" + key + ")");
-      seen.add(key);
-    }
-    throw new Error("two catalogue entries share a " + what + ": " + clash.join(", "));
+//! Every entry goes through here, the ones written above and the ones a
+//! package brings with it, so a type added at run time is a type in every
+//! sense: the tree finds it, the model file names it, the graph draws it.
+//!
+//! The check is the reason this is a function rather than two Map constructors.
+//! A repeated guid does not fail - it makes one type quietly answer as another,
+//! and what you see is a feature refusing an argument it plainly has. That was
+//! found once by accident; it is not going to be found by accident twice.
+export function registerTypes(specs, from = "the catalogue") {
+  for (const spec of specs) {
+    const clash = byType.has(spec.type) ? "type name " + spec.type
+                : byGuid.has(spec.guid) ? "guid " + spec.guid : null;
+    if (clash) throw new Error(from + " brings a " + clash + " that is already taken");
   }
+  for (const spec of specs) {
+    byType.set(spec.type, spec);
+    byGuid.set(spec.guid, spec);
+    if (!CATALOGUE.includes(spec)) CATALOGUE.push(spec);
+  }
+  return specs;
+}
+
+//! And out again, when a package is put away. Only the caller knows whether
+//! anything in the document still uses them - it holds the document - so this
+//! does as it is told.
+export function unregisterTypes(specs) {
+  for (const spec of specs) {
+    byType.delete(spec.type);
+    byGuid.delete(spec.guid);
+    const at = CATALOGUE.indexOf(spec);
+    if (at >= 0) CATALOGUE.splice(at, 1);
+  }
+}
+
+registerTypes(CATALOGUE.slice());
+
 export const typeSpec = type => byType.get(type) || null;
 const argIndex = (spec, key) => spec.args.findIndex(a => a.key === key);
 

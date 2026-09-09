@@ -57,7 +57,32 @@ export function apiBrief(api) {
 //! What the assistant is told before it is asked anything. The rules are the
 //! ones a person working here would be given, and the first of them is the one
 //! this whole program is built on.
-export function briefing(schema, model) {
+//! What packages there are. A loaded one's nodes are already in the catalogue,
+//! so what is added here is why it exists and what its own API can do. The ones
+//! NOT loaded get a line each, because "there is a Climate package that would
+//! answer that, ask them to load it" is a far better answer than inventing a
+//! node or saying it cannot be done.
+export function packagesBrief(packages) {
+  if (!packages) return "";
+  const out = [];
+  for (const p of packages.loaded || []) {
+    out.push("LOADED  " + p.name + " (" + p.id + ") - " + p.summary);
+    if (p.nodes.length) out.push("    nodes: " + p.nodes.join(", "));
+    if (p.view) out.push("    adds the " + p.view + " mode to the interface");
+    if (p.api && p.api.operations)
+      for (const op of p.api.operations)
+        out.push("    " + p.api.name + "." + op.name + "(" + op.takes + ") -> " + op.gives
+               + "\n        " + op.summary);
+  }
+  for (const p of packages.available || []) {
+    out.push("AVAILABLE, not loaded  " + p.name + " (" + p.id + ") - " + p.summary);
+    if (p.nodes.length) out.push("    would add: " + p.nodes.join(", ")
+      + (p.view ? ", and the " + p.view + " mode" : ""));
+  }
+  return out.join("\n");
+}
+
+export function briefing(schema, model, packages) {
   const ops = mdlSchema().ops.map(op =>
     "  " + op.op + "(" + op.fields.join(", ") + ")"
     + (op.rebuilds ? "" : "   [changes only the view]")
@@ -110,6 +135,16 @@ component you cannot find is either here under another name or genuinely not
 there. Do not invent a component that is not in the list above.
 
 ${apiBrief(schema.api)}
+
+PACKAGES
+Components that are not general live in packages, and a package is off until
+somebody loads it. You cannot load one yourself - it is a switch in the
+interface, under the packages button in the toolbar - but you can see what is
+on the shelf, and asking for one is the right answer when a request needs it.
+Never use a node from a package that is not loaded: it is not in the catalogue
+above, so it does not exist yet.
+
+${packagesBrief(packages)}
 
 THE DOCUMENT AS IT STANDS
 ${JSON.stringify(model)}`;
@@ -220,10 +255,10 @@ export class Agent {
     if (!sample) throw new Error("no-sample");
     if (this.running) throw new Error("still working - stop it first");
 
-    const { schema, model } = await this.read();
+    const { schema, model, packages } = await this.read();
     // Memory-less: the whole conversation goes every time, and the briefing
     // rides on the first turn so the document it describes is the current one.
-    const opening = briefing(schema, model);
+    const opening = briefing(schema, model, packages);
     const turns = this.turns.length
       ? [...this.turns, { role: "user", content: prompt }]
       : [{ role: "user", content: opening + "\n\nWHAT TO BUILD\n" + prompt }];

@@ -2965,6 +2965,51 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     //! is one factory call - so they are published together and anything
     //! reading the kernel, the node editor or the assistant, gets both.
     async schema() { return { ...schemaJson(), api: factorySchema({ hybrid: HSF, shape: SF }) }; },
+
+    /* ------------------------------------------------------- packages
+
+       What a package is handed, and how its nodes get in. A package's driver
+       is a driver like any other - it reads its arguments off the labels and
+       calls the factories - so what it needs is what every driver here needs,
+       and it is handed the same things rather than a smaller copy of them. */
+
+    //! Everything a package's drivers build with. The factories first, because
+    //! a driver that reaches past them into OpenCascade is a driver doing two
+    //! jobs - that rule does not stop applying because the driver arrived in a
+    //! package.
+    toolkit() {
+      return {
+        oc, F, hybrid: HSF, shape: SF,
+        readPoint, readVector, planeAxis, planeTrouble, axisOf, alongCurve,
+        wireFrom, firstFace, verticesOf, compoundOf, subShapes, extents,
+        deflectionFor, tessellationOf, countSubShapes, describeError,
+        points, numbers, vectors, text, pointsOf, zip,
+        tessellate, sampleCurve, capped, outlines,
+        FACE, EDGE, SOLID, ANY,
+      };
+    },
+
+    //! A package's nodes, given drivers. The catalogue already has the specs by
+    //! the time this is called - the package system put them there - so all
+    //! that is left is to say which function builds each one.
+    installDrivers(specs, builders) {
+      const missing = specs.filter(spec => !builders[spec.type]).map(spec => spec.type);
+      if (missing.length)
+        throw new Error("no driver for " + missing.join(", ")
+          + " - a node without one is a node that cannot build");
+      for (const spec of specs)
+        drivers.set(spec.guid, new Driver(spec, { ...builders[spec.type], release, describeError }));
+    },
+
+    removeDrivers(specs) { for (const spec of specs) drivers.delete(spec.guid); },
+
+    //! Which of these types the document is actually using, by feature name.
+    //! Asked before a package is put away, because taking a type out from under
+    //! a feature leaves something nothing can rebuild.
+    typesInUse(types) {
+      const wanted = new Set(types);
+      return doc.features().filter(f => wanted.has(F.spec(f).type)).map(F.name);
+    },
     async tree() { return { ok: true, tree: doc.treeJson() }; },
     async model() { return doc.modelJson(); },
 

@@ -11,6 +11,7 @@ is a runtime fetch. So the kernel travels inside the page, gzipped and base64'd
 import argparse
 import base64
 import gzip
+import json
 import pathlib
 import re
 import subprocess
@@ -31,7 +32,13 @@ STAGE_FILE = "build/playcanvas.min.js"
 
 # Concatenated in this order into one module script.
 MODULES = ["sketch.js", "factory.js", "ocaf.js", "wasm-kernel.js", "http-kernel.js", "mdl.js", "graph.js",
-           "agent.js", "showroom.js", "app.js"]
+           "agent.js", "showroom.js", "plugin.js", "climate.js", "climate-plugin.js", "app.js"]
+
+# A package's data rides the way the kernel and the showroom engine do: gzipped,
+# base64'd, in a script element the HTML tokenizer scans straight past. Unpacked
+# only when the package is loaded, so a session that never opens it never pays.
+DATA = ROOT / "data"
+PAYLOADS = [("climate-sites", "cities.json")]
 
 # An import may wrap across lines; nothing but the statement itself may
 # contain a semicolon before its end.
@@ -120,10 +127,22 @@ def main():
     # string literal inside the module it costs the browser ~13 s to parse; as
     # opaque element text the HTML tokenizer just scans past it, and the module
     # reads it at run time.
-    payload = ("<script type=\"application/octet-stream\" id=\"kernel-payload\">"
-               + packed + "</script>\n"
-               + "<script type=\"application/octet-stream\" id=\"showroom-payload\">"
-               + stage_packed + "</script>")
+    parts = ["<script type=\"application/octet-stream\" id=\"kernel-payload\">"
+             + packed + "</script>",
+             "<script type=\"application/octet-stream\" id=\"showroom-payload\">"
+             + stage_packed + "</script>"]
+    for element_id, name in PAYLOADS:
+        source = DATA / name
+        if not source.exists():
+            sys.exit("missing %s" % source)
+        # Minified first: a package's table is JSON written to be read, and the
+        # whitespace that makes it readable is not what should travel.
+        compact = json.dumps(json.loads(source.read_text()), separators=(",", ":"))
+        rolled = base64.b64encode(gzip.compress(compact.encode("utf-8"), 9)).decode("ascii")
+        parts.append("<script type=\"application/octet-stream\" id=\"%s\">%s</script>"
+                     % (element_id, rolled))
+        print("packed %s  %.1f -> %.1f kB" % (name, source.stat().st_size / 1024, len(rolled) / 1024))
+    payload = "\n".join(parts)
 
     script = "\n".join([
         "<script type=\"module\">",
