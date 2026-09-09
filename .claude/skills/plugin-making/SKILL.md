@@ -103,7 +103,24 @@ which `applyState` calls on every rebuild. **A stale analysis is worse than
 none, because it looks exactly like a fresh one.**
 
 Build your own DOM in `start`; `index.html` must not know your package exists.
-CSS goes in `index.html` under a heading, prefixed (`.an-*` for Analyse).
+CSS goes in `index.html` under a heading, prefixed (`.an-*` for Analyse, `.fl-*`
+for Flow).
+
+**`invalidate()` fires after the TRIANGLES arrive, not after the tree.** It is
+called from `syncShapes`, once the new meshes are in `kit.streams()`. If you
+ever move it back to `applyState` you will rebuild from the shape as it was
+*before* the edit, and everything will look right — the numbers just quietly
+describe the previous model.
+
+**A live view rebuilds rather than clears.** Climate throws its analysis away on
+`invalidate()` because a solar study is a result. Flow re-reads the plan and
+re-sweeps its field, keeping the people where they are — watching the crowd
+re-route while you drag the wall is the entire point of it. Decide which yours
+is, and say so in the comment.
+
+**`tick(dt)`** on the live view, if it moves. The page's frame loop calls it for
+the OPEN mode only, so a paused simulation in a mode nobody is looking at costs
+nothing.
 
 ## Resources
 
@@ -159,9 +176,24 @@ its section 6 and 7 shape.
 
 **That its arithmetic is right.** Against numbers a reader can look up, not
 against itself. Solar noon altitude is `90 - |latitude - declination|`. Water's
-saturation pressure at 20 °C is 2339 Pa. If there is no external number to check
-against, check an invariant that would break if the code were wrong in the way
-it is most likely to be wrong.
+saturation pressure at 20 °C is 2339 Pa. Weidmann's crowd at 1 person/m² walks
+at 1.06 m/s. If there is no external number to check against, check an invariant
+that would break if the code were wrong in the way it is most likely to be
+wrong.
+
+**And test the failure that would look like success.** Every package so far has
+had one, and none of them showed on screen:
+
+- a 100 mm partition thinner than the 250 mm grid cell fell between cell centres
+  and the crowd walked through the wall;
+- sealing the only door reported 152 people as *arrived* rather than trapped,
+  because "no route" and "standing on the destination" both look like "no
+  gradient";
+- a solar sweep that never turned its section still produced a smooth, plausible
+  elbow.
+
+Ask what this package would show if it were wrong, and write the test that
+tells the two apart.
 
 Run everything: `for t in docs/test/*.test.mjs; do node $t; done`.
 

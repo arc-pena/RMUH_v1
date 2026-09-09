@@ -32,7 +32,8 @@ STAGE_FILE = "build/playcanvas.min.js"
 
 # Concatenated in this order into one module script.
 MODULES = ["sketch.js", "factory.js", "ocaf.js", "wasm-kernel.js", "http-kernel.js", "mdl.js", "graph.js",
-           "agent.js", "showroom.js", "plugin.js", "climate.js", "climate-plugin.js", "app.js"]
+           "agent.js", "showroom.js", "plugin.js", "climate.js", "climate-plugin.js",
+           "crowd.js", "crowd-plugin.js", "app.js"]
 
 # A package's data rides the way the kernel and the showroom engine do: gzipped,
 # base64'd, in a script element the HTML tokenizer scans straight past. Unpacked

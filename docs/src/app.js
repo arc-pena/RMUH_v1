@@ -7,6 +7,7 @@ import { GraphEditor } from "./graph.js";
 import { Agent, agentTrouble } from "./agent.js";
 import { PluginHost } from "./plugin.js";
 import { CLIMATE } from "./climate-plugin.js";
+import { CROWD } from "./crowd-plugin.js";
 import { SKETCH_CLICKS, SKETCH_RELATIONS, SKETCH_TYPES, nextSketchId, readSketch,
          sketchCrossings, sketchDirectionAt, sketchElement, sketchHandleAt, sketchHandles,
          sketchMoveHandle, sketchOutline, sketchRelationMarks,
@@ -497,6 +498,11 @@ async function syncShapes() {
     state.stream = { shapes: stale.length, triangles, ms: Math.round(performance.now() - started) };
     rebuildPickList();
   }
+
+  // NOW the modes can be told, with the new triangles in hand. Every mode, not
+  // just the open one: a mode left holding a measurement of a shape that has
+  // since changed must not show it again when it is reopened.
+  for (const mode of modes) if (mode.view.invalidate) mode.view.invalidate();
 
   applyVisibility();
   paintSelection();
@@ -2782,7 +2788,9 @@ function applyState(payload, options = {}) {
   if (payload.tree) state.tree = payload.tree;
   // An analysis is about a shape. Change the shape and it is about something
   // that is no longer there - and a stale one looks exactly like a fresh one.
-  if (payload.tree && analysis) analysis.invalidate();
+  // Telling the modes happens in syncShapes, NOT here: the tree arrives first
+  // and the triangles a moment later, so a mode told at this point would
+  // rebuild itself from the shape as it was before the edit.
   if (payload.report) state.report = payload.report;
   buildTree();
   buildLog();
@@ -3281,7 +3289,11 @@ function leaveShowroom() {
    the same scene everything else does.
    ========================================================================== */
 
-let analysis = null;                      // the loaded Analyse view, if any
+//! Every mode a loaded package offers, and which one is open. More than one
+//! package can bring a view, so this is a list rather than a variable - and
+//! only one is ever open, because they all draw over the same model.
+let modes = [];
+let openMode = null;
 
 const packageKit = {
   get kernel() { return kernel; },
@@ -3314,6 +3326,18 @@ const packageKit = {
     draw();
   },
 
+  //! Straight down over something, which a plan view is. Kept here rather than
+  //! in the package because it is the camera, and the camera is the page's.
+  lookDown(centre, radius) {
+    view.span = Math.max(radius, 1);
+    view.target.set(centre[0], centre[1], centre[2]);
+    view.distance = frameFor(view.span, freeRect()).distance;
+    view.pitch = Math.PI / 2 - 0.001;
+    view.yaw = 0;
+    placeCamera();
+    draw();
+  },
+
   toolkit: () => kernel.toolkit(),
   installDrivers: (specs, builders) => kernel.installDrivers(specs, builders),
   removeDrivers: specs => kernel.removeDrivers(specs),
@@ -3330,12 +3354,55 @@ async function afterPackages() {
   buildToolbar();
   refreshToolbar();
   buildPackages();
-  const view = packages.views()[0] || null;
-  analysis = view && view.live ? view.live.view : null;
-  const button = document.getElementById("btn-analyse");
-  const sep = document.getElementById("sep-analyse");
-  button.hidden = sep.hidden = !analysis;
-  if (!analysis && analysing) leaveAnalyse();
+  buildModes();
+}
+
+//! A button per mode, in the chip beside Showroom. A package that is put away
+//! takes its button - and its open mode - with it.
+function buildModes() {
+  const host = document.getElementById("mode-buttons");
+  const was = openMode ? openMode.key : null;
+  modes = packages.views()
+    .filter(entry => entry.live && entry.live.view)
+    .map(entry => ({ key: entry.key, label: entry.label, title: entry.title,
+                     view: entry.live.view }));
+  if (openMode && !modes.some(m => m.key === was)) leaveMode();
+
+  host.textContent = "";
+  for (const mode of modes) {
+    host.appendChild(document.createElement("div")).className = "sep";
+    const button = document.createElement("button");
+    button.id = "btn-mode-" + mode.key;
+    button.textContent = mode.label;
+    button.title = mode.title || mode.label;
+    button.setAttribute("aria-pressed", openMode === mode ? "true" : "false");
+    button.addEventListener("click", () => {
+      if (openMode === mode) leaveMode(); else enterMode(mode);
+    });
+    host.appendChild(button);
+    mode.button = button;
+  }
+  if (was) {
+    const again = modes.find(m => m.key === was);
+    if (again) { openMode = again; again.button.setAttribute("aria-pressed", "true"); }
+  }
+}
+
+function enterMode(mode) {
+  if (staging) leaveShowroom();
+  if (sketching()) leaveSketch();
+  if (openMode) leaveMode();
+  openMode = mode;
+  mode.button.setAttribute("aria-pressed", "true");
+  mode.view.enter();
+}
+
+function leaveMode() {
+  if (!openMode) return;
+  const mode = openMode;
+  openMode = null;
+  if (mode.button) mode.button.setAttribute("aria-pressed", "false");
+  mode.view.leave();
 }
 
 function buildPackages() {
@@ -3405,30 +3472,6 @@ addEventListener("pointerdown", event => {
   document.getElementById("btn-packages").setAttribute("aria-pressed", "false");
 }, true);
 
-/* ------------------------------------------------------------- Analyse */
-
-let analysing = false;
-
-function enterAnalyse() {
-  if (!analysis) return;
-  if (staging) leaveShowroom();
-  if (sketching()) leaveSketch();
-  analysing = true;
-  document.getElementById("btn-analyse").setAttribute("aria-pressed", "true");
-  analysis.enter();
-}
-
-function leaveAnalyse() {
-  if (!analysing) return;
-  analysing = false;
-  document.getElementById("btn-analyse").setAttribute("aria-pressed", "false");
-  if (analysis) analysis.leave();
-}
-
-document.getElementById("btn-analyse").addEventListener("click", () => {
-  if (analysing) leaveAnalyse(); else enterAnalyse();
-});
-
 document.getElementById("btn-stage").addEventListener("click", enterShowroom);
 document.getElementById("btn-stage-exit").addEventListener("click", leaveShowroom);
 document.getElementById("btn-stage-ground").addEventListener("click", event => {
@@ -3454,6 +3497,12 @@ let lastSpin = performance.now();
   const dt = Math.min(0.1, ((now || performance.now()) - lastSpin) / 1000);
   lastSpin = now || performance.now();
   if (staging && showroom.ready) showroom.spin(dt);
+  // A mode that moves gets the clock. Only the open one - a paused simulation
+  // in a mode nobody is looking at should cost nothing at all.
+  if (openMode && openMode.view.tick) {
+    openMode.view.tick(dt);
+    draw();
+  }
   requestAnimationFrame(spinLoop);
 })();
 
@@ -3643,7 +3692,7 @@ addEventListener("keydown", event => {
     }
     if (!aiBar.hidden) { openAI(false); return; }
     if (staging) return leaveShowroom();
-    if (analysing) return leaveAnalyse();
+    if (openMode) return leaveMode();
     // Out of the sketcher a step at a time: the half-drawn element, then what
     // is picked, then the sketch itself.
     if (sketching()) {
