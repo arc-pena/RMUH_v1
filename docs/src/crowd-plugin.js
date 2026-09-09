@@ -21,10 +21,10 @@
 
 import { ARG } from "./ocaf.js";
 import { offerPlugin } from "./plugin.js";
-import { BODY, FRUIN, addWalker, clearanceOf, blockPolygon, crowdSpeed, densityAt,
+import { BODY, FRUIN, SHUFFLE, addWalker, clearanceOf, blockPolygon, crowdSpeed, densityAt,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
-         makeDensity, makeGrid, measureDensity, serviceBreakdown, stepCrowd,
-         stranded, toCell, toWorld, walkDistance } from "./crowd.js";
+         makeDensity, makeGrid, makeTrace, measureDensity, serviceBreakdown,
+         stepCrowd, stranded, toCell, toWorld, walkDistance } from "./crowd.js";
 
 /* ------------------------------------------------------------ the nodes */
 
@@ -333,8 +333,14 @@ class FlowView {
     this.running = true;
     this.cut = 1100;
     this.grain = 250;
-    this.population = 160;
+    // Sixty on a floor, not two hundred. A crowd that is jammed from the first
+    // second shows you nothing except that it is jammed; start where it flows
+    // and wind it up until it stops, because the number where it stops is the
+    // answer you came for.
+    this.population = 60;
     this.show = { agents: true, trails: true, density: true, field: false, plate: true };
+    this.map = "footfall";               // which of the three the floor shows
+    this.headings = new Float32Array(900);
     this.plate = null;
     this.fields = [];
     this.portals = [];
@@ -363,8 +369,8 @@ class FlowView {
     this.bar.innerHTML = `
       <div class="fl-row">
         <span class="fl-tag">People</span>
-        <input type="range" id="fl-people" min="0" max="600" step="10" value="160">
-        <span class="fl-read" id="fl-people-read">160</span>
+        <input type="range" id="fl-people" min="0" max="600" step="10" value="60">
+        <span class="fl-read" id="fl-people-read">60</span>
         <button class="btn" id="fl-play">Pause</button>
         <button class="btn" id="fl-reset">Reset</button>
       </div>
@@ -380,10 +386,15 @@ class FlowView {
         <span class="fl-tag">Draw</span>
         <span class="seg" id="fl-show">
           <button data-show="plate" aria-pressed="true">plan</button>
-          <button data-show="density" aria-pressed="true">crowding</button>
           <button data-show="agents" aria-pressed="true">people</button>
           <button data-show="trails" aria-pressed="true">trails</button>
           <button data-show="field" aria-pressed="false">routes</button>
+        </span>
+        <span class="seg" id="fl-map">
+          <button data-map="footfall" aria-pressed="true">movement</button>
+          <button data-map="occupancy" aria-pressed="false">concentration</button>
+          <button data-map="live" aria-pressed="false">right now</button>
+          <button data-map="off" aria-pressed="false">off</button>
         </span>
         <button class="btn" id="fl-plan">Plan view</button>
         <span class="fl-note" id="fl-note"></span>
@@ -427,6 +438,17 @@ class FlowView {
       button.setAttribute("aria-pressed", this.show[key] ? "true" : "false");
       this.applyVisibility();
     });
+    q("fl-map").addEventListener("click", e => {
+      const button = e.target.closest("[data-map]");
+      if (!button) return;
+      this.map = button.dataset.map;
+      this.show.density = this.map !== "off";
+      for (const other of q("fl-map").querySelectorAll("[data-map]"))
+        other.setAttribute("aria-pressed", other.dataset.map === this.map ? "true" : "false");
+      this.applyVisibility();
+      this.paintHeat();
+      this.refresh();
+    });
     q("fl-plan").addEventListener("click", () => this.planView());
   }
 
@@ -434,20 +456,7 @@ class FlowView {
 
   makeDrawing() {
     const { THREE } = this.kit;
-    // People: one Points buffer, coloured per person. A mesh each would be a
-    // thousand draw calls; this is one.
-    const dots = new THREE.BufferGeometry();
-    dots.setAttribute("position", new THREE.BufferAttribute(new Float32Array(900 * 3), 3));
-    dots.setAttribute("color", new THREE.BufferAttribute(new Float32Array(900 * 3), 3));
-    dots.setDrawRange(0, 0);
-    this.dots = new THREE.Points(dots, new THREE.PointsMaterial({
-      // Half again over life size. A person really is 450 mm across, and at
-      // the zoom a whole floor plate is read at that is three pixels - so the
-      // dots are drawn as a diagram of people rather than as people.
-      size: BODY * 1.6, sizeAttenuation: true, vertexColors: true,
-      map: discTexture(THREE), transparent: true, alphaTest: 0.35, depthWrite: false }));
-    this.dots.renderOrder = 12;
-    this.group.add(this.dots);
+    this.makePeople();
 
     // Trails: where everybody has just been, as a fading ribbon per person.
     this.trailLength = 24;
@@ -458,11 +467,44 @@ class FlowView {
       new THREE.BufferAttribute(new Float32Array(900 * this.trailLength * 3), 3));
     trail.setDrawRange(0, 0);
     this.trails = new THREE.LineSegments(trail, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false }));
+      vertexColors: true, transparent: true, opacity: 0.75, depthWrite: false }));
     this.trails.renderOrder = 11;
     this.group.add(this.trails);
     this.history = new Float32Array(900 * this.trailLength * 2);
     this.historyAt = 0;
+  }
+
+  //! People, one instanced mesh per STATE rather than one mesh with a colour
+  //! per person. Per-instance colour is a define the renderer decides on at
+  //! compile time, and a colour buffer created after the first frame does not
+  //! always earn it - so this uses nothing but a material colour, which cannot
+  //! fail. It is better design as well as safer: five named states can go in a
+  //! legend, and a continuous ramp over speed cannot.
+  makePeople() {
+    const { THREE } = this.kit;
+    const person = mergedPerson(THREE);
+    this.states = [
+      { key: "walking",  colour: 0x2fa88d, says: "walking freely" },
+      { key: "slowed",   colour: 0x9fd14e, says: "slowed by the crowd" },
+      { key: "queueing", colour: 0xf0a52a, says: "queueing - shuffling forward" },
+      { key: "stopped",  colour: 0xd4372f, says: "stopped - not moving at all" },
+      { key: "waiting",  colour: 0x5b8fc7, says: "at a destination" },
+      { key: "cut",      colour: 0x8a3ec0, says: "cannot reach anywhere" },
+    ];
+    this.crowdMeshes = this.states.map(state => {
+      // FLAT, not lit: the colour of a person carries data here, and a shaded
+      // body is darker on one side, which corrupts the very thing being read.
+      const mesh = new THREE.InstancedMesh(person,
+        new THREE.MeshBasicMaterial({ color: state.colour }), 900);
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.count = 0;
+      mesh.renderOrder = 12;
+      mesh.frustumCulled = false;
+      this.group.add(mesh);
+      return mesh;
+    });
+    this.spot = new THREE.Object3D();
+    this.headings = new Float32Array(900);
   }
 
   //! The crowding map, as a texture on a plane rather than a mesh per cell:
@@ -556,7 +598,7 @@ class FlowView {
   applyVisibility() {
     if (this.heatPlane) this.heatPlane.visible = this.show.density;
     if (this.outline) this.outline.visible = this.show.plate;
-    this.dots.visible = this.show.agents;
+    for (const mesh of this.crowdMeshes) mesh.visible = this.show.agents;
     this.trails.visible = this.show.trails;
     this.fieldGroup.visible = this.show.field;
     if (this.show.field && !this.fieldGroup.children.length) this.makeField();
@@ -581,11 +623,14 @@ Object.assign(FlowView.prototype, {
     this.portals = (this.kit.tree().features || [])
       .filter(f => f.type === "Portal" && f.data && f.data.preview)
       .map(f => {
-        const at = String(f.data.preview).replace(/[()]/g, "").split(",").map(Number);
-        const lines = String(f.data.preview);
-        return { id: f.id, name: f.name, at,
-                 role: /Exit|Amenity|Core/.test(lines) ? "to" : "from",
-                 raw: f };
+        const said = String(f.data.preview);
+        const at = said.replace(/[()]/g, "").split(",").map(Number);
+        // A desk or a tea point is somewhere people STAY; an exit is somewhere
+        // they leave by. The dwell is what puts the heat on an occupancy map.
+        const dwell = /Desk/.test(said) ? 90 : /Amenity/.test(said) ? 40
+                    : /Core/.test(said) ? 12 : 0;
+        return { id: f.id, name: f.name, at, dwell,
+                 role: /Exit|Amenity|Core|Desk/.test(said) ? "to" : "from" };
       })
       .filter(p => p.at.length >= 2 && p.at.every(Number.isFinite));
 
@@ -597,19 +642,27 @@ Object.assign(FlowView.prototype, {
     if (!this.plate) {
       this.fields = [];
       note.textContent = "nothing in the model has a footprint at this height";
+      this.goals = [];
       this.makePlate();
       return;
     }
     this.density = makeDensity(this.plate.grid);
+    // The traces are about a floor. Change the floor and what was worn into
+    // the old one is about a plan that no longer exists.
+    if (!this.trace || this.trace.footfall.length !== this.plate.grid.blocked.length)
+      this.trace = makeTrace(this.plate.grid);
 
-    // Where people are going. Portals say so when there are any; otherwise the
-    // far corners of the plate, so the view does something the moment it opens
-    // rather than waiting to be configured.
-    const targets = this.destinations();
-    this.fields = targets.length ? [flowField(this.plate.grid, targets)] : [];
+    // ONE FIELD PER DESTINATION, not one field to a single drain. That is what
+    // makes the flows cross: somebody heading for the tea point and somebody
+    // heading for the lifts meet in the corridor, and the place they meet is
+    // the finding. A single shared destination gives a river, and a river tells
+    // you nothing about a floor plate.
+    this.goals = this.goalList();
+    this.fields = this.goals.map(goal => flowField(this.plate.grid, goal.at));
     note.textContent = (this.walkableArea() / 1e6).toFixed(0) + " m² walkable · "
       + this.plate.rings.length + " footprints"
-      + (this.portals.length ? "" : " · no portals, so people head east");
+      + " · " + this.goals.length + (this.goals.length === 1 ? " destination" : " destinations")
+      + (this.portals.length ? "" : ", the corners of the floor");
     this.makePlate();
     this.makeField();
     this.trim();
@@ -627,20 +680,53 @@ Object.assign(FlowView.prototype, {
     return cells * grid.cell * grid.cell;
   },
 
-  //! Where people head for: Exit, Amenity and Core portals if any are placed,
-  //! and the far side of the plate if none are.
-  destinations() {
-    const going = this.portals.filter(p => p.role === "to");
-    if (going.length) return going.map(p => [p.at[0], p.at[1]]);
+  //! Everywhere anybody might be heading, one entry per place. A portal is one
+  //! goal; with no portals placed, the four corners of the floor - so opening
+  //! the mode on any plan immediately shows people crossing it, which is the
+  //! thing you wanted to look at, rather than an empty room and a form to fill
+  //! in first.
+  goalList() {
     if (!this.plate) return [];
-    // No portals placed yet: the east side of the FOOTPRINTS, so the default
-    // is somewhere in the building rather than out on the grass beside it.
     const { grid, inside } = this.plate;
-    const edge = [];
-    const x = inside.hi[0] - grid.cell * 1.5;
-    for (let y = inside.lo[1]; y <= inside.hi[1]; y += grid.cell)
-      if (!isBlocked(grid, x, y)) edge.push([x, y]);
-    return edge;
+    const going = this.portals.filter(p => p.role === "to");
+    if (going.length)
+      return going.map(p => ({ name: p.name, dwell: p.dwell, at: [[p.at[0], p.at[1]]] }));
+
+    const corners = [];
+    const span = [inside.hi[0] - inside.lo[0], inside.hi[1] - inside.lo[1]];
+    for (const [fx, fy, name] of [[0.12, 0.12, "south-west"], [0.88, 0.12, "south-east"],
+                                  [0.88, 0.88, "north-east"], [0.12, 0.88, "north-west"]]) {
+      const want = [inside.lo[0] + span[0] * fx, inside.lo[1] + span[1] * fy];
+      const spot = isBlocked(grid, want[0], want[1]) ? this.nearestFreeAt(want) : want;
+      if (spot) corners.push({ name, dwell: 6, at: [spot] });
+    }
+    return corners;
+  },
+
+  nearestFreeAt(want) {
+    const { grid } = this.plate;
+    const [i, j] = toCell(grid, want[0], want[1]);
+    for (let r = 1; r < 40; r++)
+      for (let d = 0; d < 8 * r; d++) {
+        const angle = d / (8 * r) * Math.PI * 2;
+        const ni = i + Math.round(Math.cos(angle) * r), nj = j + Math.round(Math.sin(angle) * r);
+        if (ni < 0 || nj < 0 || ni >= grid.width || nj >= grid.height) continue;
+        if (!grid.blocked[nj * grid.width + ni]) return toWorld(grid, ni, nj);
+      }
+    return null;
+  },
+
+  //! Where somebody goes when they get where they were going. Anywhere but
+  //! here, and they stop for a bit when they arrive - because a person at a
+  //! desk is what an occupancy map is made of, and a floor where everybody
+  //! leaves the moment they arrive is a drain rather than a building.
+  somewhereElse(a, now) {
+    if (this.goals.length < 2) return null;
+    let goal = this.crowd.goal[a];
+    for (let tries = 0; tries < 8 && goal === this.crowd.goal[a]; tries++)
+      goal = Math.floor(this.random() * this.goals.length);
+    const stay = this.goals[this.crowd.goal[a]].dwell || 0;
+    return { goal, dwell: stay * (0.4 + this.random() * 1.6) };
   },
 
   //! Where people come from: Entrance and Desk portals, or anywhere free.
@@ -660,12 +746,14 @@ Object.assign(FlowView.prototype, {
       }
       return null;
     }
-    // Inside the footprints, in the western third, and not on top of somebody
-    // who is already there - a spawn that ignores the crowd packs people past
-    // jam density and the whole first ten seconds is a scrum.
+    // Anywhere on the floor, not in one corner of it. With several
+    // destinations the interesting thing is people crossing, and a crowd that
+    // all starts in the same third spends its first minute being a queue.
+    // Not on top of somebody who is already there, either: a spawn that
+    // ignores the crowd packs people past jam density.
     const { inside } = this.plate;
-    for (let tries = 0; tries < 60; tries++) {
-      const x = inside.lo[0] + this.random() * (inside.hi[0] - inside.lo[0]) * 0.35;
+    for (let tries = 0; tries < 80; tries++) {
+      const x = inside.lo[0] + this.random() * (inside.hi[0] - inside.lo[0]);
       const y = inside.lo[1] + this.random() * (inside.hi[1] - inside.lo[1]);
       if (isBlocked(grid, x, y)) continue;
       if (walkDistance(this.fields[0], x, y) === null) continue;
@@ -690,7 +778,16 @@ Object.assign(FlowView.prototype, {
     while (this.crowd.count < this.population && guard++ < 200) {
       const at = this.spawn();
       if (!at) break;
-      addWalker(this.crowd, at[0], at[1], 0, this.clock, this.random);
+      // Sent to the destination they are FURTHEST from, so a new arrival has a
+      // journey to make rather than being spawned on top of where they were
+      // going and counted as having walked 1.6 m.
+      let goal = 0, best = -Infinity;
+      for (let g = 0; g < this.fields.length; g++) {
+        const how = walkDistance(this.fields[g], at[0], at[1]);
+        const wish = how === null ? -1 : how * (0.6 + this.random() * 0.8);
+        if (wish > best) { best = wish; goal = g; }
+      }
+      addWalker(this.crowd, at[0], at[1], goal, this.clock, this.random);
     }
   },
 
@@ -700,6 +797,7 @@ Object.assign(FlowView.prototype, {
     this.historyAt = 0;
     this.history.fill(0);
     if (this.density) { this.density.peak.fill(0); this.density.seen.fill(0); this.density.seconds = 0; }
+    if (this.plate) this.trace = makeTrace(this.plate.grid);
     this.trim();
     this.refresh();
   },
@@ -711,7 +809,8 @@ Object.assign(FlowView.prototype, {
       const step = Math.min(0.05, dt);
       this.clock += step;
       measureDensity(this.density, this.crowd, this.plate.grid, step);
-      stepCrowd(this.crowd, this.fields, this.plate.grid, this.density, step, this.clock);
+      stepCrowd(this.crowd, this.fields, this.plate.grid, this.density, step, this.clock,
+        { trace: this.trace, recycle: (a, now) => this.somewhereElse(a, now) });
       this.trim();
       this.remember();
     }
@@ -735,30 +834,40 @@ Object.assign(FlowView.prototype, {
 
   paintPeople() {
     const { grid } = this.plate;
-    const z = grid.floor + 900;
-    const position = this.dots.geometry.attributes.position.array;
-    const colour = this.dots.geometry.attributes.color.array;
+    const z = grid.floor;
+    const buckets = this.states.map(() => 0);
     for (let a = 0; a < this.crowd.count; a++) {
-      position[a * 3] = this.crowd.x[a];
-      position[a * 3 + 1] = this.crowd.y[a];
-      position[a * 3 + 2] = z;
-      // Coloured by how fast they are actually managing to walk, against their
-      // own free speed. Green is walking, red is stuck - which is the thing you
-      // want to see at a glance and cannot read off a position.
       const going = Math.hypot(this.crowd.vx[a], this.crowd.vy[a]);
-      // Somebody with nowhere to go is drawn as a separate thing, not as
-      // somebody who is merely slow: "stuck in a queue" and "cannot get out"
-      // are the two different findings and must not share a colour.
-      const cut = stranded(this.fields[0], this.plate.grid, this.crowd.x[a], this.crowd.y[a]);
-      const rgb = cut ? [0.45, 0.18, 0.62]
-                      : crowdColour(1 - Math.min(1, going / this.crowd.free[a]));
-      colour[a * 3] = rgb[0]; colour[a * 3 + 1] = rgb[1]; colour[a * 3 + 2] = rgb[2];
-    }
-    this.dots.geometry.setDrawRange(0, this.crowd.count);
-    this.dots.geometry.attributes.position.needsUpdate = true;
-    this.dots.geometry.attributes.color.needsUpdate = true;
+      const share = going / Math.max(1, this.crowd.free[a]);
+      // Which state, in the order somebody reading the floor would ask:
+      // can they get anywhere at all, are they waiting on purpose, and only
+      // then how well they are moving.
+      const cut = stranded(this.fields[this.crowd.goal[a]] || this.fields[0],
+                           grid, this.crowd.x[a], this.crowd.y[a]);
+      // The bands are tied to the shuffle floor rather than to round numbers:
+      // somebody moving at the floor is shuffling in a queue, which is what
+      // Fruin's F band IS, and calling that "stopped" reports a slow queue as
+      // a deadlock.
+      const at = cut ? 5
+        : this.clock < this.crowd.until[a] ? 4
+        : share > 0.75 ? 0 : share > 0.40 ? 1 : share > SHUFFLE * 1.35 ? 2 : 3;
 
-    if (this.show.trails) this.paintTrails(z);
+      this.spot.position.set(this.crowd.x[a], this.crowd.y[a], z);
+      // Facing where they are going, and holding the last heading when they
+      // stop - somebody standing still is facing somewhere, not north.
+      if (going > 20) this.headings[a] = Math.atan2(this.crowd.vy[a], this.crowd.vx[a]);
+      this.spot.rotation.set(0, 0, (this.headings[a] || 0) - Math.PI / 2);
+      this.spot.updateMatrix();
+      const mesh = this.crowdMeshes[at];
+      if (buckets[at] < mesh.instanceMatrix.count)
+        mesh.setMatrixAt(buckets[at]++, this.spot.matrix);
+    }
+    this.tally = buckets;
+    this.crowdMeshes.forEach((mesh, i) => {
+      mesh.count = buckets[i];
+      mesh.instanceMatrix.needsUpdate = true;
+    });
+    if (this.show.trails) this.paintTrails(grid.floor + 60);
   },
 
   paintTrails(z) {
@@ -793,10 +902,28 @@ Object.assign(FlowView.prototype, {
   //! cell happens to be, so the colour means the same thing from one run to the
   //! next and from one scheme to the next - which is the whole point of
   //! putting two schemes side by side.
+  //! The floor, showing one of three different things. They are different
+  //! maps and they answer different questions - see makeTrace in crowd.js.
+  //!
+  //!   movement       where the walking happened, ever. The desire lines.
+  //!   concentration  where people WERE. The queues, the desks, the waiting.
+  //!   right now      this instant, in Fruin bands. What the crowd is doing.
+  //!
+  //! The first two are scaled to their own busiest cell, because "twice as
+  //! walked-on as anywhere else" is the question; the third is scaled to
+  //! Fruin F, because a density means the same thing everywhere.
   paintHeat() {
-    if (!this.heat || !this.show.density) return;
+    if (!this.heat || !this.show.density || this.map === "off") return;
     const { grid } = this.plate;
-    const full = 2.17e-6;                      // people per mm², the top of Fruin E
+    const live = this.map === "live";
+    const values = live ? this.density.now
+                : this.map === "occupancy" ? this.trace.occupancy : this.trace.footfall;
+    let full = 2.17e-6;                        // people/mm², the top of Fruin E
+    if (!live) {
+      full = 0;
+      for (let k = 0; k < values.length; k++) if (values[k] > full) full = values[k];
+      full = full || 1;
+    }
     for (let j = 0; j < grid.height; j++)
       for (let i = 0; i < grid.width; i++) {
         const k = j * grid.width + i;
@@ -806,12 +933,16 @@ Object.assign(FlowView.prototype, {
           this.pixels[at + 3] = 235;
           continue;
         }
-        const value = this.density.now[k] / full;
+        // The accumulated maps are shown on a square root: a doorway that
+        // everybody uses is fifty times the corner nobody does, and on a
+        // straight scale that leaves everywhere but the doorway black.
+        const raw = values[k] / full;
+        const value = live ? raw : Math.sqrt(Math.max(0, raw));
         const rgb = crowdColour(value);
         this.pixels[at] = rgb[0] * 255;
         this.pixels[at + 1] = rgb[1] * 255;
         this.pixels[at + 2] = rgb[2] * 255;
-        this.pixels[at + 3] = Math.min(210, 24 + value * 460);
+        this.pixels[at + 3] = Math.min(225, 18 + value * 300);
       }
     this.heat.needsUpdate = true;
   },
@@ -841,8 +972,8 @@ Object.assign(FlowView.prototype, {
         + "drawn in purple. That is the plan telling you something.</p>"] : []),
       pairOf("elapsed", this.clock < 90 ? this.clock.toFixed(0) + " s"
                                        : (this.clock / 60).toFixed(1) + " min"),
-      pairOf("destinations", String(this.destinations().length ? this.portals
-        .filter(p => p.role === "to").length || "the far edge" : "none")),
+      pairOf("destinations", this.goals.length
+        + (this.portals.length ? " portals" : " corners")),
     ]));
 
     if (this.crowd.journeys.length) {
@@ -881,6 +1012,22 @@ Object.assign(FlowView.prototype, {
       ]));
     }
 
+    if (this.tally) {
+      const total = Math.max(1, this.tally.reduce((a, b) => a + b, 0));
+      rows.push(block("What the crowd is doing", this.states.map((state, i) =>
+        '<div class="fl-los"><b style="background:' + rgbText([
+          ((state.colour >> 16) & 255) / 255, ((state.colour >> 8) & 255) / 255,
+          (state.colour & 255) / 255]) + '"></b>'
+        + '<span class="fl-los-bar"><i style="width:'
+        + (this.tally[i] / total * 100).toFixed(1) + "%;background:" + rgbText([
+          ((state.colour >> 16) & 255) / 255, ((state.colour >> 8) & 255) / 255,
+          (state.colour & 255) / 255]) + '"></i></span>'
+        + "<em>" + this.tally[i] + "</em></div>"
+        + '<p class="fl-legend">' + safe(state.says) + "</p>")));
+    }
+
+    rows.push(block("Worn into the floor", this.traceSummary()));
+
     rows.push(block("What this is", [
       '<p class="fl-small">The plan is exact - your model, cut at '
       + (this.cut / 1000).toFixed(2) + " m. Speed against crowding is Weidmann\u2019s "
@@ -905,7 +1052,18 @@ Object.assign(FlowView.prototype, {
     this.kit.setModelVisible(false);
     this.rebuild();
     this.reset();
-    this.planView();
+    // Raked, not flat. People drawn as bodies are people from an angle and
+    // circles from directly above, and the whole point of drawing them as
+    // bodies was so that they read as people.
+    this.overView();
+  },
+
+  overView() {
+    if (!this.plate) return;
+    const { grid } = this.plate;
+    this.kit.frameOn([grid.lo[0] + grid.width * grid.cell / 2,
+                      grid.lo[1] + grid.height * grid.cell / 2, grid.floor],
+                     Math.max(grid.width, grid.height) * grid.cell * 0.6);
   },
 
   leave() {
@@ -916,6 +1074,30 @@ Object.assign(FlowView.prototype, {
     document.body.classList.remove("flowing");
     this.kit.setModelVisible(true);
     this.kit.draw();
+  },
+
+  //! The traces are the reason to run this at all, so they get a line each.
+  traceSummary() {
+    if (!this.trace || !this.plate) return [];
+    const { grid } = this.plate;
+    const area = grid.cell * grid.cell;
+    let walked = 0, stood = 0, used = 0, floor = 0;
+    for (let k = 0; k < this.trace.footfall.length; k++) {
+      if (grid.blocked[k]) continue;
+      floor++;
+      walked += this.trace.footfall[k];
+      stood += this.trace.occupancy[k];
+      if (this.trace.footfall[k] > 0) used++;
+    }
+    return [
+      pairOf("floor walked on", floor ? Math.round(used / floor * 100) + "%" : "—"),
+      pairOf("person-km walked", (walked / 1e6).toFixed(2)),
+      pairOf("person-hours on floor", (stood / 3600).toFixed(2)),
+      '<p class="fl-small">Movement is person-metres of walking per square metre - the '
+      + "desire lines. Concentration is person-seconds - where people actually were. A "
+      + "lobby everybody crosses and nobody stays in is hot on one and cold on the "
+      + "other, which is why they are two maps.</p>",
+    ];
   },
 
   //! The model changed. Everything else in this program throws its analysis
@@ -1052,3 +1234,33 @@ export const CROWD = offerPlugin({
     };
   },
 });
+
+//! One person, as one geometry: a body, a head and a nose that says which way
+//! they are facing. Merged by hand because r128's merge helper lives in an
+//! addon this page does not carry, and three draw calls per state instead of
+//! one is three times the cost for no gain.
+function mergedPerson(THREE) {
+  const body = new THREE.CylinderGeometry(BODY * 0.34, BODY * 0.30, 1150, 10);
+  body.rotateX(Math.PI / 2);                        // z is up in this world
+  body.translate(0, 0, 575);
+  const head = new THREE.SphereGeometry(BODY * 0.30, 12, 9);
+  head.translate(0, 0, 1420);
+  const nose = new THREE.ConeGeometry(BODY * 0.15, BODY * 0.5, 7);
+  nose.rotateX(Math.PI / 2);
+  nose.translate(0, BODY * 0.40, 900);
+
+  const parts = [body, head, nose].map(g => g.index ? g.toNonIndexed() : g);
+  const total = parts.reduce((n, g) => n + g.attributes.position.count, 0);
+  const position = new Float32Array(total * 3);
+  const normal = new Float32Array(total * 3);
+  let at = 0;
+  for (const part of parts) {
+    position.set(part.attributes.position.array, at * 3);
+    normal.set(part.attributes.normal.array, at * 3);
+    at += part.attributes.position.count;
+  }
+  const person = new THREE.BufferGeometry();
+  person.setAttribute("position", new THREE.BufferAttribute(position, 3));
+  person.setAttribute("normal", new THREE.BufferAttribute(normal, 3));
+  return person;
+}

@@ -9,10 +9,10 @@
 import { createWasmKernel } from "../src/wasm-kernel.js";
 import { PluginHost, findPlugin } from "../src/plugin.js";
 import { CROWD, CROWD_NODES, crowdColour, footprintOf, plateOf } from "../src/crowd-plugin.js";
-import { BODY, FREE_SPEED, FRUIN, addWalker, blockPolygon, clearanceOf, crowdSpeed,
+import { BODY, FREE_SPEED, FRUIN, SIDESTEP, addWalker, blockPolygon, clearanceOf, crowdSpeed,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
-         makeDensity, makeGrid, measureDensity, serviceBreakdown, stepCrowd,
-         stranded, toCell, walkDistance } from "../src/crowd.js";
+         makeDensity, makeGrid, makeTrace, measureDensity, serviceBreakdown,
+         stepCrowd, stranded, toCell, walkDistance } from "../src/crowd.js";
 import { typeSpec } from "../src/ocaf.js";
 import { readFileSync } from "fs";
 
@@ -46,7 +46,14 @@ console.log("1. how fast a crowd walks, against Weidmann");
     (crowdSpeed(1e-6) / 1000).toFixed(3));
   check("2 people/m² is about 0.61 m/s", near(crowdSpeed(2e-6) / 1000, 0.61, 0.03),
     (crowdSpeed(2e-6) / 1000).toFixed(3));
-  check("at jam density everybody has stopped", crowdSpeed(5.4e-6) === 0);
+  // Weidmann's curve reaches exactly zero at 5.4, and taking that literally
+  // locks a jammed crowd forever - see section 4e. Fruin's F band is
+  // "shuffling", not "stopped", so there is a floor and this is it.
+  check("at jam density it is a shuffle, not a full stop",
+    crowdSpeed(5.4e-6) > 0 && crowdSpeed(5.4e-6) < FREE_SPEED * 0.1,
+    crowdSpeed(5.4e-6).toFixed(0) + " mm/s");
+  check("and beyond jam it does not go further, or negative",
+    crowdSpeed(20e-6) === crowdSpeed(5.4e-6), crowdSpeed(20e-6).toFixed(0) + " mm/s");
   check("and it never goes backwards or above free",
     Array.from({ length: 60 }, (_, i) => crowdSpeed(i * 1e-7))
       .every((v, i, all) => v <= FREE_SPEED + 1e-6 && (i === 0 || v <= all[i - 1] + 1e-6)));
@@ -220,6 +227,175 @@ console.log("\n4b. cut off is not the same as arrived");
     && report.arrived === 0, JSON.stringify(report));
   check("they are still there to be seen, not quietly removed",
     crowd.count === walkingBefore, crowd.count + " still on the floor");
+}
+
+console.log("\n4c. the two maps are two different maps");
+{
+  //! Movement and concentration answer different questions, and showing one
+  //! and calling it "the heatmap" is how a circulation problem gets read as an
+  //! occupancy problem. A corridor everybody crosses and nobody stays in must
+  //! be hot on movement and cold on concentration; a spot where somebody
+  //! stands still must be the other way round.
+  const grid = makeGrid({ lo: [0, 0], hi: [12000, 4000], floor: 0 }, 250);
+  clearanceOf(grid);
+  const field = flowField(grid, [[11000, 2000]]);
+  const trace = makeTrace(grid);
+  const crowd = makeCrowd(60);
+  const density = makeDensity(grid);
+  let seed = 5;
+  const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  for (let i = 0; i < 20; i++) addWalker(crowd, 800 + rnd() * 400, 1200 + rnd() * 1600, 0, 0, rnd);
+  // One person who arrives and then stands there for the rest of the run.
+  const sitter = addWalker(crowd, 6000, 3500, 0, 0, rnd);
+  crowd.until[sitter] = 1e6;
+
+  let t = 0;
+  for (let step = 0; step < 1200; step++) {
+    t += 0.05;
+    measureDensity(density, crowd, grid, 0.05);
+    stepCrowd(crowd, [field], grid, density, 0.05, t, { trace });
+  }
+  const at = (x, y, map) => {
+    const [i, j] = toCell(grid, x, y);
+    return trace[map][j * grid.width + i];
+  };
+  check("the corridor everyone walked is hot on movement",
+    at(6000, 2000, "footfall") > 0, at(6000, 2000, "footfall").toFixed(0) + " person-mm");
+  check("the spot where one person stood is hotter on concentration",
+    at(6000, 3500, "occupancy") > at(6000, 2000, "occupancy"),
+    at(6000, 3500, "occupancy").toFixed(1) + " vs " + at(6000, 2000, "occupancy").toFixed(1) + " person-s");
+  check("and colder on movement - they never went anywhere",
+    at(6000, 3500, "footfall") < at(6000, 2000, "footfall") * 0.2,
+    at(6000, 3500, "footfall").toFixed(0) + " vs " + at(6000, 2000, "footfall").toFixed(0));
+  check("somewhere nobody went is cold on both",
+    at(1000, 3800, "footfall") === 0, at(1000, 3800, "footfall").toFixed(0));
+  check("the trace knows how long it ran", near(trace.seconds, t, 0.2),
+    trace.seconds.toFixed(1) + " s");
+
+  // Person-metres is a real quantity: the total must match what people walked.
+  const walkedTotal = trace.footfall.reduce((a, b) => a + b, 0);
+  const bodiesWalked = crowd.journeys.reduce((a, j) => a + j.mm, 0)
+    + Array.from({ length: crowd.count }, (_, a) => crowd.walked[a]).reduce((a, b) => a + b, 0);
+  check("and the map adds up to the distance everybody actually walked",
+    near(walkedTotal, bodiesWalked, bodiesWalked * 0.02 + 1),
+    (walkedTotal / 1000).toFixed(1) + " m vs " + (bodiesWalked / 1000).toFixed(1) + " m");
+}
+
+console.log("\n4d. people who arrive can be sent somewhere else");
+{
+  //! A floor where everybody leaves the moment they arrive is a drain. Given
+  //! somewhere else to go they go, which is what makes flows CROSS.
+  const grid = makeGrid({ lo: [0, 0], hi: [12000, 6000], floor: 0 }, 250);
+  clearanceOf(grid);
+  const fields = [flowField(grid, [[1000, 3000]]), flowField(grid, [[11000, 3000]])];
+  const crowd = makeCrowd(20);
+  const density = makeDensity(grid);
+  let seed = 9;
+  const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  for (let i = 0; i < 10; i++) addWalker(crowd, 5500 + rnd() * 1000, 2000 + rnd() * 2000, 1, 0, rnd);
+
+  let t = 0, swaps = 0;
+  for (let step = 0; step < 3000; step++) {
+    t += 0.05;
+    measureDensity(density, crowd, grid, 0.05);
+    stepCrowd(crowd, fields, grid, density, 0.05, t, {
+      recycle: (a, now) => { swaps++; return { goal: crowd.goal[a] === 0 ? 1 : 0, dwell: 2 }; },
+    });
+  }
+  check("nobody was removed - they are all still walking", crowd.count === 10,
+    crowd.count + " on the floor");
+  check("they turned round and went back, many times over", swaps > 20, swaps + " arrivals");
+  check("and every one was counted as a journey", crowd.done === swaps,
+    crowd.done + " journeys, " + swaps + " arrivals");
+  // Dwell measured rather than asserted: the same run twice, once with people
+  // stopping for eight seconds when they arrive and once with them turning
+  // straight round. The difference between the medians has to be the dwell.
+  const median = dwell => {
+    const c = makeCrowd(20), d = makeDensity(grid);
+    let s2 = 9;
+    const r2 = () => (s2 = (s2 * 48271) % 2147483647) / 2147483647;
+    for (let i = 0; i < 10; i++) addWalker(c, 5500 + r2() * 1000, 2000 + r2() * 2000, 1, 0, r2);
+    let time = 0;
+    for (let step = 0; step < 3000; step++) {
+      time += 0.05;
+      measureDensity(d, c, grid, 0.05);
+      stepCrowd(c, fields, grid, d, 0.05, time,
+        { recycle: a => ({ goal: c.goal[a] === 0 ? 1 : 0, dwell }) });
+    }
+    const times = c.journeys.map(j => j.seconds).sort((a, b) => a - b);
+    return times[Math.floor(times.length / 2)];
+  };
+  const brisk = median(0), lingering = median(8);
+  check("stopping for eight seconds adds eight seconds to a journey",
+    near(lingering - brisk, 8, 1.5),
+    brisk.toFixed(1) + " s becomes " + lingering.toFixed(1) + " s");
+}
+
+console.log("\n4e. two crowds walking into each other must pass, not lock");
+{
+  //! The benchmark every pedestrian model is judged on, and TWO separate
+  //! things are needed to pass it. Both were found by running it.
+  //!
+  //! Weidmann's relation reaches exactly zero at jam density. Take that
+  //! literally and a crowd that jams can never un-jam: everybody stops,
+  //! stopping holds the density up, and the density holds everybody stopped.
+  //! Hence the shuffle floor - and Fruin's F band is "shuffling", not
+  //! "stopped", so the floor is what the standard says as well.
+  //!
+  //! And pushing people apart along the line between them gives a head-on
+  //! meeting no way out: every push is met by an equal one back and nobody has
+  //! a reason to go round. Real people step aside, consistently to one side.
+  //! One rotational bias, the same for everybody, breaks the symmetry.
+  //!
+  //! A 1.2 m corridor with eighty people is where both matter: without the
+  //! sidestep NOBODY gets through, with it almost everybody does.
+  const corridor = (widthMm, people, sidestep) => {
+    const grid = makeGrid({ lo: [0, 0], hi: [20000, widthMm + 200], floor: 0 }, 250);
+    blockPolygon(grid, [[0, 0], [20000, 0], [20000, 100], [0, 100]]);
+    blockPolygon(grid, [[0, widthMm + 100], [20000, widthMm + 100],
+                        [20000, widthMm + 200], [0, widthMm + 200]]);
+    clearanceOf(grid);
+    const mid = (widthMm + 200) / 2;
+    const east = flowField(grid, [[19000, mid]]), west = flowField(grid, [[1000, mid]]);
+    const crowd = makeCrowd(200), density = makeDensity(grid);
+    let seed = 21;
+    const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+    for (let i = 0; i < people / 2; i++) {
+      addWalker(crowd, 2000 + rnd() * 3000, 200 + rnd() * (widthMm - 200), 0, 0, rnd);
+      addWalker(crowd, 15000 + rnd() * 3000, 200 + rnd() * (widthMm - 200), 1, 0, rnd);
+    }
+    const started = crowd.count;
+    let t = 0;
+    for (let step = 0; step < 8000 && crowd.count; step++) {
+      t += 0.05;
+      measureDensity(density, crowd, grid, 0.05);
+      stepCrowd(crowd, [east, west], grid, density, 0.05, t, { sidestep });
+    }
+    return { done: crowd.done, started, stuck: crowd.count, seconds: t };
+  };
+
+  const roomy = corridor(3000, 40, SIDESTEP);
+  check("in a 3 m corridor two crowds pass each other",
+    roomy.done >= roomy.started * 0.9,
+    roomy.done + " of " + roomy.started + " in " + roomy.seconds.toFixed(0) + " s");
+
+  const tight = corridor(1200, 80, SIDESTEP);
+  const locked = corridor(1200, 80, 0);
+  check("in a 1.2 m corridor with eighty people, the sidestep gets them through",
+    tight.done >= tight.started * 0.75,
+    tight.done + " of " + tight.started);
+  check("and without it NOBODY gets through - it locks solid",
+    locked.done === 0 && locked.stuck === locked.started,
+    locked.done + " arrive, " + locked.stuck + " still stuck after "
+      + locked.seconds.toFixed(0) + " s");
+
+  // The shuffle floor, which is what lets the sidestep act at all.
+  check("a jammed crowd shuffles rather than freezing",
+    crowdSpeed(9e-6) > 0 && crowdSpeed(9e-6) < FREE_SPEED * 0.15,
+    crowdSpeed(9e-6).toFixed(0) + " mm/s at 9 people/m²");
+  check("and speed still falls the whole way down to it",
+    crowdSpeed(0.5e-6) > crowdSpeed(2e-6) && crowdSpeed(2e-6) > crowdSpeed(4e-6),
+    [0.5, 2, 4].map(d => crowdSpeed(d * 1e-6).toFixed(0)).join(" > "));
 }
 
 console.log("\n5. crowding, measured");

@@ -45,6 +45,10 @@ export const FREE_SPEED = 1340;       // mm/s, Weidmann's mean
 export const SPEED_SPREAD = 260;      // mm/s, Weidmann's standard deviation
 export const JAM_DENSITY = 5.4e-6;    // people per mm^2 - 5.4 per m^2
 
+//! How much of the push between two people is sideways rather than straight
+//! back. Zero deadlocks a head-on meeting; this is what makes lanes.
+export const SIDESTEP = 0.75;
+
 //! An empty plate. \p cell is in mm.
 export function makeGrid(bounds, cell = 250) {
   const width = Math.max(1, Math.ceil((bounds.hi[0] - bounds.lo[0]) / cell));
@@ -265,13 +269,24 @@ class BucketHeap {
    What it is NOT is a prediction about any one person - it is a way of finding
    the pinch points, and pinch points are a property of the plan.            */
 
-//! Weidmann's fundamental diagram: the speed a crowd of this density walks at.
-//! Free at nobody, stopped at 5.4 people a square metre, and the curve between
-//! them is the reason a corridor has a capacity rather than a width.
+//! How fast a crowd at this density walks. Weidmann's fundamental diagram -
+//! free at nobody, and the curve down to jam is the reason a corridor has a
+//! capacity rather than a width.
+//!
+//! With ONE correction, and it is not cosmetic. Weidmann's relation reaches
+//! exactly zero at 5.4 people a square metre, and a simulation that takes that
+//! literally locks solid and stays locked: everybody stops, stopping keeps the
+//! density up, and the density keeps everybody stopped. A crowd that jams can
+//! then never un-jam itself, which is not what crowds do and not what Fruin
+//! says either - his F band is SHUFFLING, not stopped. So there is a floor
+//! under it, and the floor is a shuffle.
+export const SHUFFLE = 0.08;          // of free speed: about 100 mm/s
+
 export function crowdSpeed(density, free = FREE_SPEED) {
   if (!(density > 0)) return free;
-  if (density >= JAM_DENSITY) return 0;
-  return free * (1 - Math.exp(-1.913 * (1 / density - 1 / JAM_DENSITY) * 1e-6));
+  if (density >= JAM_DENSITY) return free * SHUFFLE;
+  return Math.max(free * SHUFFLE,
+    free * (1 - Math.exp(-1.913 * (1 / density - 1 / JAM_DENSITY) * 1e-6)));
 }
 
 //! Fruin's Level of Service for a walkway, as area per person in mm^2. The
@@ -303,6 +318,7 @@ export function makeCrowd(limit = 400) {
     goal: new Int8Array(limit),           // which field they are following
     born: new Float32Array(limit),        // when, in seconds
     walked: new Float32Array(limit),      // how far, in mm
+    until: new Float32Array(limit),       // standing still until this time
     done: 0, journeys: [],                // finished trips, in seconds
     stranded: 0,                          // people who cannot reach anywhere
   };
@@ -319,12 +335,13 @@ export function addWalker(crowd, x, y, goal, now, random = Math.random) {
   crowd.goal[at] = goal;
   crowd.born[at] = now;
   crowd.walked[at] = 0;
+  crowd.until[at] = 0;
   return at;
 }
 
 export function removeWalker(crowd, at) {
   const last = --crowd.count;
-  for (const key of ["x", "y", "vx", "vy", "free", "goal", "born", "walked"])
+  for (const key of ["x", "y", "vx", "vy", "free", "goal", "born", "walked", "until"])
     crowd[key][at] = crowd[key][last];
 }
 
@@ -336,15 +353,34 @@ const gauss = random => {
 //! One step of the whole crowd, \p dt seconds. Everyone is pushed by three
 //! things and nothing else: where the field says to go, whoever is too close,
 //! and whatever wall is too close.
-export function stepCrowd(crowd, fields, grid, density, dt, now) {
+export function stepCrowd(crowd, fields, grid, density, dt, now, options = {}) {
+  const { trace = null, recycle = null, sidestep = SIDESTEP } = options;
   const hash = new SpatialHash(grid.cell * 4);
   for (let a = 0; a < crowd.count; a++) hash.add(a, crowd.x[a], crowd.y[a]);
+
+  const mark = (a, moved) => {
+    if (!trace) return;
+    const [i, j] = toCell(grid, crowd.x[a], crowd.y[a]);
+    if (!inGrid(grid, i, j)) return;
+    const k = cellIndex(grid, i, j);
+    trace.footfall[k] += moved;
+    trace.occupancy[k] += dt;
+  };
 
   const arrived = [], stuck = [];
   for (let a = 0; a < crowd.count; a++) {
     const field = fields[crowd.goal[a]];
     if (!field) continue;
     const x = crowd.x[a], y = crowd.y[a];
+
+    // Somebody who has arrived somewhere and is staying a while. They still
+    // count - a person at a desk is occupancy, and leaving them out is what
+    // makes an occupancy map look like a corridor map.
+    if (now < crowd.until[a]) {
+      crowd.vx[a] *= 0.5; crowd.vy[a] *= 0.5;
+      mark(a, 0);
+      continue;
+    }
 
     // Arrived and STRANDED are not the same thing, and telling them apart is
     // the whole difference between a simulation and a demonstration. Somebody
@@ -364,9 +400,20 @@ export function stepCrowd(crowd, fields, grid, density, dt, now) {
 
     let px = want[0] * speed, py = want[1] * speed;
 
-    // Everybody too close pushes back, harder the closer they are. This is
-    // what makes lanes form in a two-way corridor without anybody being told
-    // to form one.
+    // Everybody too close pushes back, harder the closer they are - and
+    // SIDEWAYS as well as away.
+    //
+    // The sideways part is the whole thing. Push people apart along the line
+    // between them and two crowds walking into each other lock solid: every
+    // push is met by an equal one back, nobody has any reason to go round, and
+    // the middle of the room turns into a knot that never clears. It looks
+    // like congestion and it is actually a model with no way out of a
+    // head-on meeting.
+    //
+    // Real people step to a side, and consistently to the same side. One
+    // rotational bias, the same for everybody, breaks the symmetry - and lanes
+    // form on their own, which is exactly what a real corridor does without
+    // anybody being told to.
     for (const b of hash.near(x, y)) {
       if (b === a) continue;
       const dx = x - crowd.x[b], dy = y - crowd.y[b];
@@ -375,6 +422,10 @@ export function stepCrowd(crowd, fields, grid, density, dt, now) {
       const push = (1 - gap / (BODY * 2.2)) ** 2 * crowd.free[a] * 1.9;
       px += dx / gap * push;
       py += dy / gap * push;
+      // Rotated a quarter turn from the push: always the same way round, so
+      // two people meeting head-on both step the same side and pass.
+      px += dy / gap * push * sidestep;
+      py += -dx / gap * push * sidestep;
     }
 
     // And so does a wall, from the clearance field, which is already there.
@@ -403,9 +454,12 @@ export function stepCrowd(crowd, fields, grid, density, dt, now) {
       else if (!isBlocked(grid, x, ny)) nx = x;
       else { nx = x; ny = y; crowd.vx[a] = crowd.vy[a] = 0; }
     }
-    crowd.walked[a] += Math.hypot(nx - x, ny - y);
+    const moved = Math.hypot(nx - x, ny - y);
+    crowd.walked[a] += moved;
     crowd.x[a] = nx; crowd.y[a] = ny;
+    mark(a, moved);
   }
+  if (trace) trace.seconds += dt;
 
   // Stranded people stand still rather than vanishing. They are the finding:
   // a plan where forty people cannot reach an exit is the plan telling you
@@ -419,7 +473,17 @@ export function stepCrowd(crowd, fields, grid, density, dt, now) {
     crowd.journeys.push({ seconds: now - crowd.born[a], mm: crowd.walked[a] });
     if (crowd.journeys.length > 500) crowd.journeys.shift();
     crowd.done++;
-    removeWalker(crowd, a);
+    // A floor where everybody leaves as soon as they arrive is a drain, not a
+    // building. Given somewhere else to go, they go: which is what makes the
+    // flows CROSS, and a footfall map of crossing flows is the thing a plan is
+    // actually judged on.
+    const next = recycle ? recycle(a, now) : null;
+    if (next && Number.isFinite(next.goal)) {
+      crowd.goal[a] = next.goal;
+      crowd.born[a] = now;
+      crowd.walked[a] = 0;
+      crowd.until[a] = now + (next.dwell || 0);
+    } else removeWalker(crowd, a);
   }
   return { arrived: arrived.length, stranded: stuck.length };
 }
@@ -463,6 +527,33 @@ class SpatialHash {
       }
     return out;
   }
+}
+
+/* ----------------------------------------------------------- the traces
+
+   The two maps a movement study is read from, and they are NOT the same map.
+
+     FOOTFALL   how much walking happened here, ever. Person-metres per square
+                metre. This is the desire-line map: the routes people actually
+                took, worn into the floor. Empty where nobody goes even if the
+                room is full of people standing.
+
+     OCCUPANCY  how long people were here. Person-seconds per square metre.
+                This is where people ARE: the queue, the desk, the tea point.
+                Bright where a corridor is busy and brighter where anybody
+                stops.
+
+   A busy corridor is hot on both. A lift lobby that everybody crosses and
+   nobody stays in is hot on footfall and cold on occupancy. A desk cluster is
+   the other way round. Showing one and calling it "the heatmap" is how a
+   circulation problem gets read as an occupancy problem.                     */
+
+export function makeTrace(grid) {
+  return {
+    footfall: new Float32Array(grid.width * grid.height),   // person-mm
+    occupancy: new Float32Array(grid.width * grid.height),  // person-seconds
+    seconds: 0,
+  };
 }
 
 /* ------------------------------------------------------------- crowding */

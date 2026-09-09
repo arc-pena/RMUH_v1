@@ -379,6 +379,8 @@ body.flowing .fades:not(#chip) { opacity: 0; pointer-events: none; }
   box-shadow: 0 1px 2px rgba(16, 28, 38, .1);
 }
 .fl-note { flex: 1; font-family: var(--mono); font-size: 10px; color: var(--ink-3); text-align: right; }
+.fl-toggles { flex-wrap: wrap; }
+#fl-map button[aria-pressed="true"] { color: var(--accent); }
 
 .fl-panel {
   right: var(--edge); top: var(--edge); width: 292px;
@@ -402,6 +404,8 @@ body.flowing .fades:not(#chip) { opacity: 0; pointer-events: none; }
 .fl-los-bar { flex: 1; height: 9px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
 .fl-los-bar i { display: block; height: 100%; border-radius: 3px; }
 .fl-small.fl-warn { color: var(--bad); }
+.fl-legend { margin: 0 0 5px 19px; font-size: 10px; color: var(--ink-3); }
+.fl-los b[style] { border-radius: 3px; height: 11px; }
 .fl-los em {
   flex: none; width: 30px; text-align: right; font-style: normal;
   font-family: var(--mono); font-size: 10px; color: var(--ink-3);
