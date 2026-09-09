@@ -98,6 +98,52 @@ console.log("\n2. a profile swept along a rail");
     close(await gaugeOf(sweep, "area"), 2 * Math.PI * 100 * 4000, 2000),
     (await gaugeOf(sweep, "area")).toFixed(0) + " vs "
       + (2 * Math.PI * 100 * 4000).toFixed(0));
+  await set(sweep, "cap", 0);
+
+  //! A STRAIGHT rail proves nothing about a sweep, which is how this came to
+  //! be wrong in the first place. The rail has to turn.
+  //!
+  //! Bent to a right angle: 1000 along +x, then 1000 up +z. A mitred corner
+  //! takes as much off the outside as it puts on the inside, so a body swept
+  //! along it is exactly the section times the 2000 of centreline - and if the
+  //! section never turns, it is the section times the 1000 it managed before
+  //! the rail left it behind. The two differ by a factor of two, and nothing
+  //! on screen tells you which one you are looking at.
+  const knee = await point(1000, 0, 0);
+  const top = await point(1000, 0, 1000);
+  const bentRail = await add("Polyline", { points: origin });
+  await kernel.setReference(bentRail, "points", knee, false, false);
+  await kernel.setReference(bentRail, "points", top, false, false);
+  check("a rail that turns a corner, 2000 of it",
+    close(await gaugeOf(bentRail, "length"), 2000, 1), String(await gaugeOf(bentRail, "length")));
+  await kernel.setReference(sweep, "spine", bentRail, false, true);
+  const bent = await gaugeOf(sweep, "volume");
+  check("the section turns with the rail rather than being dragged through it",
+    close(bent, Math.PI * 100 * 100 * 2000, 1000),
+    bent.toFixed(0) + " vs " + (Math.PI * 100 * 100 * 2000).toFixed(0)
+      + " (a section that never turns gives " + (Math.PI * 100 * 100 * 1000).toFixed(0) + ")");
+  await set(sweep, "cap", 1);
+  check("and the skin is the wall of that same elbow",
+    close(await gaugeOf(sweep, "area"), 2 * Math.PI * 100 * 2000, 500),
+    (await gaugeOf(sweep, "area")).toFixed(0) + " vs "
+      + (2 * Math.PI * 100 * 2000).toFixed(0));
+  await set(sweep, "cap", 0);
+
+  // A section with a hole in it sweeps into a body with a bore, not into two
+  // bodies one inside the other.
+  const hollow = await add("Sketch", { plane, origin });
+  await kernel.setSketch(hollow, null, { elements: [
+    { id: "c1", type: "circle", c: [0, 0], r: 100 },
+    { id: "c2", type: "circle", c: [0, 0], r: 60 },
+  ], constraints: [] });
+  check("the hollow section is a ring, not a disc",
+    close(await gaugeOf(hollow, "area"), Math.PI * (100 * 100 - 60 * 60), 1),
+    (await gaugeOf(hollow, "area")).toFixed(0));
+  const pipe = await add("Sweep", { profile: hollow, spine: bentRail });
+  check("a section with a hole sweeps into a pipe with a bore",
+    close(await gaugeOf(pipe, "volume"), Math.PI * (100 * 100 - 60 * 60) * 2000, 1000),
+    (await gaugeOf(pipe, "volume")).toFixed(0) + " vs "
+      + (Math.PI * (100 * 100 - 60 * 60) * 2000).toFixed(0));
   void up;
 }
 

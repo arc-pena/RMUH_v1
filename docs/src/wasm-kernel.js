@@ -2719,17 +2719,14 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       }
       return null;
     },
+    //! Solid or skin, the same rail. The factory works out what the profile
+    //! offers - one loop, several, or a loop with a hole in it - so there is
+    //! nothing to cap or take apart first.
     build: f => {
       const source = F.shape(F.reference(f, "profile"));
       const spine = F.shape(F.reference(f, "spine"));
-      if (Feature_choice(f, "cap") === 0) {
-        const faces = capped(f, source);
-        if (!faces.length) throw new Error("the profile does not close, so it has no body to sweep");
-        return HSF.join(faces.map(face => HSF.sweep1(face, spine)));
-      }
-      const wires = outlines(f, source);
-      if (!wires.length) throw new Error("the profile has nothing to sweep");
-      return HSF.join(wires.map(wire => HSF.sweep1(wire, spine)));
+      return Feature_choice(f, "cap") === 0 ? SF.rib(source, spine)
+                                            : HSF.sweep1(source, spine);
     },
   };
 

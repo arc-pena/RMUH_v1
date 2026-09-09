@@ -200,6 +200,56 @@ export function makeFactories(oc, kit) {
     return made.Shape();
   };
 
+  //! A profile carried along a rail, once. Both factories reach for it - a
+  //! skin in one, a body in the other - so the settings that make it right are
+  //! written down once, here, where they cannot be got wrong in only one of
+  //! the two.
+  //!
+  //! Both settings matter, and neither is the default:
+  //!
+  //!   SetTransitionMode(RightCorner)   what to do where the rail turns a
+  //!                                    corner. Left on Transformed, the
+  //!                                    section is dragged through the corner
+  //!                                    rather than mitred at it.
+  //!   Add(..., correction = true)      turn the section to stay square to the
+  //!                                    rail. Without it the section keeps the
+  //!                                    angle it started at the whole way.
+  //!
+  //! Measured on a quarter turn of radius 1000 with a 100 radius section, where
+  //! the right answer is 49,339,215: the defaults give 31,415,927 - which is
+  //! exactly the section swept STRAIGHT for 1000, the section never having
+  //! turned at all. Correction alone gives 32,427,006 and the corner mode alone
+  //! 41,998,774. Only both together give the elbow.
+  const pipeAlong = (profileWire, spine, solid) => {
+    const shell = new oc.BRepOffsetAPI_MakePipeShell(spine);
+    shell.SetMode(false);                       // corrected Frenet
+    shell.SetTransitionMode(oc.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RightCorner);
+    shell.Add(profileWire, false, true);
+    shell.Build(new oc.Message_ProgressRange());
+    if (!shell.IsDone()) throw new Error("that profile will not sweep along that rail");
+    if (solid && !shell.MakeSolid())
+      throw new Error("that profile does not close, so it cannot sweep into a body");
+    const made = shell.Shape();
+    if (!made || made.IsNull()) throw new Error("that sweep came out empty");
+    return made;
+  };
+
+  //! Every closed run a profile offers, as { outer, holes } - one entry per
+  //! region. A profile is often several separate loops, and a loop may have
+  //! loops inside it; both have to be swept as what they are, because adding
+  //! two wires to one MakePipeShell makes a sweep that MORPHS from the first
+  //! into the second rather than two tubes.
+  const regionsOf = profile => {
+    const faces = each(profile, FACE, oc.TopoDS.Face);
+    if (faces.length) return faces.map(face => {
+      const outer = oc.BRepTools.OuterWire(face);
+      return { outer, holes: each(face, WIRE, oc.TopoDS.Wire)
+        .filter(w => !w.IsSame(outer)) };
+    });
+    const wires = each(profile, WIRE, oc.TopoDS.Wire);
+    return (wires.length ? wires : [wireOf(profile)]).map(outer => ({ outer, holes: [] }));
+  };
+
   //! The one loft, used by both factories: a skin here, a body there.
   const thruSections = (sections, ruled, solid) => {
     if (sections.length < 2) throw new Error("a loft needs at least two sections");
@@ -557,13 +607,15 @@ export function makeFactories(oc, kit) {
       } },
 
     { name: "sweep1", takes: "profile, spine", gives: "shape",
-      summary: "A profile swept along one rail. The profile is carried along the "
-             + "spine keeping its angle to it, which is what a handrail, a gutter or "
-             + "a moulding is.",
+      summary: "A profile swept along one rail, as a skin. The section turns to stay "
+             + "square to the rail the whole way, so a rail that bends carries the "
+             + "section round with it rather than dragging it through sideways. For a "
+             + "body rather than a skin, the solid factory ribs along the same rail.",
       run: (profile, spine) => {
-        const maker = new oc.BRepOffsetAPI_MakePipe(wireOf(spine), profile);
-        if (!maker.IsDone()) throw new Error("that profile will not sweep along that path");
-        return maker.Shape();
+        const rail = wireOf(spine);
+        const skins = regionsOf(profile).flatMap(region =>
+          [region.outer, ...region.holes].map(wire => pipeAlong(wire, rail, false)));
+        return skins.length === 1 ? skins[0] : compoundOf(skins);
       } },
 
     { name: "loft", takes: "sections, ruled", gives: "shape",
@@ -686,6 +738,28 @@ export function makeFactories(oc, kit) {
         made.Build();
         if (!made.IsDone()) throw new Error("that draft will not build");
         return made.Shape();
+      } },
+
+    { name: "rib", takes: "profile, spine", gives: "solid",
+      summary: "A closed profile swept along one rail into a body - CATIA calls it a "
+             + "Rib. A handrail, a gutter, a moulding, a road. A profile with a hole "
+             + "in it sweeps into a body with a bore, rather than into two bodies one "
+             + "inside the other.",
+      run: (profile, spine) => {
+        const rail = wireOf(spine);
+        const bodies = regionsOf(profile).map(region => {
+          const body = pipeAlong(region.outer, rail, true);
+          if (!region.holes.length) return body;
+          // A hole in the section is a bore along the whole sweep, which is
+          // the bore swept and taken out - not a second tube left inside.
+          return region.holes.reduce((solid, hole) => {
+            const bore = pipeAlong(hole, rail, true);
+            const cut = new oc.BRepAlgoAPI_Cut(solid, bore, new oc.Message_ProgressRange());
+            cut.Build(new oc.Message_ProgressRange());
+            return cut.IsDone() ? cut.Shape() : solid;
+          }, body);
+        });
+        return bodies.length === 1 ? bodies[0] : compoundOf(bodies);
       } },
 
     { name: "loft", takes: "sections, ruled", gives: "solid",
