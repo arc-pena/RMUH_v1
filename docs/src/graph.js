@@ -7,9 +7,12 @@
 // comes back, so a slider dragged here and the same slider dragged in the
 // definition panel are the same line of JSON arriving by two routes.
 //
-// It opens in a window of its own - a real one where the browser allows it, a
-// floating one that can be moved, resized and rolled up where it does not - so
-// it can sit on a second screen the way Grasshopper does.
+// It opens in a window of its own, inside the page: moved, resized, minimised
+// to its title bar, closed. Inside, because a real browser window is not
+// reliably a window - a sandboxed frame refuses to give one at all, and a
+// browser set to open popups as tabs gives a whole tab with the model hidden
+// behind it. The button in its bar asks for a real one when that is what you
+// want, which is what to do with a second screen.
 
 import { MDL_OPS, parseEdits } from "./mdl.js";
 import { acceptsFrom, sliderSpan } from "./ocaf.js";
@@ -296,6 +299,20 @@ const GRAPH_GLYPH = {
   shut: '<path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
 };
 
+//! The window's own state, per browser.
+const GRAPH_WINDOW = "ocafcad/graph-window";
+
+const readWindowState = () => {
+  try { return JSON.parse(localStorage.getItem(GRAPH_WINDOW) || "{}") || {}; }
+  catch (e) { return {}; }
+};
+
+//! A remembered measurement, if it is one and it still fits the screen this
+//! time. A window put on a second monitor and reopened on a laptop has to come
+//! back somewhere it can be seen.
+const clampSize = (value, fallback, low, high) =>
+  Number.isFinite(value) && value >= low && value <= high ? Math.round(value) : Math.round(fallback);
+
 const gsvg = body => '<svg viewBox="0 0 16 16" aria-hidden="true">' + body + "</svg>";
 const gesc = s => String(s).replace(/[&<>"]/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -400,9 +417,14 @@ export class GraphEditor {
 
   toggle() { return this.showing ? this.close() : this.open(); }
 
-  open() {
+  //! A window inside the page, always - it opens where you can see it, moves,
+  //! resizes, minimises to its own title bar and closes, and it cannot end up
+  //! as a browser tab of its own that hides the model behind it. A real second
+  //! window is worth having on a second screen, so the button in the bar still
+  //! asks for one; it is a thing you choose rather than a thing that happens.
+  open(separate = false) {
     if (this.showing) return this.focus();
-    const win = this.tryPopup();
+    const win = separate ? this.tryPopup() : null;
     if (win) this.mountPopup(win); else this.mountFloater();
     this.onOpen();
   }
@@ -453,34 +475,68 @@ export class GraphEditor {
     window.addEventListener("beforeunload", this.shutPopup = () => { try { win.close(); } catch (e) {} });
   }
 
-  //! No window to be had: a panel that behaves like one. Dragged by its bar,
-  //! resized from the corner, rolled up to the bar alone, and it can try for a
-  //! real window again whenever the browser changes its mind.
+  //! A window inside the page: dragged by its bar, resized from the corner,
+  //! minimised to the bar alone, closed. This is what opening the graph does,
+  //! because a real browser window is not reliably a window - ask for one in a
+  //! sandboxed frame and you get nothing, ask in a browser set to open popups
+  //! as tabs and you get a whole tab with the model hidden behind it. The
+  //! button in the bar asks for a real one when that is what you want.
   mountFloater() {
     const doc = document;
     const floater = doc.createElement("div");
     floater.className = "g-float" + (this.dark() ? " g-dark" : "");
-    const w = Math.min(1160, innerWidth - 60), h = Math.min(760, innerHeight - 80);
-    floater.style.cssText = "left:" + Math.max(20, innerWidth - w - 30) + "px;top:56px;width:" +
-      w + "px;height:" + h + "px;z-index:" + (++GraphEditor.top);
+
+    // Where it was left, if it has been moved before. Otherwise about two
+    // thirds of the viewport, off to the right, with the model still visible
+    // beside it - a window over the work, not instead of it.
+    const kept = readWindowState();
+    const w = Math.round(Math.min(1040, Math.max(560, innerWidth * 0.62), innerWidth - 80));
+    const h = Math.round(Math.min(680, Math.max(320, innerHeight * 0.68), innerHeight - 110));
+    const box = {
+      width: clampSize(kept.width, w, 520, innerWidth - 40),
+      height: clampSize(kept.height, h, 220, innerHeight - 60),
+    };
+    box.left = clampSize(kept.left, Math.max(20, innerWidth - box.width - 30),
+                         0, Math.max(0, innerWidth - 140));
+    box.top = clampSize(kept.top, 56, 0, Math.max(0, innerHeight - 44));
+    floater.style.cssText = "left:" + box.left + "px;top:" + box.top + "px;width:" +
+      box.width + "px;height:" + box.height + "px;z-index:" + (++GraphEditor.top);
+    if (kept.rolled) floater.classList.add("rolled");
 
     const bar = doc.createElement("div");
     bar.className = "g-bar-w";
     bar.innerHTML = '<span class="g-title">Node graph</span>' +
       '<span class="g-sub">the model as JSON</span><span class="g-spacer" style="flex:1"></span>';
+
+    // Minimise leaves the title bar, which is how you get the model back
+    // without losing where the window was or what was open in it.
+    const roll = () => {
+      const rolled = floater.classList.toggle("rolled");
+      minimise.title = rolled ? "Restore" : "Minimise";
+      minimise.setAttribute("aria-label", minimise.title);
+      this.rememberWindow(floater);
+    };
     const chrome = [
-      ["pop", "Try a separate window", () => { this.close(); this.open(); }],
-      ["roll", "Roll up", () => floater.classList.toggle("rolled")],
-      ["shut", "Close", () => this.close()],
+      ["pop", "Open in a separate window", () => { this.close(); this.open(true); }],
+      ["roll", floater.classList.contains("rolled") ? "Restore" : "Minimise", roll],
+      ["shut", "Close (G)", () => this.close()],
     ];
+    let minimise = null;
     for (const [glyph, title, action] of chrome) {
       const button = doc.createElement("button");
       button.className = "g-btn";
       button.title = title;
+      button.setAttribute("aria-label", title);
       button.innerHTML = gsvg(GRAPH_GLYPH[glyph]);
       button.addEventListener("click", action);
       bar.appendChild(button);
+      if (glyph === "roll") minimise = button;
     }
+    // Double-clicking the bar minimises, the way a title bar has always done.
+    bar.addEventListener("dblclick", event => {
+      if (event.target.closest(".g-btn")) return;
+      roll();
+    });
     floater.appendChild(bar);
 
     const frame = doc.createElement("div");
@@ -497,19 +553,21 @@ export class GraphEditor {
     this.drag(bar, (dx, dy, start) => {
       floater.style.left = Math.max(0, Math.min(innerWidth - 120, start.left + dx)) + "px";
       floater.style.top = Math.max(0, Math.min(innerHeight - 40, start.top + dy)) + "px";
-    }, () => ({ left: floater.offsetLeft, top: floater.offsetTop }));
+    }, () => ({ left: floater.offsetLeft, top: floater.offsetTop }),
+       () => this.rememberWindow(floater));
     this.drag(grip, (dx, dy, start) => {
       floater.style.width = Math.max(520, start.w + dx) + "px";
       floater.style.height = Math.max(220, start.h + dy) + "px";
       this.drawWires();
-    }, () => ({ w: floater.offsetWidth, h: floater.offsetHeight }));
+    }, () => ({ w: floater.offsetWidth, h: floater.offsetHeight }),
+       () => this.rememberWindow(floater));
 
     this.build(doc, frame, true);
   }
 
   //! Pointer drag with a starting measurement, used by the window chrome and by
   //! the nodes themselves.
-  drag(handle, move, measure) {
+  drag(handle, move, measure, done) {
     handle.addEventListener("pointerdown", event => {
       if (event.button !== 0 || event.target.closest(".g-btn")) return;
       event.preventDefault();
@@ -521,10 +579,28 @@ export class GraphEditor {
         doc.removeEventListener("pointermove", onMove);
         doc.removeEventListener("pointerup", onUp);
         move(e.clientX - x0, e.clientY - y0, start, true);
+        if (done) done();
       };
       doc.addEventListener("pointermove", onMove);
       doc.addEventListener("pointerup", onUp);
     });
+  }
+
+  //! Where the window was left. Kept per browser, not in the model - it is
+  //! nothing to do with the part, and a model file that carried somebody's
+  //! window position would be a model file that changed when nothing did.
+  rememberWindow(floater) {
+    try {
+      localStorage.setItem(GRAPH_WINDOW, JSON.stringify({
+        left: floater.offsetLeft, top: floater.offsetTop,
+        width: floater.offsetWidth,
+        // Rolled up, the height IS the title bar; the height worth keeping is
+        // the one it will be restored to.
+        height: floater.classList.contains("rolled")
+          ? readWindowState().height : floater.offsetHeight,
+        rolled: floater.classList.contains("rolled"),
+      }));
+    } catch (e) { /* a private window remembers nothing, which is fair */ }
   }
 
   dark() {
