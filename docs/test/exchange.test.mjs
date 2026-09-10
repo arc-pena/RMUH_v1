@@ -379,5 +379,73 @@ console.log("11. shortened for reading, and refused for building");
         (await tree()).features.some(f => f.type === "Imported"));
 }
 
+console.log("12. an import is a node like any other node");
+{
+  await blank();
+  const p = await mdl.run({ op: "add", type: "Point" });
+  const c = await mdl.run({ op: "add", type: "Cube", refs: { origin: p.id } });
+  for (const [key, value] of [["dx", 60], ["dy", 60], ["dz", 60]])
+    await mdl.run({ op: "set", id: c.id, key, value });
+  const step = (await kernel.exportShapes("step")).text;
+
+  await blank();
+  const one = await mdl.run({ op: "import", format: "step", name: "block.step", data: step });
+  const entry = await at(one.created[0]);
+  check("it says what it holds, the way every node says what it computed",
+        !!entry.data && /1 solid, 6 faces/.test(entry.data.preview), (entry.data || {}).preview);
+  check("and where it came from", /from block.step/.test((entry.data || {}).preview || ""),
+        (entry.data || {}).preview);
+
+  // The thing that matters: what comes out of an import is an ordinary body,
+  // so the operations take it without knowing it was imported.
+  const fillet = await mdl.run({ op: "add", type: "Fillet" });
+  await mdl.run({ op: "connect", id: fillet.id, key: "body", from: one.created[0] });
+  await mdl.run({ op: "set", id: fillet.id, key: "radius", value: 6 });
+  const rounded = await at(fillet.id);
+  check("a fillet rounds it", rounded.built && !rounded.error, rounded.error || "");
+  check("and the result has the twelve rounded edges a box has",
+        (await kernel.mesh([fillet.id])).features[0].triangles > 100,
+        String((await kernel.mesh([fillet.id])).features[0].triangles));
+
+  const at2 = await mdl.run({ op: "add", type: "Point" });
+  await mdl.run({ op: "set", id: at2.id, key: "x", value: 60 });
+  const ball = await mdl.run({ op: "add", type: "Sphere", refs: { center: at2.id } });
+  const cut = await mdl.run({ op: "add", type: "Boolean" });
+  await mdl.run({ op: "connect", id: cut.id, key: "a", from: fillet.id });
+  await mdl.run({ op: "connect", id: cut.id, key: "b", from: ball.id });
+  await mdl.run({ op: "set", id: cut.id, key: "op", value: 1 });          // difference
+  const booled = await at(cut.id);
+  check("and a boolean cuts it", booled.built && !booled.error, booled.error || "");
+
+  // Nothing downstream should meet a container where every other node hands
+  // back a body.
+  const volume = await volumeOf(one.created[0]);
+  check("one part in, one body out - not a compound of one",
+        near(volume, 60 * 60 * 60, 1), String(volume));
+}
+
+console.log("13. what cannot be rounded says so, rather than faulting");
+{
+  await blank();
+  const p = await mdl.run({ op: "add", type: "Point" });
+  const v = await mdl.run({ op: "add", type: "Vector" });
+  await mdl.run({ op: "add", type: "Plane", refs: { origin: p.id, normal: v.id } });
+  const brep = (await kernel.exportShapes("brep")).text;
+
+  await blank();
+  const skin = await mdl.run({ op: "import", format: "brep", name: "skin.brep", data: brep });
+  const entry = await at(skin.created[0]);
+  check("a surface import says it is a surface", /face/.test((entry.data || {}).preview || ""),
+        (entry.data || {}).preview);
+
+  const fillet = await mdl.run({ op: "add", type: "Fillet" });
+  await mdl.run({ op: "connect", id: fillet.id, key: "body", from: skin.created[0] });
+  const refused = await at(fillet.id);
+  // OpenCascade does not refuse this - it faults, and a fault is a number with
+  // no explanation in it. The precondition is what turns it into a sentence.
+  check("and a fillet on it is refused by name, not by a fault",
+        !refused.built && /no solid to round/.test(refused.error || ""), refused.error || "built!");
+}
+
 console.log(failures ? "\n" + failures + " failed" : "\nall good");
 process.exit(failures ? 1 : 0);

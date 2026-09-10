@@ -50,11 +50,44 @@ export const JAM_DENSITY = 5.4e-6;    // people per mm^2 - 5.4 per m^2
 export const SIDESTEP = 0.75;
 
 //! An empty plate. \p cell is in mm.
-export function makeGrid(bounds, cell = 250) {
-  const width = Math.max(1, Math.ceil((bounds.hi[0] - bounds.lo[0]) / cell));
-  const height = Math.max(1, Math.ceil((bounds.hi[1] - bounds.lo[1]) / cell));
+/* ------------------------------------------------------------ what fits
+
+   The spacing is allowed to be anything - a masterplan wants a metre grid over
+   500 m, a lobby wants 100 mm over 20 - so nothing here caps what can be asked
+   for. What is capped is what gets BUILT, because past a certain size the
+   browser stops being slow and starts being stuck, and a tool that hangs is
+   worse than one that says it coarsened the grid.
+
+   The number that matters is not cells, it is cells TIMES fields: one Dijkstra
+   sweep runs per destination, and a plate with twenty destination portals in it
+   does twenty sweeps of the same grid. Measured on this machine, four fields
+   over a quarter of a million cells is about 170 ms - fast enough to run while
+   a slider is still moving - and a million cells is 620 ms, which is not. So
+   the budget is a million cell-fields, and the grid coarsens itself to fit.  */
+
+//! Cells times fields, per rebuild.
+export const CELL_BUDGET = 1000000;
+//! And a ceiling whatever the field count, because the grid is also a texture
+//! that goes to the GPU on every frame.
+export const MAX_CELLS = 400000;
+//! Below this a grid is too coarse to mean anything, whatever it costs.
+export const MIN_CELLS = 20000;
+
+//! How many cells this plate may have, given how many fields will be swept
+//! over it.
+export const cellsAllowed = (fields = 1) =>
+  Math.max(MIN_CELLS, Math.min(MAX_CELLS, Math.round(CELL_BUDGET / Math.max(1, fields))));
+
+export function makeGrid(bounds, cell = 250, maxCells = MAX_CELLS) {
+  const across = Math.max(1, bounds.hi[0] - bounds.lo[0]);
+  const down = Math.max(1, bounds.hi[1] - bounds.lo[1]);
+  const asked = cell;
+  // The coarsest of what was asked for and what will fit.
+  cell = Math.max(cell, Math.ceil(Math.sqrt((across * down) / maxCells)));
+  const width = Math.max(1, Math.ceil(across / cell));
+  const height = Math.max(1, Math.ceil(down / cell));
   return {
-    cell, width, height,
+    cell, asked, coarsened: cell > asked, width, height,
     lo: [bounds.lo[0], bounds.lo[1]],
     blocked: new Uint8Array(width * height),
     clearance: new Float32Array(width * height),
@@ -190,8 +223,19 @@ export function flowField(grid, targets, { standOff = 900, timid = 1.4 } = {}) {
       // No cutting a diagonal through the gap between two blocked cells.
       if (di && dj && (blocked[j * width + ni] || blocked[nj * width + i])) continue;
       const step = (di && dj ? S : D) * penalty(nk);
-      const next = here + step;
-      if (next < cost[nk] - 1e-6) { cost[nk] = next; heap.push(nk, next); }
+      // Rounded to what the array will actually hold, and compared as that.
+      //
+      // This is not tidiness. `cost` is a Float32Array, so storing a double
+      // rounds it - and on a site 500 m across the costs are tens of thousands
+      // of millimetres, where one float32 step is about four thousandths. A
+      // fixed 1e-6 tolerance is far under that, so A improves B by less than
+      // the rounding, B improves A back, and the two of them push each other
+      // into the queue for ever. That is what a floor plate the size of a
+      // masterplan did: not slow, stuck, with a hundred million entries in one
+      // bucket. Comparing the rounded value means an improvement is only an
+      // improvement if the array can tell the difference.
+      const next = Math.fround(here + step);
+      if (next < cost[nk]) { cost[nk] = next; heap.push(nk, next); }
     }
   }
   return { grid, cost };

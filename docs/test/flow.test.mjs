@@ -8,8 +8,10 @@
 // people inside furniture, a door with no capacity.
 import { createWasmKernel } from "../src/wasm-kernel.js";
 import { PluginHost, findPlugin } from "../src/plugin.js";
-import { CROWD, CROWD_NODES, crowdColour, footprintOf, plateOf } from "../src/crowd-plugin.js";
-import { BODY, FREE_SPEED, FRUIN, SIDESTEP, addWalker, blockPolygon, clearanceOf, crowdSpeed,
+import { CROWD, CROWD_NODES, crowdColour, footprintOf, plateOf, zSpan }
+  from "../src/crowd-plugin.js";
+import { BODY, FREE_SPEED, FRUIN, SIDESTEP, addWalker, blockPolygon, cellsAllowed,
+         clearanceOf, crowdSpeed,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
          makeDensity, makeGrid, makeTrace, measureDensity, serviceBreakdown,
          stepCrowd, stranded, toCell, walkDistance } from "../src/crowd.js";
@@ -557,6 +559,87 @@ console.log("\n9. the crowding ramp");
   check("and it stays inside the box",
     Array.from({ length: 41 }, (_, i) => crowdColour(i / 40))
       .every(c => c.every(v => v >= 0 && v <= 1)));
+}
+
+console.log("it has to work at both ends of the scale, and never lock up");
+{
+  // A masterplan and a lobby are the same tool. What must not happen at either
+  // end is the browser stopping: past a certain size a grid is not slow, it is
+  // stuck, and a tool that hangs is worse than one that says it coarsened.
+  const slab = (x0, y0, x1, y1) => {
+    const positions = [];
+    for (const z of [0, 3000])
+      for (const [x, y] of [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) positions.push(x, y, z);
+    return { positions, index: [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7,
+                                0, 1, 5, 0, 5, 4, 2, 3, 7, 2, 7, 6] };
+  };
+
+  check("a cell budget is a budget of cells TIMES fields",
+        cellsAllowed(1) > cellsAllowed(4) && cellsAllowed(4) > cellsAllowed(20),
+        [cellsAllowed(1), cellsAllowed(4), cellsAllowed(20)].join(" / "));
+  check("and it never goes below something worth measuring", cellsAllowed(500) >= 20000,
+        String(cellsAllowed(500)));
+
+  // 500 m of masterplan, asked for at 100 mm: 25 million cells, which is not a
+  // grid, it is a hang.
+  const big = plateOf([slab(0, 0, 500000, 500000)], 1500, 100,
+                      { maxCells: cellsAllowed(4) });
+  check("a masterplan at 100 mm coarsens rather than trying",
+        !!big && big.grid.coarsened && big.grid.cell > 100, big ? String(big.grid.cell) : "no plate");
+  check("to something that fits the budget",
+        big.grid.width * big.grid.height <= cellsAllowed(4) * 1.1,
+        (big.grid.width * big.grid.height) + " vs " + cellsAllowed(4));
+  check("and it still covers the whole 500 m",
+        big.grid.width * big.grid.cell >= 500000, String(big.grid.width * big.grid.cell));
+  check("it says what it did", big.grid.asked === 100 && big.grid.cell !== 100,
+        big.grid.asked + " -> " + big.grid.cell);
+
+  // A building footprint at the same spacing is left alone: 40 m at 100 mm is
+  // 160,000 cells, which is a grid.
+  const small = plateOf([slab(0, 0, 40000, 40000)], 1500, 100, { maxCells: cellsAllowed(4) });
+  check("a building at 100 mm is left at 100 mm",
+        !!small && !small.grid.coarsened && small.grid.cell === 100,
+        small ? small.grid.cell + " coarsened=" + small.grid.coarsened : "no plate");
+
+  // And 20 m spacing, which nothing used to allow, is a grid like any other.
+  const coarse = plateOf([slab(0, 0, 500000, 500000)], 1500, 20000, { maxCells: cellsAllowed(4) });
+  check("and 20 m spacing is allowed, because a masterplan may want it",
+        !!coarse && coarse.grid.cell === 20000 && !coarse.grid.coarsened,
+        coarse ? String(coarse.grid.cell) : "no plate");
+
+  // The one that used to lock the page: the field sweep itself. On a plate this
+  // big the costs are tens of thousands of millimetres, where one float32 step
+  // is coarser than the tolerance the sweep used to compare with - so two cells
+  // improved each other by less than the rounding, for ever. It returning at
+  // all is the test.
+  const started = Date.now();
+  const field = flowField(big.grid, [[2000, 2000]]);
+  const took = Date.now() - started;
+  let reached = 0;
+  for (const c of field.cost) if (Number.isFinite(c)) reached++;
+  check("the field sweep finishes on a masterplan-sized grid", reached > 1000,
+        reached + " cells reached in " + took + " ms");
+  check("and it finishes quickly enough to run while a slider moves", took < 2000,
+        took + " ms");
+}
+
+console.log("the cut has to be able to reach the model");
+{
+  // A part drawn here sits on z = 0. A building imported from a STEP file sits
+  // where its file says it sits, and a cut slider fixed to 0.1 - 2.4 m would
+  // never touch a plate four metres up.
+  const box = (z0, z1) => {
+    const positions = [];
+    for (const z of [z0, z1])
+      for (const [x, y] of [[0, 0], [4000, 0], [4000, 4000], [0, 4000]]) positions.push(x, y, z);
+    return { positions, index: [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7] };
+  };
+  check("it says where the model is", JSON.stringify(zSpan([box(4200, 7400)])) === "[4200,7400]",
+        JSON.stringify(zSpan([box(4200, 7400)])));
+  check("and nothing when there is nothing to measure", zSpan([]) === null);
+  check("a flat thing is not a span", zSpan([box(0, 0.5)]) === null);
+  const span = zSpan([box(0, 3000), box(4200, 7400)]);
+  check("two storeys span both", JSON.stringify(span) === "[0,7400]", JSON.stringify(span));
 }
 
 console.log(failures ? "\n" + failures + " FAILED" : "\nall checks passed");

@@ -382,6 +382,19 @@ body.flowing .fades:not(#chip) { opacity: 0; pointer-events: none; }
   flex: none; width: 62px; text-align: right; font-family: var(--mono);
   font-size: 11px; color: var(--ink);
 }
+/* A readout you can type into. Some of these numbers are a preference and a
+   slider is right for them; the grid spacing is a decision about what is being
+   measured, and a decision needs a field, not a range with somebody else's
+   idea of the maximum in it. */
+.fl-read.fl-type {
+  width: 54px; background: var(--panel-2); color: var(--ink);
+  border: 1px solid transparent; border-radius: 5px; padding: 2px 5px;
+  -moz-appearance: textfield;
+}
+.fl-read.fl-type::-webkit-outer-spin-button,
+.fl-read.fl-type::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.fl-read.fl-type:focus { border-color: var(--accent); outline: none; }
+.fl-unit { flex: none; font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
 .fl-row .btn { flex: none; padding: 3px 10px; font-size: 11.5px; }
 .fl-toggles .seg { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--panel-2); }
 .fl-toggles .seg button {

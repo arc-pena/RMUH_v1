@@ -468,6 +468,14 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         const radius = F.real(f, "radius", 10);
         if (radius <= CONFUSION) return "radius must be positive";
         if (countSubShapes(body, EDGE) === 0) return "this body has no edges to round";
+        // A fillet needs something with a thickness. Handed a pile of loose
+        // surfaces - which is what half the STEP files in the world are -
+        // OpenCascade does not refuse, it faults, and a fault is a number with
+        // no explanation in it. So the shape is asked what it is first.
+        if (countSubShapes(body, SOLID) === 0
+            && countSubShapes(body, oc.TopAbs_ShapeEnum.TopAbs_SHELL) === 0)
+          return F.name(source) + " has no solid to round - it is " + describeShape(body)
+            + ", and a fillet needs a body";
 
         const smallest = smallestSolidExtent(body);
         if (Number.isFinite(smallest) && radius >= smallest / 2)
@@ -2860,11 +2868,17 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   builders.Imported = {
     precondition: f => F.code(f, "brep", "") ? null
       : "this import holds no geometry - it was read from a file that had none",
+    //! A shape and a readout of what it is, which is what every other node
+    //! hands back. The readout matters more here than anywhere else: an import
+    //! is the one node whose contents nobody chose, so "3 solids, 18 faces" is
+    //! the difference between a body you can fillet and a pile of surfaces that
+    //! will refuse - and it says which before you wire anything to it.
     build: f => {
       const shape = oc.BRepToolsWrapper.Read(F.code(f, "brep", ""));
       if (!shape || shape.IsNull())
         throw new Error("the stored geometry will not read back - the model file may be truncated");
-      return shape;
+      const from = F.code(f, "source", "");
+      return { shape, data: text([describeShape(shape), from ? "from " + from : "read from a file"]) };
     },
   };
 
@@ -3056,6 +3070,21 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       for (const piece of pieces) out.push({ shape: piece, name: part.name });
     }
     return out;
+  };
+
+  //! A compound that holds one solid and nothing else IS that solid, and a STEP
+  //! reader hands back plenty of them. Unwrapped here so what lands in the tree
+  //! is a body like any other body - the counts have to match exactly, because
+  //! a compound of one solid and three loose edges is not the solid.
+  const unwrap = shape => {
+    if (!shape || shape.IsNull()) return shape;
+    if (String(shape.ShapeType()) !== "TopAbs_COMPOUND") return shape;
+    const solids = subShapes(shape, SOLID, oc.TopoDS.Solid);
+    if (solids.length !== 1) return shape;
+    const one = solids[0];
+    if (countSubShapes(one, FACE) !== countSubShapes(shape, FACE)
+        || countSubShapes(one, EDGE) !== countSubShapes(shape, EDGE)) return shape;
+    return one;
   };
 
   const describeShape = shape => {
@@ -3421,7 +3450,13 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         // One object, or one per part. Exploding is only offered for a format
         // that carries several - everything else has one thing in it, and
         // pretending otherwise would make a set of one.
-        const pieces = as === "parts" ? explode(parts) : [{ shape: compoundOf(parts.map(p => p.shape)) }];
+        // One thing stays one thing. Wrapping a single shape in a compound of
+        // one would make an import the only node in the document whose result
+        // is a container, and every operation downstream would meet a shape of
+        // a kind nothing else here produces.
+        const pieces = as === "parts" ? explode(parts)
+          : parts.length === 1 ? [{ shape: unwrap(parts[0].shape) }]
+          : [{ shape: compoundOf(parts.map(p => p.shape)) }];
         const names = format === "step" ? realNames(text) : [];
         const named = names.length === pieces.length ? names : null;
         pieces.forEach((piece, i) => {

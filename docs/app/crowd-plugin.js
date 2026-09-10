@@ -21,7 +21,8 @@
 
 import { ARG } from "./ocaf.js";
 import { offerPlugin } from "./plugin.js";
-import { BODY, FRUIN, SHUFFLE, addWalker, clearanceOf, blockPolygon, crowdSpeed, densityAt,
+import { BODY, FRUIN, SHUFFLE, addWalker, cellsAllowed, clearanceOf, blockPolygon,
+         crowdSpeed, densityAt,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
          makeDensity, makeGrid, makeTrace, measureDensity, serviceBreakdown,
          stepCrowd, stranded, toCell, toWorld, walkDistance } from "./crowd.js";
@@ -132,7 +133,22 @@ export function footprintOf(mesh, cut) {
 //! and a point beyond the furniture falls off the edge and reads as blocked,
 //! which comes back as "that point is inside something" about a point standing
 //! in open floor.
-export function plateOf(meshes, cut, grain, { pad = 1000, include = [] } = {}) {
+//! Top and bottom of everything drawn, or null when there is nothing. What the
+//! cut has to land between.
+export function zSpan(meshes) {
+  let lo = Infinity, hi = -Infinity;
+  for (const mesh of meshes) {
+    if (!mesh.positions) continue;
+    for (let i = 2; i < mesh.positions.length; i += 3) {
+      const z = mesh.positions[i];
+      if (z < lo) lo = z;
+      if (z > hi) hi = z;
+    }
+  }
+  return Number.isFinite(lo) && hi - lo > 1 ? [lo, hi] : null;
+}
+
+export function plateOf(meshes, cut, grain, { pad = 1000, include = [], maxCells } = {}) {
   let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity], floor = Infinity;
   const rings = [];
   for (const mesh of meshes) {
@@ -155,7 +171,7 @@ export function plateOf(meshes, cut, grain, { pad = 1000, include = [] } = {}) {
   }
   const bounds = { lo: [lo[0] - pad, lo[1] - pad], hi: [hi[0] + pad, hi[1] + pad],
                    floor: Number.isFinite(floor) ? floor : 0 };
-  const grid = makeGrid(bounds, grain);
+  const grid = makeGrid(bounds, grain, maxCells);
   for (const ring of rings) blockPolygon(grid, ring);
   clearanceOf(grid);
   // What the footprints themselves span, as against the padded grid. People
@@ -332,6 +348,10 @@ class FlowView {
     this.on = false;
     this.running = true;
     this.cut = 1100;
+    // Whether the cut is where somebody put it, or still where it started. A
+    // cut nobody has chosen follows the model in.
+    this.cutChosen = false;
+    this.span = null;
     this.grain = 250;
     // Sixty on a floor, not two hundred. A crowd that is jammed from the first
     // second shows you nothing except that it is jammed; start where it flows
@@ -379,8 +399,10 @@ class FlowView {
         <input type="range" id="fl-cut" min="100" max="2400" step="50" value="1100">
         <span class="fl-read" id="fl-cut-read">1.10 m</span>
         <span class="fl-tag" style="width:auto">Grid</span>
-        <input type="range" id="fl-grain" min="100" max="800" step="50" value="250">
-        <span class="fl-read" id="fl-grain-read">250 mm</span>
+        <input type="range" id="fl-grain" min="50" max="800" step="10" value="250">
+        <input type="number" class="fl-read fl-type" id="fl-grain-read"
+               min="10" step="10" value="250" aria-label="Grid spacing in millimetres">
+        <span class="fl-unit">mm</span>
       </div>
       <div class="fl-row fl-toggles">
         <span class="fl-tag">Draw</span>
@@ -417,13 +439,32 @@ class FlowView {
     });
     q("fl-cut").addEventListener("input", e => {
       this.cut = +e.target.value;
+      // Moved by hand: from here it stays where it was put, and only a model
+      // that no longer reaches it moves it again.
+      this.cutChosen = true;
       q("fl-cut-read").textContent = (this.cut / 1000).toFixed(2) + " m";
-      this.rebuild();
+      this.queueRebuild();
     });
+    // Typed rather than dragged: any spacing at all, from a hundred millimetres
+    // to twenty metres. The slider is for adjusting what is there, so its top
+    // end follows whatever was typed rather than capping it - a slider that
+    // will not go where the work needs it is a slider in the way.
+    const setGrain = (mm, fromField) => {
+      const wanted = Math.max(10, Math.round(Number(mm) || 0));
+      this.grain = wanted;
+      const slider = q("fl-grain");
+      if (wanted > Number(slider.max)) slider.max = String(wanted);
+      if (wanted < Number(slider.min)) slider.min = String(wanted);
+      slider.value = String(wanted);
+      if (!fromField) q("fl-grain-read").value = String(wanted);
+      this.queueRebuild();
+    };
+    q("fl-grain-read").addEventListener("change", e => setGrain(e.target.value, true));
+    q("fl-grain-read").addEventListener("keydown", e => e.stopPropagation());
     q("fl-grain").addEventListener("input", e => {
-      this.grain = +e.target.value;
-      q("fl-grain-read").textContent = this.grain + " mm";
-      this.rebuild();
+      this.grain = Math.max(10, +e.target.value);
+      q("fl-grain-read").value = String(this.grain);
+      this.queueRebuild();
     });
     q("fl-play").addEventListener("click", e => {
       this.running = !this.running;
@@ -634,14 +675,34 @@ Object.assign(FlowView.prototype, {
       })
       .filter(p => p.at.length >= 2 && p.at.every(Number.isFinite));
 
+    // Where the model actually is, before anything is cut through it. A part
+    // drawn here sits on z = 0; a building imported from a STEP file sits where
+    // its file says it sits, which may be four metres up or a hundred - and a
+    // cut fixed between 0.1 and 2.4 m would never touch it.
+    this.span = zSpan(meshes);
+    this.rangeCut();
+
+    // One Dijkstra sweep runs per destination, so what a rebuild costs is cells
+    // times fields - and the grid is sized against that rather than against
+    // cells alone. A plate with twenty places to walk to gets a coarser grid
+    // than the same plate with one, because it is doing twenty times the work.
+    const sweeps = Math.max(1, this.portals.filter(p => p.role === "to").length || 4);
     this.plate = meshes.length
       ? plateOf(meshes, this.cut, this.grain,
-                { include: this.portals.map(p => [p.at[0], p.at[1]]) })
+                { include: this.portals.map(p => [p.at[0], p.at[1]]),
+                  maxCells: cellsAllowed(sweeps) })
       : null;
     const note = this.bar.querySelector("#fl-note");
     if (!this.plate) {
       this.fields = [];
-      note.textContent = "nothing in the model has a footprint at this height";
+      // Say where the model is, not just that the cut missed it. "Nothing at
+      // this height" with no heights in it is the least useful true sentence
+      // an interface can produce.
+      note.textContent = meshes.length && this.span
+        ? "nothing crosses " + (this.cut / 1000).toFixed(2) + " m - the model spans "
+          + (this.span[0] / 1000).toFixed(2) + " to " + (this.span[1] / 1000).toFixed(2)
+          + " m, so move the cut into it"
+        : "nothing in the model has a footprint at this height";
       this.goals = [];
       this.makePlate();
       return;
@@ -659,13 +720,73 @@ Object.assign(FlowView.prototype, {
     // you nothing about a floor plate.
     this.goals = this.goalList();
     this.fields = this.goals.map(goal => flowField(this.plate.grid, goal.at));
+    const grid = this.plate.grid;
+    // A grid coarser than the thing it is measuring is not a measurement. It
+    // is allowed - a masterplan may want twenty metres - but a floor that came
+    // out as four cells should say so rather than reporting nought square
+    // metres as if the building had vanished.
+    if (grid.width * grid.height < 24) {
+      this.fields = [];
+      this.goals = [];
+      note.textContent = "the grid is coarser than the floor - " + grid.cell
+        + " mm cells over " + Math.round(grid.width * grid.cell / 1000) + " × "
+        + Math.round(grid.height * grid.cell / 1000) + " m is "
+        + (grid.width * grid.height) + " cells. Type a smaller spacing.";
+      this.makePlate();
+      return;
+    }
     note.textContent = (this.walkableArea() / 1e6).toFixed(0) + " m² walkable · "
       + this.plate.rings.length + " footprints"
       + " · " + this.goals.length + (this.goals.length === 1 ? " destination" : " destinations")
-      + (this.portals.length ? "" : ", the corners of the floor");
+      + (this.portals.length ? "" : ", the corners of the floor")
+      // Said when it happens, because a grid that quietly refused what was
+      // asked of it is a measurement of something else.
+      + (grid.coarsened
+          ? " · grid " + grid.cell + " mm, not the " + grid.asked + " mm asked for: "
+            + (grid.width * grid.height / 1000).toFixed(0) + "k cells is what this plate can "
+            + "carry with " + this.goals.length
+            + (this.goals.length === 1 ? " destination" : " destinations") + " to sweep"
+          : "");
     this.makePlate();
     this.makeField();
     this.trim();
+  },
+
+  //! The cut slider's range follows the model rather than the other way round.
+  //! Everything about a floor plate is a height, and a height means nothing
+  //! without knowing where the floor is - so the ends of the slider are the top
+  //! and bottom of what is in the scene, and the first cut is a metre and a
+  //! tenth above the lowest thing in it, which is where a person's shoulders
+  //! are.
+  //! One rebuild a frame, however many times a slider says it moved. Dragging
+  //! fires an event per pixel, and a rebuild of a masterplan is a hundred and
+  //! seventy milliseconds - so without this the drag is the rebuild queue and
+  //! the page stops answering.
+  queueRebuild() {
+    if (this.rebuildQueued) return;
+    this.rebuildQueued = requestAnimationFrame(() => {
+      this.rebuildQueued = 0;
+      if (this.on) this.rebuild();
+    });
+  },
+
+  rangeCut() {
+    const slider = this.bar.querySelector("#fl-cut");
+    const read = this.bar.querySelector("#fl-cut-read");
+    if (!this.span) return;
+    const [lo, hi] = this.span;
+    const min = Math.round(lo + 50), max = Math.max(Math.round(hi - 50), Math.round(lo + 100));
+    slider.min = String(min);
+    slider.max = String(max);
+    slider.step = String(Math.max(10, Math.round((max - min) / 200)));
+    // Snapped on the way in, and again if the model moved out from under the
+    // cut. A cut the person chose inside the model is left alone.
+    if (!this.cutChosen || this.cut < min || this.cut > max) {
+      this.cut = Math.min(max, Math.max(min, Math.round(lo + 1100)));
+      this.cutChosen = true;
+    }
+    slider.value = String(this.cut);
+    read.textContent = (this.cut / 1000).toFixed(2) + " m";
   },
 
   //! Walkable floor INSIDE the footprints - the number a schedule of areas
@@ -1045,6 +1166,9 @@ Object.assign(FlowView.prototype, {
 
   enter() {
     this.on = true;
+    // A fresh look at whatever is in the scene now: a model imported since the
+    // last visit sits somewhere else, and the cut follows it in.
+    this.cutChosen = false;
     this.bar.hidden = false;
     this.panel.hidden = false;
     this.group.visible = true;
@@ -1068,6 +1192,7 @@ Object.assign(FlowView.prototype, {
 
   leave() {
     this.on = false;
+    if (this.rebuildQueued) { cancelAnimationFrame(this.rebuildQueued); this.rebuildQueued = 0; }
     this.bar.hidden = true;
     this.panel.hidden = true;
     this.group.visible = false;
