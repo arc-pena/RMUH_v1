@@ -11,7 +11,7 @@ import { PluginHost, findPlugin } from "../src/plugin.js";
 import { CROWD, CROWD_NODES, boundaryRings, crowdColour, footprintOf, plateOf, zSpan }
   from "../src/crowd-plugin.js";
 import { BODY, FREE_SPEED, FRUIN, SIDESTEP, addWalker, blockPolygon, cellIndex,
-         cellsAllowed, clearanceOf, crowdSpeed, fillRings, toWorld,
+         cellsAllowed, clearanceOf, crowdSpeed, fillRings, surfaceAt, toWorld,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
          makeDensity, makeGrid, makeTrace, measureDensity, serviceBreakdown,
          stepCrowd, stranded, toCell, walkDistance } from "../src/crowd.js";
@@ -469,35 +469,54 @@ console.log("\n7. the floor plate, cut out of real geometry");
   const meshes = (await kernel.mesh([screen, desk])).features;
   check("both bodies meshed", meshes.length === 2 && meshes.every(m => m.positions.length));
 
-  const high = plateOf(meshes, 1100, 250);
-  const low = plateOf(meshes, 400, 250);
-  check("at 1.1 m the screen blocks and the desk does not",
-    high.rings.length === 1, high.rings.length + " footprints");
-  check("at 0.4 m both of them do", low.rings.length === 2, low.rings.length + " footprints");
-  check("above everything, nothing does", plateOf(meshes, 2500, 250) === null);
+  // The mesh is what decides, not an outline at a height. A desk is 720 tall
+  // and people walk ROUND it, not over it - so anything standing proud of the
+  // floor and under head height is in the way, whatever the cut says.
+  const plate = plateOf(meshes, 1100, 250);
+  check("the floor between them is walkable", !isBlocked(plate.grid, 3500, 1000));
+  check("the screen blocks", isBlocked(plate.grid, 2000, 1050));
+  check("and so does the desk, because you do not walk through a desk",
+    isBlocked(plate.grid, 5800, 1400));
+  check("and the floor is at the level the geometry stands on",
+    surfaceAt(plate.grid, 3500, 1000) === 0, String(surfaceAt(plate.grid, 3500, 1000)));
 
-  // The screen's footprint must be where the screen is, and the right size.
-  const ring = high.rings[0];
-  const lo = [Math.min(...ring.map(p => p[0])), Math.min(...ring.map(p => p[1]))];
-  const hi = [Math.max(...ring.map(p => p[0])), Math.max(...ring.map(p => p[1]))];
-  check("and it is 2000 x 100 where the screen is",
-    near(hi[0] - lo[0], 2000, 1) && near(hi[1] - lo[1], 100, 1) && near(lo[0], 1000, 1),
-    (hi[0] - lo[0]) + " x " + (hi[1] - lo[1]) + " at " + lo[0] + "," + lo[1]);
-  check("the raster blocks inside the screen and not beside it",
-    isBlocked(high.grid, 2000, 1050) && !isBlocked(high.grid, 2000, 2000));
+  // Where the screen is, and the size it is: read off the blocked cells rather
+  // than off a ring, because the raster is now the answer.
+  let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+  for (let j = 0; j < plate.grid.height; j++)
+    for (let i = 0; i < plate.grid.width; i++) {
+      if (!plate.grid.blocked[cellIndex(plate.grid, i, j)]) continue;
+      const [x, y] = toWorld(plate.grid, i, j);
+      if (x > 4000) continue;                       // the screen's half of it
+      lo = [Math.min(lo[0], x), Math.min(lo[1], y)];
+      hi = [Math.max(hi[0], x), Math.max(hi[1], y)];
+    }
+  check("the blocked patch is where the screen is",
+    lo[0] > 700 && lo[0] < 1300 && hi[0] > 2700 && hi[0] < 3300,
+    lo[0] + ".." + hi[0]);
 
-  // The plate is padded around the FURNITURE, so a point beyond the furniture
-  // used to fall off the grid and read as blocked - which came back as "that
-  // point is inside something" about somebody standing in open floor.
+  // A threshold strip 40 mm proud is not an obstacle. Somebody steps over it,
+  // and a model that blocks it blocks every skirting board in the building.
+  const stripAt = await point(9000, 1000, 0);
+  const strip = (await kernel.addFeature("Cube", { origin: stripAt, plane })).id;
+  for (const [k, v] of [["dx", 2000], ["dy", 2000], ["dz", 40]])
+    await kernel.setParameter(strip, k, v);
+  const withStrip = plateOf((await kernel.mesh([screen, desk, strip])).features, 1100, 250);
+  check("a 40 mm threshold is stepped over, not walked round",
+    !isBlocked(withStrip.grid, 10000, 2000),
+    "40 mm of upstand should not be a wall");
+
+  // The plate is the extent of the geometry; a point beyond it has nothing to
+  // stand on until it is asked for.
   const far = [12000, 6000];
-  check("a point well clear of everything is off the plain plate",
-    isBlocked(high.grid, far[0], far[1]));
+  check("a point well clear of everything is off the plate",
+    isBlocked(plate.grid, far[0], far[1]));
   const wide = plateOf(meshes, 1100, 250, { include: [far] });
   check("but the plate covers it when it is asked to",
     !isBlocked(wide.grid, far[0], far[1]));
   check("and that does not move what counts as inside the building",
-    near(wide.inside.hi[0], high.inside.hi[0], 1),
-    wide.inside.hi[0] + " vs " + high.inside.hi[0]);
+    near(wide.inside.hi[0], plate.inside.hi[0], 1),
+    wide.inside.hi[0] + " vs " + plate.inside.hi[0]);
 }
 
 console.log("\n8. a package, loaded and put away");
@@ -606,6 +625,82 @@ console.log("a floor is a floor, and a ring inside a ring is a hole");
   check("as obstacles the ring between them is solid", inside(2000, 2000) === 1);
   check("and the hole in the middle is not", inside(10000, 10000) === 0,
         "a hole filled solid is the bug this is here for");
+}
+
+console.log("the mesh is king: slope, voids, and what is too steep to walk");
+{
+  // A run of ground: 4 m flat, 4 m at 1:10, 4 m at 1:3. A 1:10 ramp is a ramp.
+  // A 1:3 is a bank, and a crowd model that strolls up it is telling you
+  // something false about the bank.
+  const mesh = { positions: [], index: [] };
+  const add = (a, b, c) => {
+    const base = mesh.positions.length / 3;
+    mesh.positions.push(...a, ...b, ...c);
+    mesh.index.push(base, base + 1, base + 2);
+  };
+  const quad = (p1, p2, p3, p4) => { add(p1, p2, p3); add(p1, p3, p4); };
+  quad([0, 0, 0], [4000, 0, 0], [4000, 4000, 0], [0, 4000, 0]);
+  quad([4000, 0, 0], [8000, 0, 400], [8000, 4000, 400], [4000, 4000, 0]);
+  quad([8000, 0, 400], [12000, 0, 1733], [12000, 4000, 1733], [8000, 4000, 400]);
+
+  const run = plateOf([mesh], 5000, 250, {});
+  check("the flat part is walkable", !isBlocked(run.grid, 2000, 2000));
+  check("and so is a 1:10 ramp - that is a ramp", !isBlocked(run.grid, 6000, 2000));
+  check("but 1:3 is a climb, not a walk", isBlocked(run.grid, 10000, 2000),
+        "anything past about 1:8 is scrambling");
+  check("it counts what it threw away", run.read.steep === 2 && run.read.flat === 4,
+        JSON.stringify(run.read));
+
+  // Feet on the ramp, not on one number for the whole plate.
+  const on = surfaceAt(run.grid, 6000, 2000);
+  check("and a person on the ramp stands ON the ramp",
+        on > 100 && on < 400, String(on));
+
+  // A void has no floor. Not "blocked by something" - nothing at all.
+  const holed = { positions: [], index: [] };
+  const addH = (a, b, c) => {
+    const base = holed.positions.length / 3;
+    holed.positions.push(...a, ...b, ...c);
+    holed.index.push(base, base + 1, base + 2);
+  };
+  const O = [[0, 0], [20000, 0], [20000, 20000], [0, 20000]];
+  const I = [[8000, 8000], [12000, 8000], [12000, 12000], [8000, 12000]];
+  for (let k = 0; k < 4; k++) {
+    const j = (k + 1) % 4;
+    addH([...O[k], 3000], [...O[j], 3000], [...I[k], 3000]);
+    addH([...O[j], 3000], [...I[j], 3000], [...I[k], 3000]);
+  }
+  const deck = plateOf([], 1100, 500, { floors: [holed] });
+  check("a named floor at 3 m is found even with the cut at 1.1",
+        !isBlocked(deck.grid, 2000, 2000), "the cut says which storey, not whether to look");
+  check("people stand on it at 3 m", surfaceAt(deck.grid, 2000, 2000) === 3000,
+        String(surfaceAt(deck.grid, 2000, 2000)));
+  check("and the void has no floor at all", surfaceAt(deck.grid, 10000, 10000) === null,
+        "a void is not blocked, it is empty");
+  check("which is the same as not walkable", isBlocked(deck.grid, 10000, 10000));
+
+  // A desk top is horizontal, and you still cannot stand on it.
+  const desk = { positions: [], index: [] };
+  const addD = (a, b, c) => {
+    const base = desk.positions.length / 3;
+    desk.positions.push(...a, ...b, ...c);
+    desk.index.push(base, base + 1, base + 2);
+  };
+  const top = 720;
+  addD([5000, 5000, top], [6600, 5000, top], [6600, 5800, top]);
+  addD([5000, 5000, top], [6600, 5800, top], [5000, 5800, top]);
+  const floor = { positions: [], index: [] };
+  const addF = (a, b, c) => {
+    const base = floor.positions.length / 3;
+    floor.positions.push(...a, ...b, ...c);
+    floor.index.push(base, base + 1, base + 2);
+  };
+  addF([0, 0, 0], [20000, 0, 0], [20000, 20000, 0]);
+  addF([0, 0, 0], [20000, 20000, 0], [0, 20000, 0]);
+  const room = plateOf([floor, desk], 5000, 250, {});
+  check("a desk top is horizontal and is still not floor",
+        isBlocked(room.grid, 5800, 5400), "720 mm up is not a step anybody takes");
+  check("and the floor around it is", !isBlocked(room.grid, 2000, 2000));
 }
 
 console.log("nobody stands in a void, or off the edge of the plate");

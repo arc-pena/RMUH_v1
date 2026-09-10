@@ -22,7 +22,8 @@
 import { ARG } from "./ocaf.js";
 import { offerPlugin } from "./plugin.js";
 import { BODY, FRUIN, SHUFFLE, addWalker, cellsAllowed, clearanceOf, blockPolygon,
-         crowdSpeed, densityAt, fillRings, removeWalker,
+         crowdSpeed, densityAt, fillRings, removeWalker, surfaceAt,
+         CLIMB, SLOPE_LIMIT, inGrid, cellIndex,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
          makeDensity, makeGrid, makeTrace, measureDensity, serviceBreakdown,
          stepCrowd, stranded, toCell, toWorld, walkDistance } from "./crowd.js";
@@ -219,76 +220,297 @@ export function zSpan(meshes) {
   return Number.isFinite(lo) && hi - lo > 1 ? [lo, hi] : null;
 }
 
-export function plateOf(meshes, cut, grain,
-                       { pad = 1000, include = [], maxCells, floors = [] } = {}) {
-  let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity], floor = Infinity;
-  const rings = [];
-  const spread = point => {
-    lo = [Math.min(lo[0], point[0]), Math.min(lo[1], point[1])];
-    hi = [Math.max(hi[0], point[0]), Math.max(hi[1], point[1])];
-  };
+/* ================================================================= walking
 
-  // The floor, if anybody said which it was. A slab with a lightwell in it, a
-  // sketch's face with its holes, the face of an imported extrusion: the thing
-  // people walk ON, as against the things they walk ROUND. Nothing in the
-  // geometry says which a closed outline is, so this is the only way to know -
-  // and with it, the walkable region is what the outline encloses rather than
-  // the padded box the walls happen to sit in.
-  const plate = [];
-  for (const mesh of floors)
-    for (const ring of floorRings(mesh)) {
-      plate.push(ring);
-      for (const point of ring) spread(point);
-      if (mesh.positions)
-        for (let i = 2; i < mesh.positions.length; i += 3)
-          floor = Math.min(floor, mesh.positions[i]);
-    }
+   The mesh is king.
 
+   What people can walk on is not an outline rasterised into a bitmap - it is
+   the triangles of the model, filtered. Three things about a triangle decide
+   it: which way it faces (up, or it is a ceiling), how steep it is (past about
+   1:8 you are climbing), and whether anything stands in the headroom over it.
+   That is the whole test, and it is the same test on a flat office floor, a
+   ramp, a stepped terrace and the transition of a skate bowl.
+
+   The grid is still a grid, because a quarter of a million Dijkstra cells in
+   170 ms is what makes the thing interactive - but every cell now carries the
+   HEIGHT of the surface under it, taken from the triangles. So a cell with no
+   walkable triangle over it has no floor at all, which is what a void is, and
+   a person's feet are at the height of the surface they are standing on rather
+   than at one number for the whole plate.
+   ========================================================================== */
+
+//! Every triangle of every mesh, as three corners.
+function eachTriangle(meshes, fn) {
   for (const mesh of meshes) {
-    for (const ring of footprintOf(mesh, cut)) {
-      rings.push(ring);
-      if (!plate.length) for (const point of ring) spread(point);
+    const p = mesh.positions, index = mesh.index;
+    if (!p || !index) continue;
+    for (let t = 0; t + 2 < index.length; t += 3) {
+      const k0 = index[t] * 3, k1 = index[t + 1] * 3, k2 = index[t + 2] * 3;
+      fn([p[k0], p[k0 + 1], p[k0 + 2]], [p[k1], p[k1 + 1], p[k1 + 2]],
+         [p[k2], p[k2 + 1], p[k2 + 2]]);
     }
-    if (mesh.positions)
-      for (let i = 2; i < mesh.positions.length; i += 3)
-        floor = Math.min(floor, mesh.positions[i]);
+  }
+}
+
+//! Every cell whose middle falls inside a triangle, with the height of the
+//! triangle there. Seen from above: a wall is edge-on and covers nothing,
+//! which is right for a floor and wrong for an obstruction - so obstructions
+//! trace the edges as well.
+function overTriangle(grid, a, b, c, fn) {
+  const minx = Math.min(a[0], b[0], c[0]), maxx = Math.max(a[0], b[0], c[0]);
+  const miny = Math.min(a[1], b[1], c[1]), maxy = Math.max(a[1], b[1], c[1]);
+  const [i0, j0] = toCell(grid, minx, miny);
+  const [i1, j1] = toCell(grid, maxx, maxy);
+  const area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+  if (Math.abs(area) < 1e-9) return;                 // edge-on: no floor in it
+  for (let j = Math.max(0, j0); j <= Math.min(grid.height - 1, j1); j++)
+    for (let i = Math.max(0, i0); i <= Math.min(grid.width - 1, i1); i++) {
+      const [x, y] = toWorld(grid, i, j);
+      const w0 = ((b[0] - x) * (c[1] - y) - (c[0] - x) * (b[1] - y)) / area;
+      const w1 = ((c[0] - x) * (a[1] - y) - (a[0] - x) * (c[1] - y)) / area;
+      const w2 = 1 - w0 - w1;
+      if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
+      fn(cellIndex(grid, i, j), a[2] * w0 + b[2] * w1 + c[2] * w2);
+    }
+}
+
+//! The three edges of a triangle, walked in cell-sized steps. This is how a
+//! wall thinner than a cell still stops somebody: seen from above it is a line,
+//! and a line covers no cell middles at all.
+function alongEdges(grid, a, b, c, fn) {
+  for (const [p, q] of [[a, b], [b, c], [c, a]]) {
+    const span = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    const steps = Math.max(1, Math.ceil(span / (grid.cell * 0.4)));
+    for (let n = 0; n <= steps; n++) {
+      const k = n / steps;
+      const [i, j] = toCell(grid, p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k);
+      if (inGrid(grid, i, j)) fn(cellIndex(grid, i, j), p[2] + (q[2] - p[2]) * k);
+    }
+  }
+}
+
+//! The lowest point of anything here: the ground a plan drawn in walls is
+//! standing on.
+function lowestOf(meshes) {
+  let low = Infinity;
+  for (const mesh of meshes) {
+    if (!mesh.positions) continue;
+    for (let i = 2; i < mesh.positions.length; i += 3)
+      if (mesh.positions[i] < low) low = mesh.positions[i];
+  }
+  return Number.isFinite(low) ? low : null;
+}
+
+//! Which way a triangle faces and how steep it is, as the cosine of the angle
+//! from horizontal. Facing down is not a floor however flat it is: that is a
+//! ceiling, and the underside of the slab you are standing on.
+function facing(a, b, c) {
+  const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+  const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+  const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const len = Math.hypot(nx, ny, nz);
+  return len > 1e-9 ? Math.abs(nz) / len : 0;
+}
+
+//! Reads the walkable surface out of the triangles and into the grid.
+//!
+//! Two passes, and they cannot be one. The first finds the highest walkable
+//! surface under the cut, for every cell. Only then is it possible to ask
+//! whether anything stands in the headroom over that surface, which is what
+//! makes a wall a wall - because "over" means over the floor, and the floor is
+//! what the first pass just worked out.
+export function surfaceFrom(grid, meshes, {
+  cut = Infinity, slope = SLOPE_LIMIT, headroom = 2000, floors = null,
+} = {}) {
+  const surface = grid.surface, blocked = grid.blocked;
+  surface.fill(NaN);
+  // The slope limit as a ratio becomes a limit on how much of the normal points
+  // up: 1:8 is 7.1 degrees, and the cosine of that is what a triangle's normal
+  // has to beat.
+  const upright = 1 / Math.sqrt(1 + slope * slope);
+  const under = floors && floors.length ? floors : meshes;
+  let steep = 0, flat = 0;
+
+  // Two answers per cell: the highest walkable surface at or under the cut,
+  // and the lowest one above it. The cut is which storey you are standing on -
+  // but a model whose only floor is above the cut still has a floor, and
+  // refusing to see it because a slider is in the wrong place is the interface
+  // arguing with the geometry.
+  const above = new Float32Array(surface.length).fill(NaN);
+  eachTriangle(under, (a, b, c) => {
+    const up = facing(a, b, c);
+    if (up < upright) { steep++; return; }
+    flat++;
+    overTriangle(grid, a, b, c, (k, z) => {
+      if (z <= cut) {
+        if (Number.isNaN(surface[k]) || z > surface[k]) surface[k] = z;
+      } else if (Number.isNaN(above[k]) || z < above[k]) above[k] = z;
+    });
+  });
+  for (let k = 0; k < surface.length; k++)
+    if (Number.isNaN(surface[k])) surface[k] = above[k];
+
+  // Walls standing on nothing stand on the ground.
+  //
+  // A plan drawn as walls and furniture has no floor in it - the floor is the
+  // ground they are sitting on, and it is not in the model because nobody
+  // draws it. So where nothing walkable was found, the ground is assumed at the
+  // lowest level of the model, which is what those walls are standing on.
+  //
+  // Not when somebody has NAMED the floor. Then a void is a void, and assuming
+  // ground under a lightwell would be assuming a storey that is not there.
+  const ground = floors && floors.length ? null : lowestOf(under);
+  if (ground !== null)
+    for (let k = 0; k < surface.length; k++)
+      if (Number.isNaN(surface[k])) surface[k] = ground;
+
+  eachTriangle(meshes, (a, b, c) => {
+    const blockIf = (k, z) => {
+      const floor = surface[k];
+      if (Number.isNaN(floor)) return;
+      // 50 mm of tolerance so the floor does not obstruct itself, and a
+      // person's height above it: anything in that band is in the way.
+      if (z > floor + 50 && z < floor + headroom) blocked[k] = 1;
+    };
+    overTriangle(grid, a, b, c, blockIf);
+    alongEdges(grid, a, b, c, blockIf);
+  });
+
+  // No triangle to stand on is not "blocked by something" - it is a void, the
+  // edge of the world, the middle of an atrium. Either way nobody walks there.
+  for (let k = 0; k < surface.length; k++)
+    if (Number.isNaN(surface[k])) blocked[k] = 1;
+
+  const islands = pruneIslands(grid);
+  let standing = 0;
+  for (let k = 0; k < surface.length; k++) if (!blocked[k]) standing++;
+  return { steep, flat, standing, islands };
+}
+
+//! A desk top is horizontal, so the triangles say you can stand on it. You
+//! cannot: it is 720 mm up, nobody steps that far, and a floor plate with the
+//! desks marked as walkable is a floor plate that has not understood desks.
+//!
+//! The test is size. A surface people use is metres across; a surface that is
+//! a patch is furniture, a shelf, a plinth, the top of a wall. So the walkable
+//! cells are gathered into connected pieces - connected meaning a step you
+//! could actually take, which is where the climb limit comes in - and the
+//! pieces too small to be a room are not floor.
+export function pruneIslands(grid, minArea = 4e6) {
+  const { width, height, blocked, surface, cell } = grid;
+  const seen = new Int32Array(blocked.length).fill(-1);
+  const pieces = [];
+  const stack = [];
+  for (let start = 0; start < blocked.length; start++) {
+    if (blocked[start] || seen[start] >= 0) continue;
+    const id = pieces.length;
+    let count = 0;
+    stack.push(start);
+    seen[start] = id;
+    while (stack.length) {
+      const k = stack.pop();
+      count++;
+      const i = k % width, j = (k - i) / width;
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ni = i + di, nj = j + dj;
+        if (ni < 0 || nj < 0 || ni >= width || nj >= height) continue;
+        const nk = nj * width + ni;
+        if (blocked[nk] || seen[nk] >= 0) continue;
+        // Connected means a step somebody could take. A 720 mm rise between
+        // two cells is not two pieces of one floor, it is a floor and a desk.
+        if (Math.abs(surface[nk] - surface[k]) > CLIMB) continue;
+        seen[nk] = id;
+        stack.push(nk);
+      }
+    }
+    pieces.push(count);
+  }
+  const cells = Math.max(1, Math.ceil(minArea / (cell * cell)));
+  let dropped = 0;
+  for (let k = 0; k < blocked.length; k++) {
+    if (blocked[k]) continue;
+    if (pieces[seen[k]] >= cells) continue;
+    blocked[k] = 1;
+    dropped++;
+  }
+  return { pieces: pieces.length, dropped };
+}
+
+export function plateOf(meshes, cut, grain, {
+  pad = 1000, include = [], maxCells, floors = [], slope = SLOPE_LIMIT, headroom = 2000,
+} = {}) {
+  // The plan extent of whatever can be a floor. With a Floor node that is the
+  // named plates; without one it is everything, because anything with a
+  // near-horizontal top is something somebody could stand on.
+  const under = floors.length ? floors : meshes;
+  let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity], low = Infinity;
+  for (const mesh of under) {
+    if (!mesh.positions) continue;
+    for (let i = 0; i + 2 < mesh.positions.length; i += 3) {
+      lo = [Math.min(lo[0], mesh.positions[i]), Math.min(lo[1], mesh.positions[i + 1])];
+      hi = [Math.max(hi[0], mesh.positions[i]), Math.max(hi[1], mesh.positions[i + 1])];
+      low = Math.min(low, mesh.positions[i + 2]);
+    }
   }
   if (!Number.isFinite(lo[0])) return null;
   const walls = { lo: [...lo], hi: [...hi] };
-  for (const point of include) spread(point);
-  // A named floor is the edge of the world, so there is nothing to pad around
-  // it; without one the padding is what keeps people off the outside face of
-  // the perimeter walls.
-  const skirt = plate.length ? Math.min(pad, grain * 2) : pad;
-  // People stand ON a floor, not inside it. Without a named floor the level is
-  // the lowest thing in the scene, which is the ground the walls stand on;
-  // with one it is the top of the plate, because that is the surface.
-  const surface = plate.length ? floorLevel(floors) : null;
-  const bounds = { lo: [lo[0] - skirt, lo[1] - skirt], hi: [hi[0] + skirt, hi[1] + skirt],
-                   floor: surface !== null ? surface : (Number.isFinite(floor) ? floor : 0) };
-  const grid = makeGrid(bounds, grain, maxCells);
-  // Carved first - everything off the plate is off the plate - then the things
-  // standing on it are blocked, holes and all.
-  let carved = plate.length > 0;
-  if (carved) {
-    fillRings(grid, plate, { carve: true });
-    // A carve that leaves nowhere to stand is a carve that read the outline
-    // wrong - an outline that would not close, or a shape whose section is not
-    // its floor. Rather than handing back a plate with no floor on it, the
-    // carve is dropped and the note says so. Never leave somebody looking at
-    // an empty room wondering which of the two of you is broken.
-    let free = 0;
-    for (let k = 0; k < grid.blocked.length && free < 12; k++) if (!grid.blocked[k]) free++;
-    if (free < 12) { grid.blocked.fill(0); carved = false; }
+  for (const point of include) {
+    lo = [Math.min(lo[0], point[0]), Math.min(lo[1], point[1])];
+    hi = [Math.max(hi[0], point[0]), Math.max(hi[1], point[1])];
   }
-  fillRings(grid, rings);
+  // A named floor ends where it ends: one cell of margin, no more, because the
+  // triangles say where the edge is. Without one the ground is assumed under
+  // the whole box, and the margin is what keeps a point asked for - the ends of
+  // a walk, a portal - comfortably on the plate rather than on its boundary.
+  const skirt = floors.length ? grain : Math.max(pad, grain * 2);
+  const bounds = { lo: [lo[0] - skirt, lo[1] - skirt], hi: [hi[0] + skirt, hi[1] + skirt],
+                   floor: Number.isFinite(low) ? low : 0 };
+  const grid = makeGrid(bounds, grain, maxCells);
+
+  const read = surfaceFrom(grid, meshes, { cut, slope, headroom, floors });
+  // The lowest place anybody is standing, for the things that still want one
+  // number: where the plan is drawn, how high the arrows float.
+  let base = Infinity;
+  for (let k = 0; k < grid.surface.length; k++)
+    if (!grid.blocked[k] && grid.surface[k] < base) base = grid.surface[k];
+  if (Number.isFinite(base)) grid.floor = base;
+
   clearanceOf(grid);
-  // What the footprints themselves span, as against the padded grid. People
-  // belong inside the building; without this they wander round the outside of
-  // it, which looks like a bug because it is one.
-  return { grid, rings, plate: carved ? plate : [], carved,
-           refused: plate.length > 0 && !carved,
-           inside: carved ? { lo: [...lo], hi: [...hi] } : walls };
+  return {
+    grid, read,
+    // What to draw: the edge of the walkable surface, wherever it is - the
+    // outside of the plate, the lip of a void, the face of a wall, the line
+    // where a ramp turns into a climb. One rule, and it draws all of them.
+    rings: maskOutline(grid),
+    plate: floors.length ? floors.flatMap(floorRings) : [],
+    carved: floors.length > 0,
+    refused: false,
+    inside: walls,
+  };
+}
+
+//! The boundary of the walkable surface, as segments. Between a cell somebody
+//! can stand in and one they cannot, whatever the reason - and the reason does
+//! not matter to the line.
+export function maskOutline(grid) {
+  const out = [];
+  const free = k => !grid.blocked[k];
+  const half = grid.cell / 2;
+  for (let j = 0; j < grid.height; j++)
+    for (let i = 0; i < grid.width; i++) {
+      const k = cellIndex(grid, i, j);
+      if (!free(k)) continue;
+      const [x, y] = toWorld(grid, i, j);
+      if (i === 0 || !free(cellIndex(grid, i - 1, j)))
+        out.push([[x - half, y - half], [x - half, y + half]]);
+      if (i === grid.width - 1 || !free(cellIndex(grid, i + 1, j)))
+        out.push([[x + half, y - half], [x + half, y + half]]);
+      if (j === 0 || !free(cellIndex(grid, i, j - 1)))
+        out.push([[x - half, y - half], [x + half, y - half]]);
+      if (j === grid.height - 1 || !free(cellIndex(grid, i, j + 1)))
+        out.push([[x - half, y + half], [x + half, y + half]]);
+    }
+  return out;
 }
 
 /* -------------------------------------------------------------- drivers */
@@ -379,17 +601,21 @@ function crowdDrivers(kit) {
 
         // The route itself, walked downhill, so the number has a line you can
         // look at rather than being a number you have to believe.
-        const route = [[from[0], from[1], plate.grid.floor]];
+        const lift = (x, y) => {
+          const z = surfaceAt(plate.grid, x, y);
+          return z === null ? plate.grid.floor : z;
+        };
+        const route = [[from[0], from[1], lift(from[0], from[1])]];
         let x = from[0], y = from[1];
         for (let step = 0; step < 4000; step++) {
           const way = downhill(field, x, y);
           if (!way) break;
           x += way[0] * grain * 0.7;
           y += way[1] * grain * 0.7;
-          route.push([x, y, plate.grid.floor]);
+          route.push([x, y, lift(x, y)]);
           if (walkDistance(field, x, y) < grain * 1.5) break;
         }
-        route.push([to[0], to[1], plate.grid.floor]);
+        route.push([to[0], to[1], lift(to[0], to[1])]);
 
         const minutes = walk / 1340 / 60;
         return {
@@ -420,7 +646,10 @@ function crowdDrivers(kit) {
         const seen = isovist(plate.grid, at[0], at[1],
           { rays: Math.round(K.F.real(f, "rays", 180)),
             reach: K.F.real(f, "reach", 40000) });
-        const ring = seen.points.map(p => [p[0], p[1], plate.grid.floor]);
+        const ring = seen.points.map(p => {
+          const z = surfaceAt(plate.grid, p[0], p[1]);
+          return [p[0], p[1], z === null ? plate.grid.floor : z];
+        });
         // How round it is: a circle scores 1, a long corridor much less. The
         // number that says "enclosed" as against "open" without an opinion.
         const perimeter = ring.reduce((sum, p, i) => {
@@ -480,6 +709,8 @@ class FlowView {
     this.on = false;
     this.running = true;
     this.cut = 1100;
+    //! One in this many is the steepest a person will walk up rather than climb.
+    this.slopeRatio = 8;
     // Whether the cut is where somebody put it, or still where it started. A
     // cut nobody has chosen follows the model in.
     this.cutChosen = false;
@@ -535,6 +766,9 @@ class FlowView {
         <input type="number" class="fl-read fl-type" id="fl-grain-read"
                min="10" step="10" value="250" aria-label="Grid spacing in millimetres">
         <span class="fl-unit">mm</span>
+        <span class="fl-tag" style="width:auto">Walk up to 1:</span>
+        <input type="number" class="fl-read fl-type" id="fl-slope"
+               min="1" max="60" step="1" value="8" aria-label="Steepest walkable slope, as one in">
       </div>
       <div class="fl-row fl-toggles">
         <span class="fl-tag">Draw</span>
@@ -591,6 +825,16 @@ class FlowView {
       if (!fromField) q("fl-grain-read").value = String(wanted);
       this.queueRebuild();
     };
+    // Steepness, as a ramp is written on a drawing: 1 in 8. Past about there a
+    // person is climbing, and where that line falls is a judgement about the
+    // building - a hospital wants 1:20, a hillside path will take 1:5 - so it
+    // is a number somebody sets rather than one baked in here.
+    q("fl-slope").addEventListener("change", e => {
+      this.slopeRatio = Math.max(1, Math.round(Number(e.target.value) || 8));
+      e.target.value = String(this.slopeRatio);
+      this.queueRebuild();
+    });
+    q("fl-slope").addEventListener("keydown", e => e.stopPropagation());
     q("fl-grain-read").addEventListener("change", e => setGrain(e.target.value, true));
     q("fl-grain-read").addEventListener("keydown", e => e.stopPropagation());
     q("fl-grain").addEventListener("input", e => {
@@ -703,11 +947,30 @@ class FlowView {
     texture.minFilter = THREE.LinearFilter;
     this.heat = texture;
 
-    const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(w * grid.cell, h * grid.cell),
-      new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }));
-    plane.position.set(grid.lo[0] + w * grid.cell / 2,
-                       grid.lo[1] + h * grid.cell / 2, grid.floor + 2);
+    // Drawn ON the surface, not on one flat plane over it. A ramp, a terrace or
+    // the floor of a bowl has a different height every metre, and a heat map
+    // floating above it at one level is a heat map of somewhere else.
+    //
+    // The display mesh is capped at 160 squares a side however fine the
+    // simulation grid is: a quarter of a million vertices is a quarter of a
+    // million vertices, and the texture carries the detail anyway.
+    const steps = [Math.min(w, 160), Math.min(h, 160)];
+    const geometry = new THREE.PlaneGeometry(w * grid.cell, h * grid.cell,
+                                             steps[0], steps[1]);
+    const at = geometry.attributes.position;
+    const across = w * grid.cell, down = h * grid.cell;
+    for (let v = 0; v < at.count; v++) {
+      const x = grid.lo[0] + across / 2 + at.getX(v);
+      const y = grid.lo[1] + down / 2 + at.getY(v);
+      const z = surfaceAt(grid, x, y);
+      at.setZ(v, (z === null ? grid.floor : z) - grid.floor + 2);
+    }
+    at.needsUpdate = true;
+    geometry.computeVertexNormals();
+    const plane = new THREE.Mesh(geometry,
+      new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false,
+                                    side: THREE.DoubleSide }));
+    plane.position.set(grid.lo[0] + across / 2, grid.lo[1] + down / 2, grid.floor);
     plane.renderOrder = 10;
     this.plateGroup.add(plane);
     this.heatPlane = plane;
@@ -716,12 +979,17 @@ class FlowView {
     // the rings rather than from the raster, so a wall is a line and not a
     // staircase.
     const points = [];
-    for (const ring of this.plate.rings)
-      for (let i = 0; i < ring.length; i++) {
-        const a = ring[i], b = ring[(i + 1) % ring.length];
-        points.push(new THREE.Vector3(a[0], a[1], grid.floor + 6),
-                    new THREE.Vector3(b[0], b[1], grid.floor + 6));
-      }
+    const lift = p => {
+      const z = surfaceAt(grid, p[0], p[1]);
+      return new THREE.Vector3(p[0], p[1], (z === null ? grid.floor : z) + 6);
+    };
+    for (const ring of this.plate.rings) {
+      // A two-point ring is a segment: the mask outline comes as segments, and
+      // wrapping one round on itself draws it twice.
+      const last = ring.length === 2 ? 1 : ring.length;
+      for (let i = 0; i < last; i++)
+        points.push(lift(ring[i]), lift(ring[(i + 1) % ring.length]));
+    }
     const outline = new THREE.LineSegments(
       new THREE.BufferGeometry().setFromPoints(points),
       new THREE.LineBasicMaterial({ color: 0x22303c, transparent: true, opacity: 0.9 }));
@@ -753,8 +1021,10 @@ class FlowView {
         if (!way) continue;
         const reach = grid.cell * every * 0.42;
         const tip = [x + way[0] * reach, y + way[1] * reach];
-        points.push(new THREE.Vector3(x - way[0] * reach, y - way[1] * reach, grid.floor + 4),
-                    new THREE.Vector3(tip[0], tip[1], grid.floor + 4));
+        const on = surfaceAt(grid, x, y);
+        const z = (on === null ? grid.floor : on) + 4;
+        points.push(new THREE.Vector3(x - way[0] * reach, y - way[1] * reach, z),
+                    new THREE.Vector3(tip[0], tip[1], z));
         // Dark at the destination, light far from it: the field's own gradient
         // read as a picture.
         const far = Math.min(1, walkDistance(this.fields[0], x, y) / 40000);
@@ -841,7 +1111,8 @@ Object.assign(FlowView.prototype, {
     this.plate = (meshes.length || floors.length)
       ? plateOf(meshes, this.cut, this.grain,
                 { include: this.portals.map(p => [p.at[0], p.at[1]]),
-                  maxCells: cellsAllowed(sweeps), floors })
+                  maxCells: cellsAllowed(sweeps), floors,
+                  slope: 1 / Math.max(1, this.slopeRatio) })
       : null;
     const note = this.bar.querySelector("#fl-note");
     if (!this.plate) {
@@ -849,11 +1120,13 @@ Object.assign(FlowView.prototype, {
       // Say where the model is, not just that the cut missed it. "Nothing at
       // this height" with no heights in it is the least useful true sentence
       // an interface can produce.
-      note.textContent = meshes.length && this.span
-        ? "nothing crosses " + (this.cut / 1000).toFixed(2) + " m - the model spans "
-          + (this.span[0] / 1000).toFixed(2) + " to " + (this.span[1] / 1000).toFixed(2)
-          + " m, so move the cut into it"
-        : "nothing in the model has a footprint at this height";
+      note.textContent = meshes.length || floors.length
+        ? "nothing in this model can be walked on"
+          + (this.span ? " - it spans " + (this.span[0] / 1000).toFixed(2) + " to "
+              + (this.span[1] / 1000).toFixed(2) + " m" : "")
+          + ". Every face is either steeper than 1:" + this.slopeRatio
+          + ", facing down, or has something standing on it"
+        : "nothing in the model to walk on";
       this.floorHint(note, meshes, floors);
       this.goals = [];
       this.makePlate();
@@ -893,13 +1166,23 @@ Object.assign(FlowView.prototype, {
           ? this.plate.plate.length === 1 ? "1 floor plate"
             : "1 floor plate with " + (this.plate.plate.length - 1)
               + (this.plate.plate.length === 2 ? " opening" : " openings")
-          : this.plate.rings.length + " footprints")
-      + (this.plate.plate && this.plate.plate.length && this.plate.rings.length
-          ? " · " + this.plate.rings.length + " on it" : "")
+          : "read off the mesh")
+
       + " · " + this.goals.length + (this.goals.length === 1 ? " destination" : " destinations")
       + (this.portals.length ? "" : ", the corners of the floor")
       // Said when it happens, because a grid that quietly refused what was
       // asked of it is a measurement of something else.
+      // What the mesh gave and what it refused. An import that comes out with
+      // no floor at all is usually all-steep or all-ceiling, and knowing which
+      // is the difference between a bug and a model.
+      + (this.plate.read && this.plate.read.steep
+          ? " · " + this.plate.read.steep + " faces steeper than 1:" + this.slopeRatio
+            + ", not walkable"
+          : "")
+      + (this.plate.read && this.plate.read.islands && this.plate.read.islands.dropped
+          ? " · " + this.plate.read.islands.dropped + " cells of desk and shelf tops "
+            + "dropped - horizontal, but nobody steps 300 mm up"
+          : "")
       + (this.plate.refused
           ? " · the floor outline could not be read - it left nowhere to stand, so it is "
             + "being treated as an obstacle again. Wire the Floor node to the face or the "
@@ -991,13 +1274,13 @@ Object.assign(FlowView.prototype, {
 
   //! Walkable floor INSIDE the footprints - the number a schedule of areas
   //! would recognise. The padded grid outside the building is not floor.
+  //! Every cell somebody could stand in. Counted off the grid rather than
+  //! sampled over a box, because the walkable surface is the grid now.
   walkableArea() {
     if (!this.plate) return 0;
-    const { grid, inside } = this.plate;
+    const { grid } = this.plate;
     let cells = 0;
-    for (let y = inside.lo[1]; y <= inside.hi[1]; y += grid.cell)
-      for (let x = inside.lo[0]; x <= inside.hi[0]; x += grid.cell)
-        if (!isBlocked(grid, x, y)) cells++;
+    for (let k = 0; k < grid.blocked.length; k++) if (!grid.blocked[k]) cells++;
     return cells * grid.cell * grid.cell;
   },
 
@@ -1155,7 +1438,7 @@ Object.assign(FlowView.prototype, {
 
   paintPeople() {
     const { grid } = this.plate;
-    const z = grid.floor;
+    const base = grid.floor;
     const buckets = this.states.map(() => 0);
     for (let a = 0; a < this.crowd.count; a++) {
       const going = Math.hypot(this.crowd.vx[a], this.crowd.vy[a]);
@@ -1173,7 +1456,11 @@ Object.assign(FlowView.prototype, {
         : this.clock < this.crowd.until[a] ? 4
         : share > 0.75 ? 0 : share > 0.40 ? 1 : share > SHUFFLE * 1.35 ? 2 : 3;
 
-      this.spot.position.set(this.crowd.x[a], this.crowd.y[a], z);
+      // Feet on the surface they are standing on, which on a ramp, a terrace
+      // or the floor of a bowl is a different height every step.
+      const under = surfaceAt(grid, this.crowd.x[a], this.crowd.y[a]);
+      this.spot.position.set(this.crowd.x[a], this.crowd.y[a],
+                             under === null ? base : under);
       // Facing where they are going, and holding the last heading when they
       // stop - somebody standing still is facing somewhere, not north.
       if (going > 20) this.headings[a] = Math.atan2(this.crowd.vy[a], this.crowd.vx[a]);

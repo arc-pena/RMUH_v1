@@ -91,9 +91,47 @@ export function makeGrid(bounds, cell = 250, maxCells = MAX_CELLS) {
     lo: [bounds.lo[0], bounds.lo[1]],
     blocked: new Uint8Array(width * height),
     clearance: new Float32Array(width * height),
+    // The surface people are standing on, per cell, taken from the triangles
+    // of the model itself. NaN means there is nothing to stand on there, which
+    // is not the same as "blocked by something" and is the difference between
+    // a wall and a void.
+    surface: new Float32Array(width * height).fill(NaN),
     floor: bounds.floor || 0,
   };
 }
+
+/* ------------------------------------------------------ walking on it
+
+   A floor is not a bitmap. It is the triangles of the model, and three things
+   about a triangle decide whether anybody can walk on it: which way it faces,
+   how steep it is, and whether there is headroom over it.
+
+   The slope limit is a ratio, the way a ramp is specified on a drawing. 1:8 is
+   the default and it is already steep - Part M wants 1:20 over any distance -
+   but past about there you are climbing rather than walking, and a crowd model
+   that lets people stroll up the transition of a skate bowl is a crowd model
+   telling you something false about the bowl.                               */
+
+//! Rise over run, as a ramp is written. Anything steeper than this is not a
+//! floor: it is a wall you could theoretically scramble up.
+export const SLOPE_LIMIT = 1 / 8;
+
+//! How far up a person will step without it being a climb. A stair riser is
+//! 150-180 mm and has to connect; a 600 mm ledge does not.
+export const CLIMB = 300;
+
+//! The height of the surface under a point, or null where there is none.
+export function surfaceAt(grid, x, y) {
+  const [i, j] = toCell(grid, x, y);
+  if (!inGrid(grid, i, j)) return null;
+  const z = grid.surface[cellIndex(grid, i, j)];
+  return Number.isNaN(z) ? null : z;
+}
+
+//! Is there a floor here at all? A cell with nothing under it is not blocked,
+//! it is empty - a void, an atrium, the far side of the edge - and walking
+//! into it is walking into the air.
+export const hasFloor = (grid, x, y) => surfaceAt(grid, x, y) !== null;
 
 export const cellIndex = (grid, i, j) => j * grid.width + i;
 export const inGrid = (grid, i, j) => i >= 0 && j >= 0 && i < grid.width && j < grid.height;
@@ -242,7 +280,7 @@ export function clearanceOf(grid) {
 //! points. Walking near a wall is made to cost more, so routes stand off
 //! obstacles the way people do rather than shaving the corners.
 export function flowField(grid, targets, { standOff = 900, timid = 1.4 } = {}) {
-  const { width, height, blocked, clearance, cell } = grid;
+  const { width, height, blocked, clearance, cell, surface } = grid;
   const n = width * height;
   const cost = new Float32Array(n).fill(Infinity);
   const heap = new BucketHeap(cell);
@@ -273,7 +311,15 @@ export function flowField(grid, targets, { standOff = 900, timid = 1.4 } = {}) {
       if (blocked[nk]) continue;
       // No cutting a diagonal through the gap between two blocked cells.
       if (di && dj && (blocked[j * width + ni] || blocked[nj * width + i])) continue;
-      const step = (di && dj ? S : D) * penalty(nk);
+      // Uphill costs more, and a step up bigger than a stair riser is not a
+      // step at all. Both come off the surface heights the triangles gave us -
+      // so a ramp is longer than the plan says and a ledge is not a route.
+      // A grid built without heights, which is every grid the measuring nodes
+      // make, has none of this to say and is left alone.
+      const known = surface && Number.isFinite(surface[k]) && Number.isFinite(surface[nk]);
+      const rise = known ? surface[nk] - surface[k] : 0;
+      if (known && Math.abs(rise) > CLIMB) continue;
+      const step = (di && dj ? S : D) * penalty(nk) * (rise > 0 ? 1 + (rise / D) * 2.4 : 1);
       // Rounded to what the array will actually hold, and compared as that.
       //
       // This is not tidiness. `cost` is a Float32Array, so storing a double
@@ -542,11 +588,18 @@ export function stepCrowd(crowd, fields, grid, density, dt, now, options = {}) {
     }
 
     let nx = x + crowd.vx[a] * dt, ny = y + crowd.vy[a] * dt;
-    // A step into a wall is refused per axis, so somebody who meets a wall at
-    // an angle slides along it instead of stopping dead against it.
-    if (isBlocked(grid, nx, ny)) {
-      if (!isBlocked(grid, nx, y)) ny = y;
-      else if (!isBlocked(grid, x, ny)) nx = x;
+    // Off the surface is the same refusal as into a wall: a void has no floor,
+    // and a ledge taller than a stair riser is a climb rather than a step.
+    const standing = grid.surface ? surfaceAt(grid, x, y) : null;
+    const onto = there => {
+      if (isBlocked(grid, there[0], there[1])) return false;
+      if (standing === null || !grid.surface) return true;
+      const next = surfaceAt(grid, there[0], there[1]);
+      return next !== null && Math.abs(next - standing) <= CLIMB;
+    };
+    if (!onto([nx, ny])) {
+      if (onto([nx, y])) ny = y;
+      else if (onto([x, ny])) nx = x;
       else { nx = x; ny = y; crowd.vx[a] = crowd.vy[a] = 0; }
     }
     const moved = Math.hypot(nx - x, ny - y);
