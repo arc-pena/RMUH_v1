@@ -1463,7 +1463,8 @@ const drawing = (key, label, summary) =>
   ({ key, label, kind: "sketch", def: JSON.stringify(EMPTY_SKETCH), summary });
 
 //! What a feature hands downstream. An input accepts a set of these.
-export const KINDS = ["number", "point", "vector", "curve", "plane", "solid", "mesh", "text"];
+export const KINDS = ["number", "point", "vector", "axis", "curve", "plane",
+                      "solid", "mesh", "text"];
 const ANY = KINDS.slice();
 //! Source the user edits, held as a TDataStd_AsciiString.
 const code = (key, label, def) => ({ key, label, kind: "code", def });
@@ -1575,6 +1576,30 @@ export const CATALOGUE = [
            when(ref("axis", "Axis", ["vector", "curve"]), "kind", 4),
            when(real("angle", "Angle", 45, -360, 360, 1, "°"), "kind", 4),
            real("size", "Display size", 160, 10, 2000, 5)] },
+  //! An axis system is a placement: an origin and three directions, the thing
+  //! CATIA puts under every part and every transform. Wire one into a Move or a
+  //! Rotate and the shape follows it; wire two into Axis to axis and the shape
+  //! goes from one to the other, which is how a part is positioned in an
+  //! assembly without a single typed coordinate.
+  //!
+  //! Right-handed, always. X is taken as given, Y is squared up against it, and
+  //! Z is X cross Y - so a pair of directions that are not quite perpendicular
+  //! still makes a frame rather than an error.
+  { type: "AxisSystem", guid: "9a1b2c30-0005-4c00-9e00-caf000000005", category: "datum",
+    produces: "axis",
+    summary: "An origin and three directions - the placement a transform is measured "
+           + "in. Found from directions, from three points, or from a plane. Right "
+           + "handed: Y is squared against X, and Z is X cross Y.",
+    args: [choice("kind", "Axis system", ["Origin and directions", "Three points",
+                                          "From a plane"], 0),
+           when(ref("origin", "Origin", ["point"]), "kind", 0),
+           when(ref("xdir", "X direction", ["vector", "curve"]), "kind", 0),
+           when(ref("ydir", "Y direction", ["vector", "curve"]), "kind", 0),
+           when(ref("at", "Origin", ["point"]), "kind", 1),
+           when(ref("alongX", "Point on X", ["point"]), "kind", 1),
+           when(ref("inPlane", "Point in the XY plane", ["point"]), "kind", 1),
+           when(ref("plane", "Plane", ["plane"]), "kind", 2),
+           real("size", "Display size", 200, 10, 20000, 5)] },
 
   /* --------------------------------------------------------------- data
      Nothing here makes geometry. They make the numbers geometry is made of,
@@ -1808,14 +1833,20 @@ export const CATALOGUE = [
   { type: "MeshTransform", guid: "9a1b2c30-0087-4c00-9e00-caf000000087", category: "mesh",
     produces: "mesh",
     summary: "Moves, turns and scales a mesh. Every number takes a wire, so this is "
-           + "where a mesh is placed by arithmetic rather than by hand.",
+           + "where a mesh is placed by arithmetic rather than by hand. One factor for "
+           + "all of it, then a factor per axis - which is where a squash along one "
+           + "direction lives: a sphere with Z at 0.4 is the flattened dome a B-Rep "
+           + "transform in this kernel cannot make.",
     args: [ref("mesh", "Mesh", ["mesh"], true),
            real("mx", "Move X", 0, -8000, 8000, 1), real("my", "Move Y", 0, -8000, 8000, 1),
            real("mz", "Move Z", 0, -8000, 8000, 1),
            real("rx", "Turn about X", 0, -360, 360, 1, "°"),
            real("ry", "Turn about Y", 0, -360, 360, 1, "°"),
            real("rz", "Turn about Z", 0, -360, 360, 1, "°"),
-           real("scale", "Scale", 1, 0.01, 20, 0.01, "")] },
+           real("scale", "Scale", 1, 0.01, 20, 0.01, ""),
+           real("sx", "Scale X", 1, 0.01, 20, 0.01, ""),
+           real("sy", "Scale Y", 1, 0.01, 20, 0.01, ""),
+           real("sz", "Scale Z", 1, 0.01, 20, 0.01, "")] },
   { type: "MeshDisplace", guid: "9a1b2c30-0088-4c00-9e00-caf000000088", category: "mesh",
     produces: "mesh",
     summary: "Pushes every vertex along a direction by a formula over its own position. "
@@ -1966,6 +1997,80 @@ export const CATALOGUE = [
            ref("angles", "Turn each", ["number"]),
            real("turn", "Turn all", 0, -360, 360, 1, "°"),
            real("lift", "Lift", 0, -4000, 4000, 1)] },
+
+  /* -------------------------------------------------------- transforms
+     Where a shape is, said as a feature rather than typed into the shape that
+     made it. Every one of these is one gp_Trsf over a shape that is already
+     built, so it costs a matrix and not a rebuild, and the shape it moves stays
+     in the tree with its own parameters still live.                          */
+  { type: "Move", guid: "9a1b2c30-00e0-4c00-9e00-caf0000000e0", category: "operation",
+    produces: "solid",
+    summary: "Moves a shape: along a direction by a distance, from one point to "
+           + "another, or part of the way between two points. Between is the useful "
+           + "one - wire a number into how far along and the shape tweens.",
+    args: [ref("shape", "Shape", ["solid", "curve", "plane", "point"], true),
+           choice("kind", "Move", ["Along a direction", "Point to point",
+                                   "Between two points"], 0),
+           when(ref("direction", "Direction", ["vector", "curve"]), "kind", 0),
+           when(real("distance", "Distance", 100, -100000, 100000, 1), "kind", 0),
+           when(ref("from", "From point", ["point"]), "kind", 1),
+           when(ref("to", "To point", ["point"]), "kind", 1),
+           when(ref("start", "From point", ["point"]), "kind", 2),
+           when(ref("end", "To point", ["point"]), "kind", 2),
+           when(real("at", "How far along", 0.5, -8, 8, 0.01, ""), "kind", 2),
+           choice("keep", "Result", ["The shape moved", "Both, where it was and where "
+                                     + "it went"], 0)] },
+  //! Two angles rather than one, because the useful rotation is a sweep: start
+  //! at 15 and end at 75 and the shape turns 60, and a number wired into either
+  //! end animates it.
+  { type: "Rotate", guid: "9a1b2c30-00e1-4c00-9e00-caf0000000e1", category: "operation",
+    produces: "solid",
+    summary: "Turns a shape about an axis, from a start angle to an end angle. The axis "
+           + "is a direction through a point, a line, or an axis system - and an axis "
+           + "system brings its own origin, so nothing else is needed.",
+    args: [ref("shape", "Shape", ["solid", "curve", "plane", "point"], true),
+           ref("axis", "Axis", ["vector", "curve", "axis"], true),
+           ref("through", "Through point", ["point"]),
+           real("start", "Start angle", 0, -3600, 3600, 1, "\u00b0"),
+           real("end", "End angle", 90, -3600, 3600, 1, "\u00b0"),
+           choice("keep", "Result", ["The shape turned", "Both, before and after"], 0)] },
+  { type: "Mirror", guid: "9a1b2c30-00e2-4c00-9e00-caf0000000e2", category: "operation",
+    produces: "solid",
+    summary: "The mirror image of a shape in a plane - a datum plane, or a point with a "
+           + "normal through it. Both halves keeps the original, which is what makes a "
+           + "symmetrical part out of half of one.",
+    args: [ref("shape", "Shape", ["solid", "curve", "plane", "point"], true),
+           choice("by", "Mirror in", ["A plane", "A point and a normal"], 0),
+           when(ref("plane", "Plane", ["plane"]), "by", 0),
+           when(ref("at", "Point on the plane", ["point"]), "by", 1),
+           when(ref("normal", "Normal", ["vector", "curve"]), "by", 1),
+           choice("keep", "Result", ["The mirror image", "Both halves"], 0)] },
+  //! One factor, the same in every direction, and that is not a shortcut: a
+  //! B-Rep here is moved by a gp_Trsf, a gp_Trsf carries one scale factor, and
+  //! the non-uniform transform that would squash a solid along one direction -
+  //! BRepBuilderAPI_GTransform - is not in this build. Ask gp_Trsf for a squash
+  //! and it quietly returns the uniform scale of the same volume instead. So
+  //! scaling along one direction is a mesh operation, and Mesh Transform takes
+  //! a factor per axis.
+  { type: "Scale", guid: "9a1b2c30-00e3-4c00-9e00-caf0000000e3", category: "operation",
+    produces: "solid",
+    summary: "A shape larger or smaller about a point, by one factor in every "
+           + "direction. Squashing along one direction only is a mesh operation here - "
+           + "put the shape through Mesh from shape and scale that, which takes a "
+           + "factor per axis.",
+    args: [ref("shape", "Shape", ["solid", "curve", "plane", "point"], true),
+           ref("centre", "About point", ["point"]),
+           real("factor", "Factor", 2, 0.001, 1000, 0.01, "")] },
+  //! The assembly transform. Nothing is typed: a part drawn about its own frame
+  //! goes to wherever the target frame is, and moving the target moves the part.
+  { type: "AxisToAxis", guid: "9a1b2c30-00e4-4c00-9e00-caf0000000e4", category: "operation",
+    produces: "solid",
+    summary: "Takes a shape from one axis system to another - the assembly move. What "
+           + "was drawn about the first frame ends up placed about the second, so "
+           + "moving the target frame moves the part with it.",
+    args: [ref("shape", "Shape", ["solid", "curve", "plane", "point"], true),
+           ref("from", "From axis system", ["axis"], true),
+           ref("to", "To axis system", ["axis"], true)] },
   { type: "Array", guid: "9a1b2c30-0021-4c00-9e00-caf000000021", category: "operation",
     produces: "solid",
     summary: "Repeats a body in a grid or around an axis. One feature in the tree, "
@@ -2048,10 +2153,19 @@ const byGuid = new Map();
 //! and what you see is a feature refusing an argument it plainly has. That was
 //! found once by accident; it is not going to be found by accident twice.
 export function registerTypes(specs, from = "the catalogue") {
+  // Against what is already registered AND against the rest of this batch. Two
+  // entries of one batch clashing with each other passed this check and then
+  // overwrote each other in the maps below: a Move node given the guid of
+  // GeometricalSet made every set in every document answer as a Move, and what
+  // you saw was a folder refusing to hold anything.
+  const seen = new Set();
   for (const spec of specs) {
-    const clash = byType.has(spec.type) ? "type name " + spec.type
-                : byGuid.has(spec.guid) ? "guid " + spec.guid : null;
+    const clash = byType.has(spec.type) || seen.has("type " + spec.type)
+                    ? "type name " + spec.type
+                : byGuid.has(spec.guid) || seen.has("guid " + spec.guid)
+                    ? "guid " + spec.guid : null;
     if (clash) throw new Error(from + " brings a " + clash + " that is already taken");
+    seen.add("type " + spec.type).add("guid " + spec.guid);
   }
   for (const spec of specs) {
     byType.set(spec.type, spec);
@@ -2355,7 +2469,8 @@ export const F = {
     const kind = label.attr.TDataStd_AsciiString;
     return {
       kind,
-      stride: kind === "point" || kind === "vector" || kind === "mesh" ? 3 : 1,
+      stride: kind === "point" || kind === "vector" || kind === "mesh"
+           || kind === "axis" ? 3 : 1,
       values: label.attr.TDataStd_RealArray || [],
       lines: label.attr.TDataStd_ExtStringArray || [],
       // A polymesh keeps its faces here, packed as [sides, i, i, …, sides, …],

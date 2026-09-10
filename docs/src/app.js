@@ -1563,6 +1563,26 @@ const ICONS = {
         + '<path d="M4.6 9.6h5.4M7.6 6.2v3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
         + '<circle cx="4.6" cy="9.6" r="1.15" fill="currentColor"/><circle cx="10" cy="9.6" r="1.15" fill="currentColor"/>',
   Plane: '<path d="M1.5 10.5L6 4.5h8.5L10 10.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
+  // Three arms from a corner: an axis system is drawn the way it is drawn.
+  AxisSystem: '<path d="M3 13V4M3 13h9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+            + '<path d="M3 13L9.5 8.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity=".6"/>'
+            + '<circle cx="3" cy="13" r="1.5" fill="currentColor"/>',
+  // A shape and the same shape further on, with the travel between them.
+  Move: '<rect x="1.4" y="8.6" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+      + '<rect x="9.6" y="2.4" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".45"/>'
+      + '<path d="M6.9 8.2L10 5.1" stroke="currentColor" stroke-width="1.15"/>'
+      + '<path d="M11.6 3.6L8.6 4.3l2.1 2.1z" fill="currentColor"/>',
+  Rotate: '<path d="M12.6 8a4.6 4.6 0 1 1-1.6-3.5" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+        + '<path d="M12 1.9l-.4 3.4 3.2-.8z" fill="currentColor"/>'
+        + '<circle cx="8" cy="8" r="1.3" fill="currentColor"/>',
+  Mirror: '<path d="M8 1.4v13.2" stroke="currentColor" stroke-width="1.2" stroke-dasharray="1.6 1.5"/>'
+        + '<path d="M6.4 4.2L2 8l4.4 3.8z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>'
+        + '<path d="M9.6 4.2L14 8l-4.4 3.8z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" opacity=".45"/>',
+  Scale: '<rect x="1.6" y="8.4" width="5.2" height="5.2" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+       + '<rect x="1.6" y="1.6" width="12" height="12" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".45"/>',
+  AxisToAxis: '<path d="M2 13V7.5M2 13h5.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>'
+            + '<path d="M14 3v5.5M14 3H8.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" opacity=".5"/>'
+            + '<path d="M5.4 10.4l5.2-5.2" stroke="currentColor" stroke-width="1.1" stroke-dasharray="1.6 1.4"/>',
   Cube: '<path d="M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M2.4 4.6L8 7.6l5.6-3M8 7.6v6.8" stroke="currentColor" stroke-width="1.1"/>',
   Sphere: '<circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.3"/><ellipse cx="8" cy="8" rx="2.7" ry="6.3" fill="none" stroke="currentColor" stroke-width="1"/>',
   Array: '<rect x="1.6" y="1.6" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9.4" y="1.6" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="1.6" y="9.4" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9.4" y="9.4" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".45"/>',

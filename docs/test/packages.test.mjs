@@ -13,7 +13,7 @@ import { CLIMATE, CLIMATE_NODES, exposeAt, patchesOf, rampColour, sunRun,
 import { clearSky, dayLength, findSites, incidence, psychrometrics, readCoordinates,
          readEpw, saturationPressure, skyVector, sunPosition, surfaceIrradiance }
   from "../src/climate.js";
-import { typeSpec } from "../src/ocaf.js";
+import { CATALOGUE, registerTypes, typeSpec } from "../src/ocaf.js";
 import { readFileSync } from "fs";
 import { gzipSync } from "zlib";
 
@@ -28,7 +28,10 @@ const near = (a, b, tol) => Number.isFinite(a) && Math.abs(a - b) <= tol;
 
 const kernel = await createWasmKernel({ initModule: init,
                                         wasmBinary: readFileSync(DIR + "/replicad_single.wasm") });
-const sites = JSON.parse(readFileSync("./data/cities.json", "utf8")).sites;
+// Beside the site, not beside whoever is running the tests: the documented
+// command runs these from the top of the repository.
+const sites = JSON.parse(readFileSync(new URL("../data/cities.json", import.meta.url),
+                                      "utf8")).sites;
 
 console.log("1. the sun, against numbers anybody can look up");
 {
@@ -321,6 +324,38 @@ console.log("\n9. the ramp reads as a scale");
   check("and out of range clamps rather than wrapping",
     JSON.stringify(rampColour(-3)) === JSON.stringify(rampColour(0))
     && JSON.stringify(rampColour(9)) === JSON.stringify(rampColour(1)));
+}
+
+console.log("\n10. two types cannot answer to one guid");
+{
+  // A repeated guid does not fail loudly - it makes one type quietly answer as
+  // another. It happened: a Move node was given the guid of GeometricalSet, and
+  // what anybody saw was every folder in every document refusing to hold
+  // anything. Caught against what is registered already, and against the rest
+  // of the same batch, which is where that one hid.
+  const spec = (type, guid) => ({ type, guid, category: "operation", produces: "solid",
+                                  summary: "for the test", args: [] });
+  let said = null;
+  try { registerTypes([spec("TestOne", "9a1b2c30-0072-4c00-9e00-caf000000072")], "a test"); }
+  catch (err) { said = err.message; }
+  check("a guid already in the catalogue is refused", /guid/.test(said || ""), String(said));
+
+  said = null;
+  try {
+    registerTypes([spec("TestTwo", "9a1b2c30-0f01-4c00-9e00-caf000000f01"),
+                   spec("TestThree", "9a1b2c30-0f01-4c00-9e00-caf000000f01")], "a test");
+  } catch (err) { said = err.message; }
+  check("and so is one repeated inside a single batch", /guid/.test(said || ""), String(said));
+  check("nothing from a refused batch is registered", !typeSpec("TestTwo"));
+
+  // And the catalogue itself is clean, which is the thing the check exists for.
+  const guids = new Map();
+  let clashes = 0;
+  for (const entry of CATALOGUE) {
+    if (guids.has(entry.guid)) clashes++;
+    guids.set(entry.guid, entry.type);
+  }
+  check("every type in the catalogue has its own guid", clashes === 0, clashes + " repeated");
 }
 
 console.log(failures ? "\n" + failures + " FAILED" : "\nall checks passed");

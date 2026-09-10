@@ -309,7 +309,18 @@ function facing(a, b, c) {
   const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
   const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
   const len = Math.hypot(nx, ny, nz);
-  return len > 1e-9 ? Math.abs(nz) / len : 0;
+  // SIGNED, and this is the whole of a bug that put a crowd round the edge of
+  // a floor plate and none of it on the plate.
+  //
+  // Take the absolute value and the UNDERSIDE of a slab counts as a floor. A
+  // 120 mm slab then has two: the top at 120, and the soffit at 0. The lower
+  // one wins, everybody is standing under the slab, the slab itself is in
+  // their headroom - so every cell over the plate is blocked, and the only
+  // walkable ground left is the strip around the outside. Which is exactly
+  // where they were standing.
+  //
+  // A floor points up. A ceiling is not a floor however flat it is.
+  return len > 1e-9 ? nz / len : 0;
 }
 
 //! Reads the walkable surface out of the triangles and into the grid.
@@ -319,50 +330,87 @@ function facing(a, b, c) {
 //! whether anything stands in the headroom over that surface, which is what
 //! makes a wall a wall - because "over" means over the floor, and the floor is
 //! what the first pass just worked out.
-export function surfaceFrom(grid, meshes, {
+//! A floor smaller than this is not a floor - it is the top of something. The
+//! same number pruneIslands uses, because it is the same question.
+const MIN_FLOOR = 4e6;
+
+export function surfaceFrom(grid, meshes, options = {}) {
+  // The mesh first, on its own terms: only what this storey actually has to
+  // stand on, no borrowing and no invented ground.
+  const read = readSurface(grid, meshes, options, false);
+  if (read.standing * grid.cell * grid.cell >= MIN_FLOOR) return read;
+
+  // Nothing to stand on. THEN the two rules for a model that drew no floor: a
+  // floor above the cut is still a floor, and walls standing on nothing are
+  // standing on the ground.
+  return readSurface(grid, meshes, options, true);
+}
+
+function readSurface(grid, meshes, {
   cut = Infinity, slope = SLOPE_LIMIT, headroom = 2000, floors = null,
-} = {}) {
+} = {}, lenient = false) {
   const surface = grid.surface, blocked = grid.blocked;
   surface.fill(NaN);
+  blocked.fill(0);
   // The slope limit as a ratio becomes a limit on how much of the normal points
   // up: 1:8 is 7.1 degrees, and the cosine of that is what a triangle's normal
   // has to beat.
   const upright = 1 / Math.sqrt(1 + slope * slope);
   const under = floors && floors.length ? floors : meshes;
-  let steep = 0, flat = 0;
+  let steep = 0, flat = 0, ceilings = 0;
 
-  // Two answers per cell: the highest walkable surface at or under the cut,
-  // and the lowest one above it. The cut is which storey you are standing on -
-  // but a model whose only floor is above the cut still has a floor, and
-  // refusing to see it because a slider is in the wrong place is the interface
-  // arguing with the geometry.
+  // Two answers per cell: the highest walkable surface at or under the cut, and
+  // the lowest one above it. The cut is which storey you are standing on.
   const above = new Float32Array(surface.length).fill(NaN);
+  let covered = 0;
   eachTriangle(under, (a, b, c) => {
     const up = facing(a, b, c);
+    // Three answers, not two, because "not a floor" has two reasons and they
+    // are worth telling apart: a soffit is not a steep floor, it is a ceiling.
+    if (up <= 0) { ceilings++; return; }
     if (up < upright) { steep++; return; }
     flat++;
     overTriangle(grid, a, b, c, (k, z) => {
       if (z <= cut) {
+        if (Number.isNaN(surface[k])) covered++;
         if (Number.isNaN(surface[k]) || z > surface[k]) surface[k] = z;
       } else if (Number.isNaN(above[k]) || z < above[k]) above[k] = z;
     });
   });
-  for (let k = 0; k < surface.length; k++)
-    if (Number.isNaN(surface[k])) surface[k] = above[k];
 
-  // Walls standing on nothing stand on the ground.
-  //
-  // A plan drawn as walls and furniture has no floor in it - the floor is the
-  // ground they are sitting on, and it is not in the model because nobody
-  // draws it. So where nothing walkable was found, the ground is assumed at the
-  // lowest level of the model, which is what those walls are standing on.
-  //
-  // Not when somebody has NAMED the floor. Then a void is a void, and assuming
-  // ground under a lightwell would be assuming a storey that is not there.
-  const ground = floors && floors.length ? null : lowestOf(under);
-  if (ground !== null)
-    for (let k = 0; k < surface.length; k++)
-      if (Number.isNaN(surface[k])) surface[k] = ground;
+  // Where this storey HAS a floor, that floor is the whole of it: no triangle
+  // under your feet means nothing under your feet. Assume ground beside a slab
+  // that IS in the model and a 599 m2 plate comes back as 1038 m2 of walkable,
+  // the extra 439 m2 being thin air off the edge - which is exactly where the
+  // crowd was found standing.
+  if (lenient) {
+    // A storey whose floor is above the cut still has a floor. Refusing to see
+    // it because a slider is in the wrong place is the interface arguing with
+    // the geometry.
+    for (let k = 0; k < surface.length; k++) {
+      if (Number.isNaN(surface[k])) surface[k] = above[k];
+      if (!Number.isNaN(surface[k])) covered++;
+    }
+
+    // Walls standing on nothing stand on the ground.
+    //
+    // A plan drawn as walls and furniture has no floor in it - the floor is the
+    // ground they are sitting on, and it is not in the model because nobody
+    // draws it. So where nothing walkable was found, the ground is assumed at
+    // the lowest level of the model, which is what those walls are standing on.
+    //
+    // Only for a model that drew no floor, and a model that drew one drew most
+    // of it: a plate covers its own extent, while wall tops and shelves cover a
+    // few per cent of it.
+    //
+    // Never when somebody has NAMED the floor. Then a void is a void, and
+    // ground under a lightwell would be a storey that is not there.
+    const drew = covered > surface.length * 0.12;
+    const ground = (floors && floors.length) || drew ? null : lowestOf(under);
+    if (ground !== null)
+      for (let k = 0; k < surface.length; k++)
+        if (Number.isNaN(surface[k])) surface[k] = ground;
+  }
 
   eachTriangle(meshes, (a, b, c) => {
     const blockIf = (k, z) => {
@@ -384,7 +432,7 @@ export function surfaceFrom(grid, meshes, {
   const islands = pruneIslands(grid);
   let standing = 0;
   for (let k = 0; k < surface.length; k++) if (!blocked[k]) standing++;
-  return { steep, flat, standing, islands };
+  return { steep, flat, ceilings, standing, islands };
 }
 
 //! A desk top is horizontal, so the triangles say you can stand on it. You
@@ -476,6 +524,22 @@ export function plateOf(meshes, cut, grain, {
   if (Number.isFinite(base)) grid.floor = base;
 
   clearanceOf(grid);
+
+  // Where the floor actually is, which is not where the model is. Destinations
+  // and spawns are spread over THIS box, so on a dome - walkable in the middle,
+  // too steep at the edges - they land on the walkable cap rather than in the
+  // ring of nothing around it, and a crowd that had nowhere to go now has four
+  // corners to go to.
+  let flo = [Infinity, Infinity], fhi = [-Infinity, -Infinity];
+  for (let j = 0; j < grid.height; j++)
+    for (let i = 0; i < grid.width; i++)
+      if (!grid.blocked[j * grid.width + i]) {
+        const [x, y] = toWorld(grid, i, j);
+        flo = [Math.min(flo[0], x), Math.min(flo[1], y)];
+        fhi = [Math.max(fhi[0], x), Math.max(fhi[1], y)];
+      }
+  const walkable = Number.isFinite(flo[0]) ? { lo: flo, hi: fhi } : walls;
+
   return {
     grid, read,
     // What to draw: the edge of the walkable surface, wherever it is - the
@@ -485,7 +549,8 @@ export function plateOf(meshes, cut, grain, {
     plate: floors.length ? floors.flatMap(floorRings) : [],
     carved: floors.length > 0,
     refused: false,
-    inside: walls,
+    inside: walkable,
+    footprint: walls,
   };
 }
 
@@ -1177,7 +1242,6 @@ Object.assign(FlowView.prototype, {
       // is the difference between a bug and a model.
       + (this.plate.read && this.plate.read.steep
           ? " · " + this.plate.read.steep + " faces steeper than 1:" + this.slopeRatio
-            + ", not walkable"
           : "")
       + (this.plate.read && this.plate.read.islands && this.plate.read.islands.dropped
           ? " · " + this.plate.read.islands.dropped + " cells of desk and shelf tops "
@@ -1258,7 +1322,10 @@ Object.assign(FlowView.prototype, {
     const read = this.bar.querySelector("#fl-cut-read");
     if (!this.span) return;
     const [lo, hi] = this.span;
-    const min = Math.round(lo + 50), max = Math.max(Math.round(hi - 50), Math.round(lo + 100));
+    // Head height above the top of the model, not the top of it: a 120 mm slab
+    // spans 120 mm, and a cut that can only be inside those 120 mm can only
+    // ever be inside the slab.
+    const min = Math.round(lo), max = Math.round(hi + 2000);
     slider.min = String(min);
     slider.max = String(max);
     slider.step = String(Math.max(10, Math.round((max - min) / 200)));
@@ -1310,7 +1377,11 @@ Object.assign(FlowView.prototype, {
   nearestFreeAt(want) {
     const { grid } = this.plate;
     const [i, j] = toCell(grid, want[0], want[1]);
-    for (let r = 1; r < 40; r++)
+    // As far as the grid goes. Stopping at forty cells was a limit of 10 m on a
+    // 250 mm grid, and on a plate whose walkable part is a cap in the middle of
+    // a much larger model that is not far enough to find it.
+    const reach = grid.width + grid.height;
+    for (let r = 1; r < reach; r++)
       for (let d = 0; d < 8 * r; d++) {
         const angle = d / (8 * r) * Math.PI * 2;
         const ni = i + Math.round(Math.cos(angle) * r), nj = j + Math.round(Math.sin(angle) * r);
@@ -1360,7 +1431,10 @@ Object.assign(FlowView.prototype, {
       const x = inside.lo[0] + this.random() * (inside.hi[0] - inside.lo[0]);
       const y = inside.lo[1] + this.random() * (inside.hi[1] - inside.lo[1]);
       if (isBlocked(grid, x, y)) continue;
-      if (walkDistance(this.fields[0], x, y) === null) continue;
+      // Somewhere they can actually get somewhere from - when there is anywhere
+      // to get to. A plate with no destinations on it yet is still a plate to
+      // stand on, and walkDistance of a field that does not exist is a crash.
+      if (this.fields.length && walkDistance(this.fields[0], x, y) === null) continue;
       if (this.density && densityAt(this.density, grid, x, y) > 1.2e-6) continue;
       return [x, y];
     }

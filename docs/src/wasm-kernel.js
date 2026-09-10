@@ -64,6 +64,31 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       ? [data.values[0], data.values[1], data.values[2]] : null;
   };
 
+  //! An axis system, read the same way: whatever built it, what comes out is an
+  //! origin and three directions.
+  const readAxisSystem = f => {
+    const data = f && F.data(f);
+    if (!data || data.kind !== "axis" || data.values.length < 12) return null;
+    const v = data.values;
+    return { at: v.slice(0, 3), x: v.slice(3, 6), y: v.slice(6, 9), z: v.slice(9, 12) };
+  };
+
+  //! Three directions that are square to each other and right handed, out of
+  //! two that may be neither. X is believed; Y is squared against it; Z is the
+  //! cross of the two. A Y that is parallel to X - or missing - is replaced by
+  //! any perpendicular, because a frame is still a frame.
+  function frameFrom(origin, xdir, ydir) {
+    const x = V.norm(xdir) || [1, 0, 0];
+    let y = ydir ? V.norm(V.sub(ydir, V.scale(x, V.dot(x, ydir)))) : null;
+    if (!y) {
+      const other = Math.abs(x[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      y = V.norm(V.cross(other, x));
+    }
+    return { at: origin, x, y, z: V.cross(x, y) };
+  }
+
+  const axisPlacement = a => new oc.gp_Ax3(pnt(a.at), dir(a.z), dir(a.x));
+
   //! A plane datum resolved, whichever way it was asked for. One answer, not
   //! two: either the frame or the sentence saying why there isn't one. A flag
   //! that switched between them could not survive being called recursively -
@@ -423,6 +448,62 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         const axis = planeAxis(f);
         if (!axis) throw new Error("that plane cannot be worked out");
         return HSF.planeFace(axis, F.real(f, "size", 160));
+      },
+    },
+
+    //! Three directions and a point, drawn as three lines so it can be seen,
+    //! published as twelve numbers so it can be used. What a transform is
+    //! measured in, and what a part is placed by.
+    AxisSystem: {
+      precondition: f => {
+        const kind = Feature_choice(f, "kind");
+        if (kind === 1) {
+          if (!readPoint(F.reference(f, "at"))) return "origin point is missing";
+          if (!readPoint(F.reference(f, "alongX"))) return "a point on X is needed";
+          if (!readPoint(F.reference(f, "inPlane"))) return "a third point is needed to fix the plane";
+        } else if (kind === 2) {
+          if (!F.reference(f, "plane")) return "no plane to take a frame from";
+          return planeTrouble(F.reference(f, "plane"));
+        } else if (!readPoint(F.reference(f, "origin"))) return "origin point is missing";
+        if (F.real(f, "size", 200) <= CONFUSION) return "display size must be positive";
+        return null;
+      },
+      build: f => {
+        const kind = Feature_choice(f, "kind");
+        let frame;
+        if (kind === 1) {
+          const at = readPoint(F.reference(f, "at"));
+          const onX = readPoint(F.reference(f, "alongX"));
+          const inPlane = readPoint(F.reference(f, "inPlane"));
+          const x = V.sub(onX, at);
+          if (length(x) < CONFUSION) throw new Error("the point on X is the origin");
+          frame = frameFrom(at, x, V.sub(inPlane, at));
+          if (length(V.cross(x, V.sub(inPlane, at))) < CONFUSION)
+            throw new Error("those three points are in a straight line, so they fix no plane");
+        } else if (kind === 2) {
+          const ax = planeAxis(F.reference(f, "plane"));
+          if (!ax) throw new Error("that plane cannot be worked out");
+          const z = ax.Direction(), x = ax.XDirection(), at = ax.Location();
+          frame = frameFrom([at.X(), at.Y(), at.Z()], [x.X(), x.Y(), x.Z()],
+                            V.cross([z.X(), z.Y(), z.Z()], [x.X(), x.Y(), x.Z()]));
+        } else {
+          const origin = readPoint(F.reference(f, "origin"));
+          const runs = key => {
+            const along = axisOf(F.reference(f, key));
+            return along ? along.along : null;
+          };
+          const xdir = runs("xdir") || [1, 0, 0];
+          const ydir = runs("ydir");
+          if (length(xdir) < CONFUSION) throw new Error("the X direction is null");
+          frame = frameFrom(origin, xdir, ydir);
+        }
+        const size = F.real(f, "size", 200);
+        const arm = way => HSF.lineFrom(frame.at, way, 0, size);
+        return {
+          shape: HSF.join([arm(frame.x), arm(frame.y), arm(frame.z)]),
+          data: { kind: "axis",
+                  values: [...frame.at, ...frame.x, ...frame.y, ...frame.z] },
+        };
       },
     },
 
@@ -2353,12 +2434,17 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   builders.MeshTransform = {
     precondition: f => {
       if (!F.reference(f, "mesh")) return "no mesh to move";
-      if (Math.abs(F.real(f, "scale", 1)) < 1e-6) return "a scale of zero leaves nothing";
+      for (const key of ["scale", "sx", "sy", "sz"])
+        if (Math.abs(F.real(f, key, 1)) < 1e-6) return "a scale of zero leaves nothing";
       return null;
     },
     build: f => {
       const mesh = meshFrom(F.reference(f, "mesh"), "mesh");
+      // One factor, then a factor per axis. Both, because "twice the size" and
+      // "squashed to 0.4 in Z" are different sentences and a modeller says both.
       const scale = F.real(f, "scale", 1);
+      const axes = [F.real(f, "sx", 1) * scale, F.real(f, "sy", 1) * scale,
+                    F.real(f, "sz", 1) * scale];
       const move = [F.real(f, "mx", 0), F.real(f, "my", 0), F.real(f, "mz", 0)];
       const [rx, ry, rz] = ["rx", "ry", "rz"].map(k => F.real(f, k, 0) * Math.PI / 180);
       const turn = (p, angle, i, j) => {
@@ -2371,7 +2457,8 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       // About the mesh's own middle, so turning it does not fling it away.
       const middle = centroid(mesh.points);
       const points = mesh.points.map(p => {
-        let q = vmul(vsub(p, middle), scale);
+        const d = vsub(p, middle);
+        let q = [d[0] * axes[0], d[1] * axes[1], d[2] * axes[2]];
         q = turn(q, rx, 1, 2);
         q = turn(q, ry, 2, 0);
         q = turn(q, rz, 0, 1);
@@ -2583,6 +2670,180 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
         return api.move(turned, [point[0], point[1], point[2] + lift]);
       });
       return compoundOf(copies);
+    },
+  };
+
+  /* --------------------------------------------------------- transforms
+
+     One gp_Trsf each, over a shape that is already built. Rigid moves go on as
+     a TopLoc_Location - the shape is not rebuilt, it is the same shape
+     somewhere else, which is why a mirrored assembly costs a matrix. A mirror
+     and a scale change the shape itself, so those go through
+     BRepBuilderAPI_Transform.                                                */
+
+  //! What every transform below does with its answer: put it on, and keep the
+  //! original beside it if that was asked for.
+  function transformed(shape, trsf, { rebuild = false, keep = false } = {}) {
+    const moved = rebuild
+      ? new oc.BRepBuilderAPI_Transform(shape, trsf, true).Shape()
+      : shape.Moved(new oc.TopLoc_Location(trsf));
+    return keep ? compoundOf([shape, moved]) : moved;
+  }
+
+  const movedTrouble = f => {
+    const shape = F.reference(f, "shape");
+    if (!shape) return "no shape to move";
+    if (!F.shape(shape)) return F.name(shape) + " has not been built";
+    return null;
+  };
+
+  builders.Move = {
+    precondition: f => {
+      const trouble = movedTrouble(f);
+      if (trouble) return trouble;
+      const kind = Feature_choice(f, "kind");
+      if (kind === 1 && !(readPoint(F.reference(f, "from")) && readPoint(F.reference(f, "to"))))
+        return "two points are needed to move between";
+      if (kind === 2 && !(readPoint(F.reference(f, "start")) && readPoint(F.reference(f, "end"))))
+        return "two points are needed to move between";
+      if (kind === 0) {
+        const along = axisOf(F.reference(f, "direction"));
+        if (!along) return "a direction is needed";
+        if (Math.abs(F.real(f, "distance", 100)) < CONFUSION) return "distance must not be zero";
+      }
+      return null;
+    },
+    build: f => {
+      const shape = F.shape(F.reference(f, "shape"));
+      const kind = Feature_choice(f, "kind");
+      let by;
+      if (kind === 1) {
+        by = V.sub(readPoint(F.reference(f, "to")), readPoint(F.reference(f, "from")));
+      } else if (kind === 2) {
+        // The tween. Not clamped: a fraction past 1 goes past the far point and
+        // a negative one goes back beyond the near one, which is what makes it
+        // useful wired to a slider.
+        const from = readPoint(F.reference(f, "start"));
+        const to = readPoint(F.reference(f, "end"));
+        by = V.scale(V.sub(to, from), F.real(f, "at", 0.5));
+      } else {
+        const along = axisOf(F.reference(f, "direction"));
+        by = V.scale(V.norm(along.along) || [0, 0, 1], F.real(f, "distance", 100));
+      }
+      // A tween at nought is a tween at nought - the start of the travel, not a
+      // mistake. Only point to point complains, because there the two points
+      // being the same is somebody having wired the same point twice.
+      if (kind === 1 && V.length(by) < CONFUSION)
+        throw new Error("those two points are the same, so that is a move of nothing");
+      // A tween at nought is a tween at nought - the start of the travel, not a
+      // mistake - so it goes on as a translation of nothing rather than as an
+      // error, and the shape it hands on is its own shape rather than the one
+      // upstream, which everything downstream depends on.
+      const trsf = new oc.gp_Trsf();
+      trsf.SetTranslation(new oc.gp_Vec(by[0], by[1], by[2]));
+      return transformed(shape, trsf, { keep: Feature_choice(f, "keep") === 1 });
+    },
+  };
+
+  builders.Rotate = {
+    precondition: f => {
+      const trouble = movedTrouble(f);
+      if (trouble) return trouble;
+      const system = readAxisSystem(F.reference(f, "axis"));
+      if (!system && !axisOf(F.reference(f, "axis")))
+        return "an axis is needed to turn about";
+      if (Math.abs(F.real(f, "end", 90) - F.real(f, "start", 0)) < CONFUSION)
+        return "the start and end angles are the same, so nothing turns";
+      return null;
+    },
+    //! An axis system knows where it is, so it needs no point wired to it. A
+    //! bare direction does not, and falls back to the origin the way a rotation
+    //! about "Z" has always meant about the Z axis.
+    build: f => {
+      const shape = F.shape(F.reference(f, "shape"));
+      const system = readAxisSystem(F.reference(f, "axis"));
+      const found = system ? { at: system.at, along: system.z } : axisOf(F.reference(f, "axis"));
+      const at = readPoint(F.reference(f, "through")) || found.at || [0, 0, 0];
+      const turn = F.real(f, "end", 90) - F.real(f, "start", 0);
+      const trsf = new oc.gp_Trsf();
+      trsf.SetRotation(new oc.gp_Ax1(pnt(at), dir(V.norm(found.along) || [0, 0, 1])),
+                       turn * Math.PI / 180);
+      return transformed(shape, trsf, { keep: Feature_choice(f, "keep") === 1 });
+    },
+  };
+
+  builders.Mirror = {
+    precondition: f => {
+      const trouble = movedTrouble(f);
+      if (trouble) return trouble;
+      if (Feature_choice(f, "by") === 0) {
+        if (!F.reference(f, "plane")) return "no plane to mirror in";
+        return planeTrouble(F.reference(f, "plane"));
+      }
+      if (!readPoint(F.reference(f, "at"))) return "a point on the mirror plane is needed";
+      if (!axisOf(F.reference(f, "normal"))) return "a normal to the mirror plane is needed";
+      return null;
+    },
+    build: f => {
+      const shape = F.shape(F.reference(f, "shape"));
+      let at, normal;
+      if (Feature_choice(f, "by") === 0) {
+        const ax = planeAxis(F.reference(f, "plane"));
+        if (!ax) throw new Error("that plane cannot be worked out");
+        const p = ax.Location(), n = ax.Direction();
+        at = [p.X(), p.Y(), p.Z()];
+        normal = [n.X(), n.Y(), n.Z()];
+      } else {
+        at = readPoint(F.reference(f, "at"));
+        normal = axisOf(F.reference(f, "normal")).along;
+      }
+      const trsf = new oc.gp_Trsf();
+      // A mirror in a PLANE, not in a line: gp_Ax2 built from the point and the
+      // normal is the plane, and SetMirror of an Ax2 reflects through it.
+      trsf.SetMirror(new oc.gp_Ax2(pnt(at), dir(V.norm(normal) || [0, 0, 1])));
+      // Reflecting turns a shape inside out - the faces that faced out face in -
+      // so this one is rebuilt rather than relocated.
+      return transformed(shape, trsf,
+                         { rebuild: true, keep: Feature_choice(f, "keep") === 1 });
+    },
+  };
+
+  builders.Scale = {
+    precondition: f => {
+      const trouble = movedTrouble(f);
+      if (trouble) return trouble;
+      if (F.real(f, "factor", 2) <= CONFUSION) return "the factor must be positive";
+      return null;
+    },
+    build: f => {
+      const shape = F.shape(F.reference(f, "shape"));
+      const at = readPoint(F.reference(f, "centre")) || [0, 0, 0];
+      const factor = F.real(f, "factor", 2);
+      if (Math.abs(factor - 1) < CONFUSION) return shape;
+      const trsf = new oc.gp_Trsf();
+      trsf.SetScale(pnt(at), factor);
+      return transformed(shape, trsf, { rebuild: true });
+    },
+  };
+
+  builders.AxisToAxis = {
+    precondition: f => {
+      const trouble = movedTrouble(f);
+      if (trouble) return trouble;
+      if (!readAxisSystem(F.reference(f, "from"))) return "no axis system to come from";
+      if (!readAxisSystem(F.reference(f, "to"))) return "no axis system to go to";
+      return null;
+    },
+    //! gp_Trsf::SetTransformation of two gp_Ax3 is exactly this operation, and
+    //! it is the one an assembly is built out of: the part is drawn about its
+    //! own frame once, and every instance of it is that frame sent somewhere.
+    build: f => {
+      const shape = F.shape(F.reference(f, "shape"));
+      const from = readAxisSystem(F.reference(f, "from"));
+      const to = readAxisSystem(F.reference(f, "to"));
+      const trsf = new oc.gp_Trsf();
+      trsf.SetTransformation(axisPlacement(to), axisPlacement(from));
+      return transformed(shape, trsf, {});
     },
   };
 

@@ -515,8 +515,25 @@ console.log("\n7. the floor plate, cut out of real geometry");
   check("but the plate covers it when it is asked to",
     !isBlocked(wide.grid, far[0], far[1]));
   check("and that does not move what counts as inside the building",
-    near(wide.inside.hi[0], plate.inside.hi[0], 1),
-    wide.inside.hi[0] + " vs " + plate.inside.hi[0]);
+    near(wide.footprint.hi[0], plate.footprint.hi[0], 1),
+    wide.footprint.hi[0] + " vs " + plate.footprint.hi[0]);
+
+  // Two different boxes, and the difference matters: the footprint is where the
+  // geometry is, and inside is where the FLOOR is - which on a floor read off a
+  // dome is a small cap in the middle of a much larger model. Destinations and
+  // spawns are spread over the second one. Here, every walkable cell is in it.
+  {
+    let held = true;
+    for (let j = 0; j < plate.grid.height; j++)
+      for (let i = 0; i < plate.grid.width; i++) {
+        if (plate.grid.blocked[cellIndex(plate.grid, i, j)]) continue;
+        const [x, y] = toWorld(plate.grid, i, j);
+        if (x < plate.inside.lo[0] || x > plate.inside.hi[0]
+         || y < plate.inside.lo[1] || y > plate.inside.hi[1]) held = false;
+      }
+    check("the walkable box holds every walkable cell", held,
+          JSON.stringify(plate.inside));
+  }
 }
 
 console.log("\n8. a package, loaded and put away");
@@ -650,6 +667,33 @@ console.log("the mesh is king: slope, voids, and what is too steep to walk");
         "anything past about 1:8 is scrambling");
   check("it counts what it threw away", run.read.steep === 2 && run.read.flat === 4,
         JSON.stringify(run.read));
+
+  // The bug that put a crowd round the edge of a floor plate and none of it on
+  // the plate: a slab has a top AND a soffit, and taking the absolute value of
+  // the normal makes both of them floors. The lower one wins, everybody stands
+  // under the slab, the slab is in their headroom, and every cell over the
+  // plate is blocked.
+  const slab = { positions: [], index: [] };
+  const addS = (a, b, c) => {
+    const base = slab.positions.length / 3;
+    slab.positions.push(...a, ...b, ...c);
+    slab.index.push(base, base + 1, base + 2);
+  };
+  const deckTop = 120;
+  addS([0, 0, deckTop], [10000, 0, deckTop], [10000, 10000, deckTop]);
+  addS([0, 0, deckTop], [10000, 10000, deckTop], [0, 10000, deckTop]);
+  // the soffit, wound the other way so it faces down, as a real solid's does
+  addS([0, 0, 0], [10000, 10000, 0], [10000, 0, 0]);
+  addS([0, 0, 0], [0, 10000, 0], [10000, 10000, 0]);
+  const deck2 = plateOf([slab], 100, 250, {});
+  check("a soffit is not a floor, so people stand ON the slab",
+        surfaceAt(deck2.grid, 5000, 5000) === 120,
+        String(surfaceAt(deck2.grid, 5000, 5000)));
+  check("and the middle of the plate is walkable",
+        !isBlocked(deck2.grid, 5000, 5000),
+        "this is the crowd standing round the edge of the plate");
+  check("the ceiling is counted as a ceiling, not as something too steep",
+        deck2.read.ceilings === 2 && deck2.read.flat === 2, JSON.stringify(deck2.read));
 
   // Feet on the ramp, not on one number for the whole plate.
   const on = surfaceAt(run.grid, 6000, 2000);
@@ -823,6 +867,131 @@ console.log("the cut has to be able to reach the model");
   check("a flat thing is not a span", zSpan([box(0, 0.5)]) === null);
   const span = zSpan([box(0, 3000), box(4200, 7400)]);
   check("two storeys span both", JSON.stringify(span) === "[0,7400]", JSON.stringify(span));
+}
+
+console.log("\na slab is a slab: the plate is the geometry, and nothing beside it");
+{
+  // The bug this is here for, in the shape it was reported in: a 120 mm slab
+  // with two voids cut through it came back with a walkable area far bigger
+  // than the slab, and the crowd stood in the strip of nothing around the edge
+  // of it rather than on the plate.
+  await kernel.loadModel({ format: "ocaf-parametric-model", version: 1, name: "S",
+                           units: "mm", features: [] });
+  const point = async (x, y, z) => {
+    const id = (await kernel.addFeature("Point", {})).id;
+    for (const [k, v] of [["x", x], ["y", y], ["z", z]]) await kernel.setParameter(id, k, v);
+    return id;
+  };
+  const cube = async (at, dx, dy, dz) => {
+    const id = (await kernel.addFeature("Cube", { origin: at })).id;
+    for (const [k, v] of [["dx", dx], ["dy", dy], ["dz", dz]]) await kernel.setParameter(id, k, v);
+    return id;
+  };
+  const slab = await cube(await point(0, 0, 0), 10000, 10000, 120);
+  const voidAt = await cube(await point(4000, 4000, -500), 2000, 2000, 2000);
+  const cut = (await kernel.addFeature("Boolean", { a: slab, b: voidAt })).id;
+  await kernel.setParameter(cut, "op", 1);                       // difference
+  const meshes = (await kernel.mesh([cut])).features.filter(m => m.positions && m.index);
+  check("the slab meshed", meshes.length === 1, JSON.stringify(meshes.map(m => m.id)));
+
+  // Both sides of the slab's own thickness, because the cut slider lands
+  // wherever it lands and the answer must not depend on which side of 120 mm
+  // it is on.
+  for (const at of [100, 1100]) {
+    const plate = plateOf(meshes, at, 250, {});
+    const grid = plate.grid;
+    let cells = 0, outside = 0;
+    for (let j = 0; j < grid.height; j++)
+      for (let i = 0; i < grid.width; i++) {
+        if (grid.blocked[cellIndex(grid, i, j)]) continue;
+        cells++;
+        const [x, y] = toWorld(grid, i, j);
+        if (x < 0 || y < 0 || x > 10000 || y > 10000) outside++;
+      }
+    const area = cells * grid.cell * grid.cell / 1e6;
+    check("with the cut at " + at + " mm the walkable area is the slab less its void",
+          near(area, 96, 2), area.toFixed(1) + " m² of a 100 m² slab with a 4 m² void");
+    check("and not one cell of it is off the edge of the slab",
+          outside === 0, outside + " cells in mid-air");
+    check("and people stand on top of the slab, not under it",
+          surfaceAt(grid, 1000, 1000) === 120, String(surfaceAt(grid, 1000, 1000)));
+    check("and the void is a void", isBlocked(grid, 5000, 5000));
+  }
+}
+
+console.log("\na doubly curved floor: a dome, and what happens as it is squashed");
+{
+  // The case is the one a sphere makes obvious. On a ball of any size only the
+  // cap around the pole is within a walkable slope; squash the ball in Z and
+  // the whole surface flattens, so the walkable cap spreads out towards the
+  // equator. That is a prediction with a closed form, and the mesh is measured
+  // against it rather than against itself.
+  //
+  //   z = c sqrt(1 - (r/a)^2),  dz/dr = -(c/a) u / sqrt(1 - u^2),  u = r/a
+  //   walkable while |dz/dr| <= s, so u = t / sqrt(1 + t^2) with t = s a / c.
+  const R = 20000, SLOPE = 1 / 8;
+  const reach = k => {
+    const t = SLOPE / k;
+    return R * (t / Math.sqrt(1 + t * t));
+  };
+  await kernel.loadModel({ format: "ocaf-parametric-model", version: 1, name: "Dome",
+                           units: "mm", features: [] });
+  const centre = (await kernel.addFeature("Point", {})).id;
+  const ball = (await kernel.addFeature("Sphere", { center: centre })).id;
+  await kernel.setParameter(ball, "radius", R);
+  const tessellated = (await kernel.addFeature("MeshFromShape", { shape: ball })).id;
+  await kernel.setParameter(tessellated, "quality", 0.1);
+  const squashed = (await kernel.addFeature("MeshTransform", { mesh: tessellated })).id;
+
+  const dome = async k => {
+    await kernel.setParameter(squashed, "sz", k);
+    const meshes = (await kernel.mesh([squashed])).features.filter(m => m.positions && m.index);
+    let top = -Infinity;
+    for (let i = 2; i < meshes[0].positions.length; i += 3)
+      top = Math.max(top, meshes[0].positions[i]);
+    // The cut above the whole dome: this is one storey, not two.
+    const plate = plateOf(meshes, top + 1000, 250, {});
+    const grid = plate.grid;
+    let cells = 0, far = 0, worst = 0;
+    for (let j = 0; j < grid.height; j++)
+      for (let i = 0; i < grid.width; i++) {
+        if (grid.blocked[cellIndex(grid, i, j)]) continue;
+        const [x, y] = toWorld(grid, i, j);
+        const r = Math.hypot(x, y);
+        cells++;
+        far = Math.max(far, r);
+        // On the ellipsoid, not on a plane through it: this is the whole of
+        // "the simulation is on the mesh".
+        const want = k * R * Math.sqrt(Math.max(0, 1 - (r / R) ** 2));
+        worst = Math.max(worst, Math.abs(surfaceAt(grid, x, y) - want));
+      }
+    return { area: cells * grid.cell * grid.cell / 1e6, far, worst, top };
+  };
+
+  const ball1 = await dome(1);
+  check("on a full sphere only the cap around the pole is walkable",
+        ball1.far < R / 4, Math.round(ball1.far) + " mm of a " + R + " mm radius");
+  check("and nothing outside the sphere is", ball1.far < R,
+        "nobody stands off the edge of the mesh");
+  check("people on it stand on the sphere itself, not on a plane through it",
+        ball1.worst < 150, Math.round(ball1.worst) + " mm from the ellipsoid");
+
+  const flatter = [];
+  for (const k of [0.5, 0.25, 0.1]) flatter.push(await dome(k));
+  check("squashing it in Z spreads the walkable part out",
+        flatter.every((got, i) => got.far > (i ? flatter[i - 1] : ball1).far),
+        [ball1, ...flatter].map(g => Math.round(g.far)).join(" -> ") + " mm");
+  check("and the area with it",
+        flatter[2].area > ball1.area * 10,
+        Math.round(ball1.area) + " -> " + Math.round(flatter[2].area) + " m²");
+  check("as far out as the slope limit says, within the tessellation",
+        Math.abs(flatter[2].far - reach(0.1)) < reach(0.1) * 0.15,
+        Math.round(flatter[2].far) + " vs " + Math.round(reach(0.1)) + " mm predicted");
+  check("and every one of them is still standing on the mesh",
+        flatter.every(got => got.worst < 150),
+        flatter.map(g => Math.round(g.worst)).join(", ") + " mm");
+  check("a squashed dome is lower than a round one",
+        flatter[2].top < ball1.top / 8, Math.round(flatter[2].top) + " mm high");
 }
 
 console.log(failures ? "\n" + failures + " FAILED" : "\nall checks passed");
