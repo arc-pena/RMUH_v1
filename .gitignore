@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+ocaf/build/
+docs/snapshot.json
+docs/schema.json
+docs/.kernel/
+docs/.stage/
+docs/parametric-cad.html

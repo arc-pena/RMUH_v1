@@ -1,0 +1,15 @@
+{
+  "format": "ocaf-parametric-model", "version": 1, "name": "Arrayed Fillet", "units": "mm",
+  "features": [
+    { "id": "PT1", "type": "Point",  "name": "Origin",      "args": { "x": 0, "y": 0, "z": 0 } },
+    { "id": "VZ",  "type": "Vector", "name": "Z Direction", "args": { "dx": 0, "dy": 0, "dz": 1 } },
+    { "id": "PL1", "type": "Plane",  "name": "XY Plane",
+      "args": { "origin": { "ref": "PT1" }, "normal": { "ref": "VZ" }, "size": 200 } },
+    { "id": "CB1", "type": "Cube",   "name": "Cube.1",
+      "args": { "origin": { "ref": "PT1" }, "plane": { "ref": "PL1" }, "dx": 80, "dy": 80, "dz": 80 } },
+    { "id": "FL1", "type": "Fillet", "name": "Fillet.1", "args": { "body": { "ref": "CB1" }, "radius": 12 } },
+    { "id": "AR1", "type": "Array",  "name": "Array.1",
+      "args": { "source": { "ref": "FL1" }, "mode": "Rectangular",
+                "countX": 3, "spacingX": 120, "countY": 2, "spacingY": 120 } }
+  ]
+}

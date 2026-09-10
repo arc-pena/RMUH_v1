@@ -1,0 +1,896 @@
+{
+  "format": "ocaf-parametric-model",
+  "version": 1,
+  "name": "Hillside Town",
+  "units": "mm",
+  "features": [
+    {
+      "id": "PT1",
+      "type": "Point",
+      "name": "Site origin",
+      "args": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      }
+    },
+    {
+      "id": "VZ",
+      "type": "Vector",
+      "name": "Up",
+      "args": {
+        "dx": 0,
+        "dy": 0,
+        "dz": 1
+      }
+    },
+    {
+      "id": "PL1",
+      "type": "Plane",
+      "name": "Site plane",
+      "args": {
+        "origin": {
+          "ref": "PT1"
+        },
+        "normal": {
+          "ref": "VZ"
+        },
+        "size": 300
+      }
+    },
+    {
+      "id": "NW",
+      "type": "Number",
+      "name": "Site width",
+      "args": {
+        "value": 4200
+      }
+    },
+    {
+      "id": "ND",
+      "type": "Number",
+      "name": "Site depth",
+      "args": {
+        "value": 3200
+      }
+    },
+    {
+      "id": "NH",
+      "type": "Number",
+      "name": "Hill height",
+      "args": {
+        "value": 900
+      }
+    },
+    {
+      "id": "MG",
+      "type": "MeshGrid",
+      "name": "Terrain grid",
+      "args": {
+        "plane": {
+          "ref": "PL1"
+        },
+        "width": {
+          "value": 4200,
+          "from": "NW"
+        },
+        "depth": {
+          "value": 3200,
+          "from": "ND"
+        },
+        "cols": 16,
+        "rows": 14
+      }
+    },
+    {
+      "id": "MD",
+      "type": "MeshDisplace",
+      "name": "Landform",
+      "args": {
+        "mesh": {
+          "ref": "MG"
+        },
+        "along": "Z",
+        "amount": {
+          "value": 900,
+          "from": "NH"
+        },
+        "formula": "Math.exp(-((x / 1500) ** 2)) * (0.30 + 0.70 * (y + 1600) / 3200) + 0.10 * Math.cos(x / 430) * (y + 1600) / 3200"
+      }
+    },
+    {
+      "id": "SD",
+      "type": "Subdivide",
+      "name": "Hill",
+      "args": {
+        "mesh": {
+          "ref": "MD"
+        },
+        "on": "On",
+        "levels": 1,
+        "boundary": "Keep sharp",
+        "shading": "Smooth"
+      }
+    },
+    {
+      "id": "NB",
+      "type": "Numbers",
+      "name": "Bay positions",
+      "args": {
+        "values": "-1450, 0, 1450",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PR1",
+      "type": "Point",
+      "name": "Row 1 plan",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "NB"
+        },
+        "y": -830,
+        "z": 0
+      }
+    },
+    {
+      "id": "PR2",
+      "type": "Point",
+      "name": "Row 2 plan",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "NB"
+        },
+        "y": 320,
+        "z": 0
+      }
+    },
+    {
+      "id": "DR1",
+      "type": "Drape",
+      "name": "Row 1 sites",
+      "args": {
+        "points": {
+          "ref": "PR1"
+        },
+        "onto": {
+          "ref": "SD"
+        },
+        "lift": 0,
+        "miss": "Drop them"
+      }
+    },
+    {
+      "id": "DR2",
+      "type": "Drape",
+      "name": "Row 2 sites",
+      "args": {
+        "points": {
+          "ref": "PR2"
+        },
+        "onto": {
+          "ref": "SD"
+        },
+        "lift": 0,
+        "miss": "Drop them"
+      }
+    },
+    {
+      "id": "PX",
+      "type": "Numbers",
+      "name": "Lens x",
+      "args": {
+        "values": "-450, -240, 210, 480, 200, -240",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PY",
+      "type": "Numbers",
+      "name": "Lens y",
+      "args": {
+        "values": "0, -172, -200, 0, 200, 172",
+        "scale": 1
+      }
+    },
+    {
+      "id": "BT",
+      "type": "Number",
+      "name": "Batter",
+      "args": {
+        "value": 0.68
+      }
+    },
+    {
+      "id": "NO",
+      "type": "Number",
+      "name": "Roof oversail",
+      "args": {
+        "value": 1.06
+      }
+    },
+    {
+      "id": "MBX",
+      "type": "Math",
+      "name": "Base x",
+      "args": {
+        "a": {
+          "value": 1,
+          "from": "PX"
+        },
+        "b": {
+          "value": 0.68,
+          "from": "BT"
+        },
+        "op": "A \u00d7 B"
+      }
+    },
+    {
+      "id": "MBY",
+      "type": "Math",
+      "name": "Base y",
+      "args": {
+        "a": {
+          "value": 1,
+          "from": "PY"
+        },
+        "b": {
+          "value": 0.68,
+          "from": "BT"
+        },
+        "op": "A \u00d7 B"
+      }
+    },
+    {
+      "id": "QB",
+      "type": "Point",
+      "name": "Base lens",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "MBX"
+        },
+        "y": {
+          "value": 0,
+          "from": "MBY"
+        },
+        "z": -430
+      }
+    },
+    {
+      "id": "WB",
+      "type": "Polyline",
+      "name": "Base",
+      "args": {
+        "points": {
+          "ref": "QB"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "QT",
+      "type": "Point",
+      "name": "Eaves lens",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "PX"
+        },
+        "y": {
+          "value": 0,
+          "from": "PY"
+        },
+        "z": 205
+      }
+    },
+    {
+      "id": "WT",
+      "type": "Polyline",
+      "name": "Eaves",
+      "args": {
+        "points": {
+          "ref": "QT"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "LM",
+      "type": "Loft",
+      "name": "Mass",
+      "args": {
+        "sections": [
+          {
+            "ref": "WB"
+          },
+          {
+            "ref": "WT"
+          }
+        ],
+        "cap": "Solid",
+        "ruled": "Ruled"
+      }
+    },
+    {
+      "id": "MOX",
+      "type": "Math",
+      "name": "Roof x",
+      "args": {
+        "a": {
+          "value": 1,
+          "from": "PX"
+        },
+        "b": {
+          "value": 1.06,
+          "from": "NO"
+        },
+        "op": "A \u00d7 B"
+      }
+    },
+    {
+      "id": "MOY",
+      "type": "Math",
+      "name": "Roof y",
+      "args": {
+        "a": {
+          "value": 1,
+          "from": "PY"
+        },
+        "b": {
+          "value": 1.06,
+          "from": "NO"
+        },
+        "op": "A \u00d7 B"
+      }
+    },
+    {
+      "id": "QR",
+      "type": "Point",
+      "name": "Roof underside",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "MOX"
+        },
+        "y": {
+          "value": 0,
+          "from": "MOY"
+        },
+        "z": 205
+      }
+    },
+    {
+      "id": "WR",
+      "type": "Polyline",
+      "name": "Soffit",
+      "args": {
+        "points": {
+          "ref": "QR"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "QS",
+      "type": "Point",
+      "name": "Roof top",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "MOX"
+        },
+        "y": {
+          "value": 0,
+          "from": "MOY"
+        },
+        "z": 246
+      }
+    },
+    {
+      "id": "WS",
+      "type": "Polyline",
+      "name": "Roof edge",
+      "args": {
+        "points": {
+          "ref": "QS"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "LP",
+      "type": "Loft",
+      "name": "Roof plate",
+      "args": {
+        "sections": [
+          {
+            "ref": "WR"
+          },
+          {
+            "ref": "WS"
+          }
+        ],
+        "cap": "Solid",
+        "ruled": "Ruled"
+      }
+    },
+    {
+      "id": "CX",
+      "type": "Numbers",
+      "name": "Court x",
+      "args": {
+        "values": "-250, 300, 345, -165",
+        "scale": 1
+      }
+    },
+    {
+      "id": "CY",
+      "type": "Numbers",
+      "name": "Court y",
+      "args": {
+        "values": "-118, -58, 118, 152",
+        "scale": 1
+      }
+    },
+    {
+      "id": "QC",
+      "type": "Point",
+      "name": "Court floor",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "CX"
+        },
+        "y": {
+          "value": 0,
+          "from": "CY"
+        },
+        "z": -30
+      }
+    },
+    {
+      "id": "WC",
+      "type": "Polyline",
+      "name": "Court sill",
+      "args": {
+        "points": {
+          "ref": "QC"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "QD",
+      "type": "Point",
+      "name": "Court sky",
+      "args": {
+        "x": {
+          "value": 0,
+          "from": "CX"
+        },
+        "y": {
+          "value": 0,
+          "from": "CY"
+        },
+        "z": 420
+      }
+    },
+    {
+      "id": "WD",
+      "type": "Polyline",
+      "name": "Court head",
+      "args": {
+        "points": {
+          "ref": "QD"
+        },
+        "closed": "Closed"
+      }
+    },
+    {
+      "id": "LC",
+      "type": "Loft",
+      "name": "Sinkhole",
+      "args": {
+        "sections": [
+          {
+            "ref": "WC"
+          },
+          {
+            "ref": "WD"
+          }
+        ],
+        "cap": "Solid",
+        "ruled": "Ruled"
+      }
+    },
+    {
+      "id": "BM",
+      "type": "Boolean",
+      "name": "Mass, cut",
+      "args": {
+        "a": {
+          "ref": "LM"
+        },
+        "b": {
+          "ref": "LC"
+        },
+        "op": "Difference"
+      }
+    },
+    {
+      "id": "BP",
+      "type": "Boolean",
+      "name": "Roof, cut",
+      "args": {
+        "a": {
+          "ref": "LP"
+        },
+        "b": {
+          "ref": "LC"
+        },
+        "op": "Difference"
+      }
+    },
+    {
+      "id": "PP",
+      "type": "Point",
+      "name": "Pool corner",
+      "args": {
+        "x": -150,
+        "y": -66,
+        "z": -30
+      }
+    },
+    {
+      "id": "CP",
+      "type": "Cube",
+      "name": "Pool",
+      "args": {
+        "origin": {
+          "ref": "PP"
+        },
+        "plane": {
+          "ref": "PL1"
+        },
+        "dx": 420,
+        "dy": 62,
+        "dz": 20
+      }
+    },
+    {
+      "id": "JV",
+      "type": "Join",
+      "name": "Villa",
+      "args": {
+        "parts": [
+          {
+            "ref": "BM"
+          },
+          {
+            "ref": "BP"
+          },
+          {
+            "ref": "CP"
+          }
+        ]
+      }
+    },
+    {
+      "id": "NT1",
+      "type": "Numbers",
+      "name": "Row 1 turns",
+      "args": {
+        "values": "0, 16, -12",
+        "scale": 1
+      }
+    },
+    {
+      "id": "NT2",
+      "type": "Numbers",
+      "name": "Row 2 turns",
+      "args": {
+        "values": "9, -20, 24",
+        "scale": 1
+      }
+    },
+    {
+      "id": "PA1",
+      "type": "PlaceAt",
+      "name": "Row 1",
+      "args": {
+        "shape": {
+          "ref": "JV"
+        },
+        "points": {
+          "ref": "DR1"
+        },
+        "angles": {
+          "ref": "NT1"
+        },
+        "turn": 0,
+        "lift": 0
+      }
+    },
+    {
+      "id": "PA2",
+      "type": "PlaceAt",
+      "name": "Row 2",
+      "args": {
+        "shape": {
+          "ref": "JV"
+        },
+        "points": {
+          "ref": "DR2"
+        },
+        "angles": {
+          "ref": "NT2"
+        },
+        "turn": 0,
+        "lift": 0
+      }
+    },
+    {
+      "id": "JT",
+      "type": "Join",
+      "name": "The town",
+      "args": {
+        "parts": [
+          {
+            "ref": "PA1"
+          },
+          {
+            "ref": "PA2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "MS",
+      "type": "Measure",
+      "name": "Across the site",
+      "args": {
+        "shape": {
+          "ref": "SD"
+        },
+        "quantity": "Size X"
+      }
+    },
+    {
+      "id": "EX",
+      "type": "Expression",
+      "name": "In metres",
+      "args": {
+        "a": {
+          "value": 1,
+          "from": "MS"
+        },
+        "b": 1,
+        "c": 0,
+        "formula": "a / 100"
+      }
+    },
+    {
+      "id": "PN",
+      "type": "Panel",
+      "name": "Site width",
+      "args": {
+        "input": {
+          "ref": "EX"
+        }
+      }
+    }
+  ],
+  "layout": {
+    "PT1": [
+      30,
+      30
+    ],
+    "VZ": [
+      30,
+      210
+    ],
+    "PL1": [
+      330,
+      30
+    ],
+    "NW": [
+      30,
+      400
+    ],
+    "ND": [
+      30,
+      560
+    ],
+    "NH": [
+      30,
+      720
+    ],
+    "MG": [
+      330,
+      400
+    ],
+    "MD": [
+      640,
+      400
+    ],
+    "SD": [
+      950,
+      400
+    ],
+    "NB": [
+      330,
+      780
+    ],
+    "PR1": [
+      640,
+      780
+    ],
+    "PR2": [
+      640,
+      1010
+    ],
+    "DR1": [
+      950,
+      780
+    ],
+    "DR2": [
+      950,
+      1010
+    ],
+    "PX": [
+      1450,
+      30
+    ],
+    "PY": [
+      1450,
+      190
+    ],
+    "BT": [
+      1450,
+      350
+    ],
+    "NO": [
+      1450,
+      510
+    ],
+    "MBX": [
+      1770,
+      30
+    ],
+    "MBY": [
+      1770,
+      190
+    ],
+    "QB": [
+      2090,
+      30
+    ],
+    "WB": [
+      2390,
+      30
+    ],
+    "QT": [
+      2090,
+      190
+    ],
+    "WT": [
+      2390,
+      190
+    ],
+    "LM": [
+      2690,
+      30
+    ],
+    "MOX": [
+      1770,
+      350
+    ],
+    "MOY": [
+      1770,
+      510
+    ],
+    "QR": [
+      2090,
+      350
+    ],
+    "WR": [
+      2390,
+      350
+    ],
+    "QS": [
+      2090,
+      510
+    ],
+    "WS": [
+      2390,
+      510
+    ],
+    "LP": [
+      2690,
+      350
+    ],
+    "CX": [
+      1450,
+      700
+    ],
+    "CY": [
+      1450,
+      860
+    ],
+    "QC": [
+      1770,
+      700
+    ],
+    "WC": [
+      2090,
+      700
+    ],
+    "QD": [
+      1770,
+      860
+    ],
+    "WD": [
+      2090,
+      860
+    ],
+    "LC": [
+      2390,
+      700
+    ],
+    "BM": [
+      3010,
+      30
+    ],
+    "BP": [
+      3010,
+      350
+    ],
+    "PP": [
+      1450,
+      1020
+    ],
+    "CP": [
+      1770,
+      1020
+    ],
+    "JV": [
+      3330,
+      30
+    ],
+    "NT1": [
+      2650,
+      780
+    ],
+    "NT2": [
+      2650,
+      940
+    ],
+    "PA1": [
+      2970,
+      780
+    ],
+    "PA2": [
+      2970,
+      1010
+    ],
+    "JT": [
+      3290,
+      780
+    ],
+    "MS": [
+      1250,
+      400
+    ],
+    "EX": [
+      1250,
+      560
+    ],
+    "PN": [
+      1250,
+      720
+    ]
+  }
+}
