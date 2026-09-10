@@ -48,6 +48,12 @@ SITE_INDEX = "index.html"
 SITE_MODULES = "app"
 SITE_BINARIES = "kernel"
 
+# Pages will serve either of two folders and there is no way to ask which one
+# somebody chose, so both are made to work. docs/ holds the site; the
+# repository root gets a page that goes straight into it, and the file that
+# stops Jekyll from rendering a README in place of a website.
+TOP = ROOT.parent
+
 # OpenCascade for the browser: a trimmed OCCT build, 22 MB of WebAssembly.
 KERNEL_PACKAGE = "replicad-opencascadejs"
 
@@ -170,10 +176,37 @@ def build_site(shell, glue_path, wasm_path, stage_path):
 
     # Pages runs Jekyll over what it serves unless told not to, and Jekyll
     # eats folders beginning with an underscore and rewrites what it feels
-    # like. This file is how it is told not to.
+    # like - and, with no index.html to hand, renders the README as the site.
+    # This file is how it is told not to. One per folder Pages might serve.
     (SITE / ".nojekyll").write_text("")
+    (TOP / ".nojekyll").write_text("")
 
-    served = [SITE / SITE_INDEX, *(SITE / SITE_MODULES).rglob("*"),
+    # And the way in, for a site served from the repository root: the app is a
+    # folder further down, so this is the only thing at the root that has to
+    # exist. Served from /docs instead, nothing ever asks for it.
+    (TOP / "index.html").write_text("""<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>OCAF Feature Modeller</title>
+<meta http-equiv="refresh" content="0; url=docs/">
+<link rel="canonical" href="docs/">
+<style>
+  html { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: #e9edf1; color: #1b2733;
+    font: 14px/1.6 "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #12181f; color: #dde5ee; } }
+  p { text-align: center; padding: 0 24px; }
+  a { color: #2f6feb; }
+</style>
+<p>The modeller is one folder down.<br><a href="docs/">Open it</a>.</p>
+<script>location.replace("docs/");</script>
+</html>
+""")
+
+    served = [TOP / "index.html", SITE / SITE_INDEX, *(SITE / SITE_MODULES).rglob("*"),
               *(SITE / SITE_BINARIES).rglob("*"), *(DATA).rglob("*")]
     total = sum(f.stat().st_size for f in served if f.is_file())
     print("wrote the site into %s/  %.1f MB  (%d modules, kernel served as a file)" % (

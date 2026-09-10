@@ -887,9 +887,15 @@ docs/
 folders and rewrites all three, so a module deleted from `src/` stops being
 served. Nothing else in `docs/` is touched.
 
-Point Pages at it once: **Settings → Pages → Source: Deploy from a branch →
-`/docs`**. It serves what is committed, so `python3 docs/build.py` and a commit
-are what publish a change.
+Point Pages at it once: **Settings → Pages → Source: Deploy from a branch**,
+this branch, folder **`/docs`**. It serves what is committed, so
+`python3 docs/build.py` and a commit are what publish a change.
+
+Pages will serve either `/docs` or the repository root, and nothing in the
+repository can tell which was chosen, so the build makes both work. The root
+gets an `index.html` that goes straight into `docs/` — otherwise Jekyll, finding
+no index there, renders the README as the site, which is what "the page shows
+the documentation" always means — and a `.nojekyll` beside it, as `docs/` has.
 
 `src/payload.js` is what makes one source tree serve both: every big piece is
 asked for by name, and it is unpacked from a payload element in the page when
