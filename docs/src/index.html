@@ -557,6 +557,20 @@ select {
   background: var(--panel-solid); color: var(--ink); font-weight: 500;
   box-shadow: 0 1px 2px rgba(16, 28, 38, .1);
 }
+/* Connecting the assistant: two fields and the consequence of the first one
+   written under it, because a key pasted into a web page is a decision. */
+#modal-ai .field { padding: 8px 14px 2px; }
+#modal-ai input.line, #modal-ai select {
+  width: 100%; background: var(--panel-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px;
+  font-family: var(--mono); font-size: 11.5px;
+}
+#modal-ai input.line:focus, #modal-ai select:focus { border-color: var(--accent); outline: none; }
+#modal-ai .attr-path { line-height: 1.5; padding-top: 5px; }
+/* The state line says why a key was refused, and a refusal is a sentence, not
+   a word: it wraps rather than being cut off at the edge of the box. */
+#modal-ai .cli { margin-top: 6px; white-space: normal; line-height: 1.55; }
+
 /* Import: the ways one file can land, each with the consequence written beside
    it. Not a preference - "one object" and "an assembly" are two different
    documents, so the difference is spelled out rather than abbreviated. */
@@ -1016,6 +1030,7 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
     <input id="ai-prompt" type="text" spellcheck="false" autocomplete="off"
            placeholder="a hillside villa with a lap pool and a cantilevered roof…"
            aria-label="What to build">
+    <button class="btn" id="ai-connect" hidden>Connect</button>
     <button class="btn primary" id="ai-send">Build</button>
     <button class="btn" id="ai-stop" hidden>Stop</button>
     <button class="icon-btn" id="ai-close" title="Close (Esc)" aria-label="Close"></button>
@@ -1057,6 +1072,41 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
   <div class="dfoot">
     <button class="btn" id="btn-step-copy">Copy</button>
     <button class="btn primary" id="btn-step-close">Done</button>
+  </div>
+</dialog>
+
+<!-- Connecting the assistant. Published as an Artifact the page asks the reader's
+     own Claude account and this never opens; served as an ordinary web page there
+     is nobody to ask, so the person brings a key of their own. -->
+<dialog id="modal-ai">
+  <div class="dhead">
+    <h3>Connect Claude</h3>
+    <p id="ai-connect-note">This page has no Claude of its own. Connect your Anthropic
+       account and the assistant runs on your key, billed to you, at your own rate
+       limits.</p>
+  </div>
+  <div id="ai-connect-body">
+    <div class="field">
+      <div class="field-head"><label for="ai-key">API key</label>
+        <span class="kind">from console.anthropic.com</span></div>
+      <input id="ai-key" class="line" type="password" spellcheck="false"
+             autocomplete="off" placeholder="sk-ant-…">
+      <div class="attr-path" id="ai-key-note">Kept in this browser only — not in the model
+        file, not in any server of ours, because there is no server of ours. Anything
+        that can run script on this page can read it, so use a key you are willing to
+        revoke, and press Forget when you are done.</div>
+    </div>
+    <div class="field">
+      <div class="field-head"><label for="ai-model">Model</label>
+        <span class="kind" id="ai-model-note"></span></div>
+      <select id="ai-model"></select>
+    </div>
+    <div class="cli" id="ai-connect-state">not connected</div>
+  </div>
+  <div class="dfoot">
+    <button class="btn" id="btn-ai-forget">Forget the key</button>
+    <button class="btn" id="btn-ai-cancel">Close</button>
+    <button class="btn primary" id="btn-ai-go">Connect</button>
   </div>
 </dialog>
 

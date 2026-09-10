@@ -9,7 +9,7 @@ import { ENVIRONMENTS, FINISHES, Showroom, findFinish } from "./showroom.js";
 import { Mdl } from "./mdl.js";
 import { acceptsFrom, dataLines, lightenModel, round, SAMPLES, sliderSpan } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
-import { Agent, agentTrouble } from "./agent.js";
+import { Agent, agentTrouble, DEFAULT_MODEL, KEY_HOME, MODELS } from "./agent.js";
 import { PluginHost } from "./plugin.js";
 import { CLIMATE } from "./climate-plugin.js";
 import { CROWD } from "./crowd-plugin.js";
@@ -3187,6 +3187,10 @@ async function aiAsk() {
   const field = document.getElementById("ai-prompt");
   const prompt = field.value.trim();
   if (!prompt || agent.busy) return;
+  // Nobody to ask: open the way to fix it rather than refusing into a log. What
+  // was typed stays in the box, so connecting and pressing Build is the whole
+  // of the recovery.
+  if (!(await agent.ready())) { openAIConnect(); return; }
   field.value = "";
   aiSay("asked", prompt);
   const running = { said: null };
@@ -3194,6 +3198,9 @@ async function aiAsk() {
     await agent.ask(prompt, event => aiEvent(event, running));
   } catch (err) {
     aiSay("bad", agentTrouble(err));
+    // A key that has stopped working should stop looking connected.
+    const code = err && err.code;
+    if (code === "http_401" || code === "http_403") { agent.disconnect(); refreshAI(); }
   }
 }
 
@@ -3218,10 +3225,95 @@ function openAI(open) {
   if (!aiBar.dataset.checked) {
     aiBar.dataset.checked = "1";
     agent.ready().then(sample => {
-      if (!sample) aiSay("bad", agentTrouble({ message: "no-sample" }));
+      refreshAI();
+      if (sample) return;
+      aiSay("bad", agentTrouble({ message: "no-sample" }));
+      aiSay("said", "A key is made at " + KEY_HOME + " and stays in this browser.");
     });
   }
 }
+
+/* ------------------------------------------------------- connecting Claude
+
+   The assistant needs somebody to answer. Published as an Artifact the page
+   asks the reader's own Claude account and none of this is ever seen. Served as
+   an ordinary web page there is nobody to ask, so the person connects a key of
+   their own - it stays in their browser, and the work is billed to them.     */
+
+const aiDialog = document.getElementById("modal-ai");
+const aiConnectButton = document.getElementById("ai-connect");
+
+//! The bar, told what it is connected to. It is the one place that says so, so
+//! "why is this doing nothing" has an answer on screen rather than in a log.
+function refreshAI() {
+  const how = agent.connection;
+  aiConnectButton.hidden = how.how === "page" || how.how === "unknown";
+  aiConnectButton.textContent = how.how === "key" ? "Connected" : "Connect";
+  aiConnectButton.title = how.how === "key"
+    ? "Running on " + how.key + " · " + how.model + " — press to change or forget it"
+    : "Connect your Anthropic account so the assistant can answer";
+  document.getElementById("ai-prompt").placeholder = how.how === "none"
+    ? "connect an Anthropic key to ask for something…"
+    : "a hillside villa with a lap pool and a cantilevered roof…";
+}
+
+function buildAIDialog() {
+  const how = agent.connection;
+  const select = document.getElementById("ai-model");
+  if (!select.options.length)
+    for (const model of MODELS) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = model.label + " — " + model.note;
+      select.appendChild(option);
+    }
+  select.value = how.model || DEFAULT_MODEL;
+  document.getElementById("ai-model-note").textContent = "billed to your account";
+  document.getElementById("ai-connect-state").textContent = how.how === "key"
+    ? "connected · " + how.key + " · " + how.model
+    : "not connected";
+  document.getElementById("btn-ai-forget").hidden = how.how !== "key";
+  document.getElementById("ai-key").value = "";
+  document.getElementById("btn-ai-go").textContent = how.how === "key" ? "Reconnect" : "Connect";
+}
+
+function openAIConnect() {
+  buildAIDialog();
+  aiDialog.showModal();
+  document.getElementById("ai-key").focus();
+}
+
+aiConnectButton.addEventListener("click", openAIConnect);
+document.getElementById("btn-ai-cancel").addEventListener("click", () => aiDialog.close());
+document.getElementById("btn-ai-forget").addEventListener("click", () => {
+  agent.disconnect();
+  buildAIDialog();
+  refreshAI();
+  aiSay("bad", "The key is forgotten. Nothing can be asked until one is connected again.");
+});
+document.getElementById("btn-ai-go").addEventListener("click", async () => {
+  const button = document.getElementById("btn-ai-go");
+  const state = document.getElementById("ai-connect-state");
+  const was = button.textContent;
+  button.disabled = true;
+  button.textContent = "checking…";
+  state.textContent = "asking Anthropic whether that key works…";
+  try {
+    const how = await agent.connect(document.getElementById("ai-key").value,
+                                    document.getElementById("ai-model").value);
+    aiDialog.close();
+    refreshAI();
+    aiSay("said", "Connected · " + how.key + " · " + how.model
+      + ". Ask for something and it will build it.");
+  } catch (err) {
+    state.textContent = agentTrouble(err);
+    button.textContent = was;
+  } finally { button.disabled = false; }
+});
+document.getElementById("ai-key").addEventListener("keydown", event => {
+  if (event.key === "Enter") { event.preventDefault(); document.getElementById("btn-ai-go").click(); }
+  event.stopPropagation();
+});
 
 document.getElementById("ai-fold").addEventListener("click", () =>
   foldAI(!aiBar.classList.contains("folded")));

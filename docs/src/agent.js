@@ -177,6 +177,202 @@ ${JSON.stringify(model)}`;
 }
 
 /* ==========================================================================
+   Who answers.
+
+   Two of them, and the difference is whose account pays. Published as an
+   Artifact, the page asks the person reading it - their Claude account, no key,
+   nothing to set up, and the runtime runs the tool loop. Served as an ordinary
+   web page there is nobody to ask, so the person brings a key of their own and
+   this file runs the same loop against the Messages API itself.
+
+   Both are the same function to everything above: turns in, tools available,
+   text out. So `ask` below does not know which one it got, and neither does the
+   panel.
+   ========================================================================== */
+
+//! Where a key comes from and what it is worth saying about it. Named here
+//! rather than in the interface because the interface should not be the place
+//! that knows what an API key is.
+export const KEY_HOME = "https://console.anthropic.com/settings/keys";
+export const MODELS = [
+  { id: "claude-sonnet-5", label: "Sonnet 5", note: "quick, and enough for most parts" },
+  { id: "claude-opus-5", label: "Opus 5", note: "slower and dearer; better at long builds" },
+];
+export const DEFAULT_MODEL = MODELS[0].id;
+
+//! The key lives in this browser and nowhere else: not in the model file, not
+//! in the briefing, not on any server of ours - there is no server of ours.
+//! That also means anything that can run script on this origin can read it,
+//! which is why the interface says so and offers to forget it.
+const KEY_STORE = "ocafcad/anthropic-key";
+const MODEL_STORE = "ocafcad/anthropic-model";
+
+const storedKey = () => {
+  try { return localStorage.getItem(KEY_STORE) || ""; } catch (e) { return ""; }
+};
+const storedModel = () => {
+  try { return localStorage.getItem(MODEL_STORE) || DEFAULT_MODEL; }
+  catch (e) { return DEFAULT_MODEL; }
+};
+const keep = (key, model) => {
+  try {
+    if (key) { localStorage.setItem(KEY_STORE, key); localStorage.setItem(MODEL_STORE, model); }
+    else { localStorage.removeItem(KEY_STORE); localStorage.removeItem(MODEL_STORE); }
+  } catch (e) { /* a private window keeps nothing, and the key still works today */ }
+};
+
+//! Enough of the key to recognise it by, and not enough to use.
+export const maskKey = key => {
+  const text = String(key || "");
+  return text.length > 12 ? text.slice(0, 7) + "…" + text.slice(-4) : "a key";
+};
+
+const API = "https://api.anthropic.com/v1/messages";
+const MAX_TURNS = 24;          // tool round trips before it is a runaway, not a build
+
+//! The Messages API, spoken directly from the browser, with the same signature
+//! the Artifact runtime's sampler has. Anthropic allows this from a page only
+//! with the header below, which is also the header that says out loud what it
+//! means: the key is in the browser, and a browser is not a secret place.
+export function directSample({ key, model }) {
+  return async function sample(turns, options = {}) {
+    const tools = (options.tools || []).map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      // The runtime spells it inputSchema; the API spells it input_schema. A
+      // tool that takes nothing still has to say so.
+      input_schema: tool.inputSchema || { type: "object", properties: {} },
+    }));
+    const byName = new Map((options.tools || []).map(tool => [tool.name, tool]));
+    const messages = turns.map(turn => ({ role: turn.role, content: turn.content }));
+    let text = "";
+
+    for (let round = 0; round < MAX_TURNS; round++) {
+      const answer = await stream({
+        key, model: model || DEFAULT_MODEL, messages, tools,
+        signal: options.signal,
+        onText: piece => {
+          text += piece;
+          if (options.onText) options.onText({ text });
+        },
+      });
+
+      if (answer.stop_reason !== "tool_use") return { text: text.trim() };
+
+      // What it said and what it asked for go back as one assistant turn, and
+      // the results come back as one user turn. That is the shape the API
+      // wants, and it is why the whole conversation stays in `messages`.
+      messages.push({ role: "assistant", content: answer.content });
+      const results = [];
+      for (const block of answer.content) {
+        if (block.type !== "tool_use") continue;
+        const tool = byName.get(block.name);
+        let output, failed = false;
+        try {
+          if (!tool) throw new Error("there is no tool called " + block.name);
+          output = await tool.execute(block.input || {}, { signal: options.signal });
+        } catch (err) {
+          failed = true;
+          output = { error: (err && err.message) || String(err) };
+        }
+        results.push({
+          type: "tool_result", tool_use_id: block.id,
+          content: typeof output === "string" ? output : JSON.stringify(output),
+          ...(failed ? { is_error: true } : {}),
+        });
+      }
+      messages.push({ role: "user", content: results });
+      if (options.signal && options.signal.aborted) return { text: text.trim() };
+    }
+    return { text: text.trim() };
+  };
+}
+
+//! One request, streamed. Text arrives a piece at a time so the answer can be
+//! watched being written; a tool call arrives as JSON in pieces and is only
+//! worth anything once it is whole.
+async function stream({ key, model, messages, tools, signal, onText }) {
+  let response;
+  try {
+    response = await fetch(API, {
+      method: "POST",
+      signal,
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({ model, max_tokens: 8000, stream: true, messages,
+                             ...(tools.length ? { tools } : {}) }),
+    });
+  } catch (err) {
+    if (err && err.name === "AbortError") throw Object.assign(new Error("stopped"), { code: "cancelled" });
+    throw Object.assign(new Error("could not reach Anthropic - " +
+      ((err && err.message) || "the request failed")), { code: "unreachable" });
+  }
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = (body && body.error && body.error.message) || "";
+    } catch (e) { /* not every failure is JSON */ }
+    throw Object.assign(new Error(detail || response.statusText),
+                        { code: "http_" + response.status, status: response.status });
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const content = [];
+  let open = null, buffer = "", stop_reason = null;
+
+  const handle = event => {
+    if (event.type === "content_block_start") {
+      open = event.content_block.type === "tool_use"
+        ? { type: "tool_use", id: event.content_block.id, name: event.content_block.name, json: "" }
+        : { type: "text", text: "" };
+    } else if (event.type === "content_block_delta" && open) {
+      if (event.delta.type === "text_delta") { open.text += event.delta.text; onText(event.delta.text); }
+      else if (event.delta.type === "input_json_delta") open.json += event.delta.partial_json;
+    } else if (event.type === "content_block_stop" && open) {
+      if (open.type === "tool_use") {
+        let input = {};
+        try { input = open.json ? JSON.parse(open.json) : {}; } catch (e) { input = {}; }
+        content.push({ type: "tool_use", id: open.id, name: open.name, input });
+      } else if (open.text) content.push({ type: "text", text: open.text });
+      open = null;
+    } else if (event.type === "message_delta" && event.delta) {
+      stop_reason = event.delta.stop_reason || stop_reason;
+    } else if (event.type === "error") {
+      throw Object.assign(new Error((event.error && event.error.message) || "the stream failed"),
+                          { code: "stream" });
+    }
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Server-sent events: blank line ends a message, and only the data lines
+    // carry anything worth reading.
+    let cut;
+    while ((cut = buffer.indexOf("\n\n")) >= 0) {
+      const chunk = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      for (const line of chunk.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try { handle(JSON.parse(payload)); }
+        catch (err) { if (err && err.code) throw err; }
+      }
+    }
+  }
+  return { content, stop_reason };
+}
+
+/* ==========================================================================
    The panel.
    ========================================================================== */
 
@@ -189,18 +385,73 @@ export class Agent {
     this.turns = [];                          // the conversation, kept by the page
     this.running = null;                      // the AbortController of the live call
     this.sample = undefined;                  // undefined = not asked yet, null = no
+    this.through = null;                      // "page", "key", or nobody
     this.pace = 90;                           // ms between edits, so it can be watched
   }
 
-  //! Resolved once, lazily: asking for a capability that is not there is how
-  //! you find out it is not there.
+  //! Who is going to answer, worked out once and lazily: asking for a
+  //! capability that is not there is how you find out it is not there.
+  //!
+  //! The page's own Claude comes first and costs the reader nothing to set up.
+  //! Failing that, a key the person connected themselves. Failing that, nobody,
+  //! and the panel says how to fix it.
   async ready() {
     if (this.sample !== undefined) return this.sample;
     try {
       this.sample = (typeof claude !== "undefined" && claude.use)
         ? await claude.use("sample") : null;
     } catch (e) { this.sample = null; }
+    if (this.sample) { this.through = "page"; return this.sample; }
+
+    const key = storedKey();
+    if (key) {
+      this.sample = directSample({ key, model: storedModel() });
+      this.through = "key";
+    }
     return this.sample;
+  }
+
+  //! How it is connected, for the interface to say out loud. Asked before
+  //! `ready` has run it answers "unknown", which is the truth.
+  get connection() {
+    if (this.through === "page") return { how: "page", label: "your Claude account" };
+    if (this.through === "key")
+      return { how: "key", label: "your API key", key: maskKey(storedKey()),
+               model: storedModel() };
+    return { how: this.sample === undefined ? "unknown" : "none", label: "not connected" };
+  }
+
+  //! A key, kept in this browser and nowhere else. Checked before it is kept:
+  //! a key that is refused should be refused now, in front of the person who
+  //! pasted it, and not in the middle of building something.
+  async connect(key, model) {
+    const trimmed = String(key || "").trim();
+    if (!trimmed) throw Object.assign(new Error("no key"), { code: "empty_key" });
+    const chosen = MODELS.some(m => m.id === model) ? model : DEFAULT_MODEL;
+    const sample = directSample({ key: trimmed, model: chosen });
+    // One word to one model. It proves the key, the model name and that the
+    // browser is allowed to talk to Anthropic at all, for a few tokens.
+    await sample([{ role: "user", content: "Reply with the single word: ready" }], {});
+    keep(trimmed, chosen);
+    this.sample = sample;
+    this.through = "key";
+    this.turns = [];
+    return this.connection;
+  }
+
+  //! Forgotten, here and in the browser. The next request has nobody to ask
+  //! again, which is what being disconnected means.
+  disconnect() {
+    keep(null, null);
+    if (this.through === "key") {
+      // null, not undefined: the answer to "who can answer" is now known and it
+      // is nobody. Undefined would mean "not asked yet", and the interface
+      // would go back to saying nothing rather than offering the way in.
+      this.sample = null;
+      this.through = null;
+    }
+    this.turns = [];
+    return this.connection;
   }
 
   stop() {
@@ -319,10 +570,26 @@ export class Agent {
 //! and the page has to say what it means here.
 export function agentTrouble(err) {
   const code = err && err.code;
-  if (code === "not_granted" || err.message === "no-sample")
-    return "This needs the published Artifact - the page has to ask your Claude "
-         + "account, and there is nobody to ask when it is opened from a file or "
-         + "served by a local kernel.";
+  if (code === "not_granted" || (err && err.message === "no-sample"))
+    return "Nobody is connected to answer. Press Connect and paste an Anthropic API "
+         + "key - it stays in this browser, and the work is billed to your own "
+         + "account. In the published Artifact this page asks your Claude account "
+         + "instead and there is nothing to connect.";
+  if (code === "http_401" || code === "http_403")
+    return "Anthropic refused that key. Check it at console.anthropic.com, or press "
+         + "Connect and paste a new one.";
+  if (code === "http_400")
+    return "Anthropic refused the request" + (err.message ? " - " + err.message : "")
+         + ". If it names the model, connect again and pick the other one.";
+  if (code === "http_429")
+    return "Your account is rate limited just now, or out of credit. Give it a moment, "
+         + "or check the balance at console.anthropic.com.";
+  if (code && code.startsWith("http_5"))
+    return "Anthropic had trouble at their end (" + code.slice(5) + "). Try again.";
+  if (code === "unreachable")
+    return "Could not reach Anthropic from this page. Check the connection, and that "
+         + "no extension is blocking api.anthropic.com.";
+  if (code === "empty_key") return "Paste a key first.";
   if (code === "cancelled") return "Stopped.";
   if (code === "rate_limited") return "Too many requests just now. Give it a moment.";
   if (code === "tools_unavailable")
