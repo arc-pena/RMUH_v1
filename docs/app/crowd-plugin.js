@@ -22,7 +22,7 @@
 import { ARG } from "./ocaf.js";
 import { offerPlugin } from "./plugin.js";
 import { BODY, FRUIN, SHUFFLE, addWalker, cellsAllowed, clearanceOf, blockPolygon,
-         crowdSpeed, densityAt,
+         crowdSpeed, densityAt, fillRings,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
          makeDensity, makeGrid, makeTrace, measureDensity, serviceBreakdown,
          stepCrowd, stranded, toCell, toWorld, walkDistance } from "./crowd.js";
@@ -54,6 +54,17 @@ export const CROWD_NODES = [
            ARG.refs("obstacles", "Around", ["solid"]),
            ARG.real("cut", "Cut height", 1100, 50, 20000, 50),
            ARG.real("grain", "Grid", 250, 50, 2000, 50)] },
+
+  { type: "Floor", guid: "9a1b2c30-00d3-4c00-9e00-caf0000000d3",
+    category: "analysis", produces: "text",
+    summary: "Which geometry people walk ON, as against the geometry they walk ROUND. "
+           + "Wire a sketch's face, a slab, or the face of an imported extrusion into "
+           + "it and its outline becomes the edge of the floor and its inner loops "
+           + "become holes - a lightwell, a core, an atrium. Without one, Flow assumes "
+           + "everything it can cut is an obstacle and the floor is the ground the walls "
+           + "stand on, which is right for a plan drawn in walls and wrong for a plate "
+           + "drawn as a face. Nothing in the geometry says which you meant.",
+    args: [ARG.refs("of", "Floor plates", ["solid", "plane"])] },
 
   { type: "Isovist", guid: "9a1b2c30-00d2-4c00-9e00-caf0000000d2",
     category: "analysis", produces: "curve",
@@ -97,12 +108,17 @@ export function footprintOf(mesh, cut) {
     }
     if (crossing.length === 2) segments.push(crossing);
   }
-  if (!segments.length) return rings;
+  return ringsFromSegments(segments);
+}
 
-  // The segments come out in no order at all, so they are welded end to end.
-  // A ring that will not close is kept anyway and closed by force: a footprint
-  // with a hairline gap in it lets the whole crowd walk through a wall.
-  const key = p2 => Math.round(p2[0] / 20) + "," + Math.round(p2[1] / 20);
+//! Loose segments welded end to end into closed rings. They come out of a slice
+//! in no order at all, and a ring that will not close is kept anyway and closed
+//! by force: a footprint with a hairline gap in it lets the whole crowd walk
+//! through a wall.
+export function ringsFromSegments(segments, weld = 20) {
+  const rings = [];
+  if (!segments.length) return rings;
+  const key = p2 => Math.round(p2[0] / weld) + "," + Math.round(p2[1] / weld);
   const ends = new Map();
   for (const seg of segments)
     for (const end of [0, 1]) {
@@ -127,6 +143,43 @@ export function footprintOf(mesh, cut) {
   return rings;
 }
 
+//! The outline of a FLAT thing: the edges its triangles do not share.
+//!
+//! A face has a boundary and its holes have boundaries, and a tessellation of
+//! it says so exactly - an edge between two triangles is interior, an edge
+//! belonging to one triangle is on the edge of the face. Nothing needs to be
+//! cut and nothing needs a height, which is what makes this the way to read a
+//! sketch's face, or the face of an imported extrusion, as a floor.
+export function boundaryRings(mesh, weld = 20) {
+  const p = mesh.positions, index = mesh.index;
+  if (!p || !index) return [];
+  const at = k => [Math.round(p[k * 3] / weld), Math.round(p[k * 3 + 1] / weld)];
+  const seen = new Map();
+  for (let t = 0; t + 2 < index.length; t += 3)
+    for (let e = 0; e < 3; e++) {
+      const a = at(index[t + e]), b = at(index[t + (e + 1) % 3]);
+      // Undirected, and welded to the grid the ring builder uses, so two
+      // triangles that meet along an edge agree that they do.
+      const key = a[0] < b[0] || (a[0] === b[0] && a[1] <= b[1])
+        ? a + "|" + b : b + "|" + a;
+      const had = seen.get(key);
+      if (had) had.count++;
+      else seen.set(key, { count: 1, a: [p[index[t + e] * 3], p[index[t + e] * 3 + 1]],
+                           b: [p[index[t + (e + 1) % 3] * 3], p[index[t + (e + 1) % 3] * 3 + 1]] });
+    }
+  const segments = [];
+  for (const edge of seen.values()) if (edge.count === 1) segments.push([edge.a, edge.b]);
+  return ringsFromSegments(segments, weld);
+}
+
+//! What a thing looks like as a floor. A slab has a thickness, so it is cut
+//! halfway up and the cut is its outline with its holes in it. A face has no
+//! thickness to cut, so its own boundary is the answer.
+export function floorRings(mesh) {
+  const span = zSpan([mesh]);
+  return span ? footprintOf(mesh, (span[0] + span[1]) / 2) : boundaryRings(mesh);
+}
+
 //! A grid of the whole scene at a cut height, with everything blocked in.
 //! \p include are extra world points the plate must cover - the ends of a walk,
 //! the eye of an isovist. Without them the grid is padded around the FURNITURE,
@@ -148,16 +201,35 @@ export function zSpan(meshes) {
   return Number.isFinite(lo) && hi - lo > 1 ? [lo, hi] : null;
 }
 
-export function plateOf(meshes, cut, grain, { pad = 1000, include = [], maxCells } = {}) {
+export function plateOf(meshes, cut, grain,
+                       { pad = 1000, include = [], maxCells, floors = [] } = {}) {
   let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity], floor = Infinity;
   const rings = [];
+  const spread = point => {
+    lo = [Math.min(lo[0], point[0]), Math.min(lo[1], point[1])];
+    hi = [Math.max(hi[0], point[0]), Math.max(hi[1], point[1])];
+  };
+
+  // The floor, if anybody said which it was. A slab with a lightwell in it, a
+  // sketch's face with its holes, the face of an imported extrusion: the thing
+  // people walk ON, as against the things they walk ROUND. Nothing in the
+  // geometry says which a closed outline is, so this is the only way to know -
+  // and with it, the walkable region is what the outline encloses rather than
+  // the padded box the walls happen to sit in.
+  const plate = [];
+  for (const mesh of floors)
+    for (const ring of floorRings(mesh)) {
+      plate.push(ring);
+      for (const point of ring) spread(point);
+      if (mesh.positions)
+        for (let i = 2; i < mesh.positions.length; i += 3)
+          floor = Math.min(floor, mesh.positions[i]);
+    }
+
   for (const mesh of meshes) {
     for (const ring of footprintOf(mesh, cut)) {
       rings.push(ring);
-      for (const point of ring) {
-        lo = [Math.min(lo[0], point[0]), Math.min(lo[1], point[1])];
-        hi = [Math.max(hi[0], point[0]), Math.max(hi[1], point[1])];
-      }
+      if (!plate.length) for (const point of ring) spread(point);
     }
     if (mesh.positions)
       for (let i = 2; i < mesh.positions.length; i += 3)
@@ -165,19 +237,23 @@ export function plateOf(meshes, cut, grain, { pad = 1000, include = [], maxCells
   }
   if (!Number.isFinite(lo[0])) return null;
   const walls = { lo: [...lo], hi: [...hi] };
-  for (const point of include) {
-    lo = [Math.min(lo[0], point[0]), Math.min(lo[1], point[1])];
-    hi = [Math.max(hi[0], point[0]), Math.max(hi[1], point[1])];
-  }
-  const bounds = { lo: [lo[0] - pad, lo[1] - pad], hi: [hi[0] + pad, hi[1] + pad],
+  for (const point of include) spread(point);
+  // A named floor is the edge of the world, so there is nothing to pad around
+  // it; without one the padding is what keeps people off the outside face of
+  // the perimeter walls.
+  const skirt = plate.length ? Math.min(pad, grain * 2) : pad;
+  const bounds = { lo: [lo[0] - skirt, lo[1] - skirt], hi: [hi[0] + skirt, hi[1] + skirt],
                    floor: Number.isFinite(floor) ? floor : 0 };
   const grid = makeGrid(bounds, grain, maxCells);
-  for (const ring of rings) blockPolygon(grid, ring);
+  // Carved first - everything off the plate is off the plate - then the things
+  // standing on it are blocked, holes and all.
+  if (plate.length) fillRings(grid, plate, { carve: true });
+  fillRings(grid, rings);
   clearanceOf(grid);
   // What the footprints themselves span, as against the padded grid. People
   // belong inside the building; without this they wander round the outside of
   // it, which looks like a bug because it is one.
-  return { grid, rings, inside: walls };
+  return { grid, rings, plate, inside: plate.length ? { lo: [...lo], hi: [...hi] } : walls };
 }
 
 /* -------------------------------------------------------------- drivers */
@@ -215,6 +291,27 @@ function crowdDrivers(kit) {
                   lines: [role, rate + " people a minute",
                           (width / 1000).toFixed(2) + " m clear"] },
         };
+      },
+    },
+
+    //! A marker, not geometry. It builds nothing and consumes nothing - what it
+    //! holds is a list of which features are the floor, and the Flow mode reads
+    //! that list off the tree. Saying it as a node rather than as a setting is
+    //! what makes it part of the model: it is in the file, it undoes, and the
+    //! assistant can wire one.
+    Floor: {
+      precondition: f => K.F.references(f, "of").length ? null
+        : "wire the floor plate into it - a sketch's face, a slab, or the face of "
+          + "an imported extrusion",
+      build: f => {
+        const on = K.F.references(f, "of");
+        const named = on.map(K.F.name);
+        const built = on.filter(K.F.shape).length;
+        return { data: K.text([
+          named.length === 1 ? named[0] : named.length + " plates",
+          built === on.length ? "people walk on this" : (on.length - built) + " not built yet",
+          named.join(", "),
+        ]) };
       },
     },
 
@@ -654,14 +751,33 @@ Object.assign(FlowView.prototype, {
   //! sweep the field. This is what runs when you move a desk, and it is one
   //! Dijkstra - which is why it can run while you are still dragging.
   rebuild() {
-    const meshes = [];
+    const features = this.kit.tree().features || [];
+    // What somebody said is the floor. Everything else that can be cut is an
+    // obstacle, which is the right assumption for a plan drawn in walls and the
+    // wrong one for a plate drawn as a face - so the Floor node exists to say
+    // which, and nothing here guesses.
+    const isFloor = new Set();
+    for (const f of features)
+      if (f.type === "Floor")
+        for (const id of (f.lists && f.lists.of) || []) isFloor.add(id);
+
+    const meshes = [], floors = [];
     for (const [id, mesh] of this.kit.streams()) {
-      const entry = (this.kit.tree().features || []).find(f => f.id === id);
-      if (!entry || entry.category === "datum" || this.kit.hidden().has(id)) continue;
-      if (entry.type === "Portal") continue;             // a portal is not a wall
-      if (mesh.positions && mesh.index) meshes.push(mesh);
+      const entry = features.find(f => f.id === id);
+      if (!entry || this.kit.hidden().has(id)) continue;
+      // A body a boolean has swallowed is not in the room any more. It is still
+      // in the tree, and its triangles are still in the stream, so without this
+      // the wall that was fused into another wall blocks the floor twice.
+      if (entry.consumedBy || entry.visible === false) continue;
+      if (!(mesh.positions && mesh.index)) continue;
+      // A floor is a floor even when it is a datum plane or a sketch face,
+      // which is why this test comes before the ones that throw those away.
+      if (isFloor.has(id)) { floors.push(mesh); continue; }
+      if (entry.category === "datum") continue;
+      if (entry.type === "Portal" || entry.type === "Floor") continue;
+      meshes.push(mesh);
     }
-    this.portals = (this.kit.tree().features || [])
+    this.portals = features
       .filter(f => f.type === "Portal" && f.data && f.data.preview)
       .map(f => {
         const said = String(f.data.preview);
@@ -687,10 +803,10 @@ Object.assign(FlowView.prototype, {
     // cells alone. A plate with twenty places to walk to gets a coarser grid
     // than the same plate with one, because it is doing twenty times the work.
     const sweeps = Math.max(1, this.portals.filter(p => p.role === "to").length || 4);
-    this.plate = meshes.length
+    this.plate = (meshes.length || floors.length)
       ? plateOf(meshes, this.cut, this.grain,
                 { include: this.portals.map(p => [p.at[0], p.at[1]]),
-                  maxCells: cellsAllowed(sweeps) })
+                  maxCells: cellsAllowed(sweeps), floors })
       : null;
     const note = this.bar.querySelector("#fl-note");
     if (!this.plate) {
@@ -703,6 +819,7 @@ Object.assign(FlowView.prototype, {
           + (this.span[0] / 1000).toFixed(2) + " to " + (this.span[1] / 1000).toFixed(2)
           + " m, so move the cut into it"
         : "nothing in the model has a footprint at this height";
+      this.floorHint(note, meshes, floors);
       this.goals = [];
       this.makePlate();
       return;
@@ -720,6 +837,7 @@ Object.assign(FlowView.prototype, {
     // you nothing about a floor plate.
     this.goals = this.goalList();
     this.fields = this.goals.map(goal => flowField(this.plate.grid, goal.at));
+    this.floors = floors.length;
     const grid = this.plate.grid;
     // A grid coarser than the thing it is measuring is not a measurement. It
     // is allowed - a masterplan may want twenty metres - but a floor that came
@@ -736,7 +854,13 @@ Object.assign(FlowView.prototype, {
       return;
     }
     note.textContent = (this.walkableArea() / 1e6).toFixed(0) + " m² walkable · "
-      + this.plate.rings.length + " footprints"
+      + (this.plate.plate && this.plate.plate.length
+          ? this.plate.plate.length === 1 ? "1 floor plate"
+            : "1 floor plate with " + (this.plate.plate.length - 1)
+              + (this.plate.plate.length === 2 ? " opening" : " openings")
+          : this.plate.rings.length + " footprints")
+      + (this.plate.plate && this.plate.plate.length && this.plate.rings.length
+          ? " · " + this.plate.rings.length + " on it" : "")
       + " · " + this.goals.length + (this.goals.length === 1 ? " destination" : " destinations")
       + (this.portals.length ? "" : ", the corners of the floor")
       // Said when it happens, because a grid that quietly refused what was
@@ -758,6 +882,16 @@ Object.assign(FlowView.prototype, {
   //! and bottom of what is in the scene, and the first cut is a metre and a
   //! tenth above the lowest thing in it, which is where a person's shoulders
   //! are.
+  //! Said when the plate came out empty and a Floor node is what is missing. A
+  //! solid cut through the middle is solid, and if that solid IS the floor the
+  //! only thing wrong is that nobody said so.
+  floorHint(note, meshes, floors) {
+    if (floors.length || !meshes.length) return;
+    note.textContent += " · if what you are cutting IS the floor - a slab, or a "
+      + "sketch's face - add a Floor node and wire it in, and its outline becomes "
+      + "the edge of the plate rather than an obstacle";
+  },
+
   //! One rebuild a frame, however many times a slider says it moved. Dragging
   //! fires an event per pixel, and a rebuild of a masterplan is a hundred and
   //! seventy milliseconds - so without this the drag is the rebuild queue and
@@ -1308,7 +1442,21 @@ export const CROWD = offerPlugin({
            + "round one another is a model tuned to look right: it reproduces queues, "
            + "lane formation and pinch points, and it does not predict any one person.",
     operations: [
-      { name: "plateOf", takes: "meshes, cut, grain", gives: "{ grid, rings }",
+      { name: "boundaryRings", takes: "mesh", gives: "rings",
+        summary: "The outline of a flat thing and the outlines of its holes, read off "
+               + "the edges its triangles do not share. What lets a sketch's face, or "
+               + "the face of an imported extrusion, be used as a floor without cutting "
+               + "anything." },
+      { name: "floorRings", takes: "mesh", gives: "rings",
+        summary: "The same, for whatever it is handed: a slab is cut halfway up its "
+               + "own thickness, a face has no thickness to cut so its boundary is the "
+               + "answer." },
+      { name: "fillRings", takes: "grid, rings, { carve }", gives: "nothing, it marks the grid",
+        summary: "Rings that know about each other: a ring inside a ring is a HOLE, so "
+               + "a cell is solid when it is inside an odd number of them. With carve, "
+               + "the same arithmetic means the opposite - what is inside is floor and "
+               + "everything else is off the plate." },
+      { name: "plateOf", takes: "meshes, cut, grain", gives: "{ grid, rings, plate }",
         summary: "The walkable floor, from the model's own triangles cut at a height. "
                + "A desk at 720 blocks nothing at eye level; a screen at 1600 blocks "
                + "everything - which is why the cut height is the first control." },

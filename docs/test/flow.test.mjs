@@ -8,10 +8,10 @@
 // people inside furniture, a door with no capacity.
 import { createWasmKernel } from "../src/wasm-kernel.js";
 import { PluginHost, findPlugin } from "../src/plugin.js";
-import { CROWD, CROWD_NODES, crowdColour, footprintOf, plateOf, zSpan }
+import { CROWD, CROWD_NODES, boundaryRings, crowdColour, footprintOf, plateOf, zSpan }
   from "../src/crowd-plugin.js";
-import { BODY, FREE_SPEED, FRUIN, SIDESTEP, addWalker, blockPolygon, cellsAllowed,
-         clearanceOf, crowdSpeed,
+import { BODY, FREE_SPEED, FRUIN, SIDESTEP, addWalker, blockPolygon, cellIndex,
+         cellsAllowed, clearanceOf, crowdSpeed, fillRings,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
          makeDensity, makeGrid, makeTrace, measureDensity, serviceBreakdown,
          stepCrowd, stranded, toCell, walkDistance } from "../src/crowd.js";
@@ -504,7 +504,9 @@ console.log("\n8. a package, loaded and put away");
 {
   check("it is on the shelf", !!findPlugin("flow"));
   check("declared with the package off",
-    CROWD.nodes.length === 3 && CROWD.nodes.every(n => typeSpec(n.type) === null));
+    CROWD.nodes.map(n => n.type).join(",") === "Portal,WalkDistance,Floor,Isovist"
+    && CROWD.nodes.every(n => typeSpec(n.type) === null),
+    CROWD.nodes.map(n => n.type).join(","));
   check("and its API is declared operation by operation",
     CROWD.api.operations.length >= 8
     && CROWD.api.operations.every(o => o.name && o.takes && o.gives && o.summary));
@@ -559,6 +561,51 @@ console.log("\n9. the crowding ramp");
   check("and it stays inside the box",
     Array.from({ length: 41 }, (_, i) => crowdColour(i / 40))
       .every(c => c.every(v => v >= 0 && v <= 1)));
+}
+
+console.log("a floor is a floor, and a ring inside a ring is a hole");
+{
+  // Two squares, one inside the other. Nothing in the geometry says whether
+  // that is a slab with a lightwell or a wall around a courtyard, and the
+  // answer is opposite in the two cases - so somebody has to say which.
+  const face = (outer, inner) => {
+    const positions = [], index = [];
+    for (const [x, y] of outer) positions.push(x, y, 0);
+    for (const [x, y] of inner) positions.push(x, y, 0);
+    for (let k = 0; k < 4; k++) {
+      const j = (k + 1) % 4;
+      index.push(k, j, 4 + k, j, 4 + j, 4 + k);
+    }
+    return { positions, index };
+  };
+  const plate = face([[0, 0], [20000, 0], [20000, 20000], [0, 20000]],
+                     [[8000, 8000], [12000, 8000], [12000, 12000], [8000, 12000]]);
+
+  const rings = boundaryRings(plate);
+  check("a flat face gives up its outline and its hole",
+        rings.length === 2, String(rings.length));
+  check("the outline first, and it is the big one",
+        Math.max(...rings[0].map(p => p[0])) === 20000,
+        JSON.stringify(rings.map(r => Math.max(...r.map(p => p[0])))));
+
+  // As a floor: walk on it, round the hole. 20 x 20 m less a 4 x 4 m lightwell.
+  const asFloor = plateOf([], 1100, 500, { floors: [plate] });
+  const walkable = asFloor.grid.blocked.length
+    - asFloor.grid.blocked.reduce((n, v) => n + v, 0);
+  check("as a floor it is what the outline encloses, less the hole",
+        Math.abs(walkable * 0.25 - 384) < 12, (walkable * 0.25).toFixed(0) + " m² of 384");
+  check("and the plate is published, so the note can say what it found",
+        asFloor.plate.length === 2, String(asFloor.plate.length));
+
+  // As obstacles, the same two rings mean the opposite: solid between them,
+  // and the hole in the middle is air. Filling each ring on its own - which is
+  // what this used to do - made the hole solid too.
+  const grid = makeGrid({ lo: [0, 0], hi: [20000, 20000], floor: 0 }, 500);
+  fillRings(grid, rings);
+  const inside = (x, y) => grid.blocked[cellIndex(grid, ...toCell(grid, x, y))];
+  check("as obstacles the ring between them is solid", inside(2000, 2000) === 1);
+  check("and the hole in the middle is not", inside(10000, 10000) === 0,
+        "a hole filled solid is the bug this is here for");
 }
 
 console.log("it has to work at both ends of the scale, and never lock up");

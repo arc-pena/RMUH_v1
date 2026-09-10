@@ -121,6 +121,57 @@ export const isBlocked = (grid, x, y) => {
 //! The cost of that is that nothing can be thinner than one cell: a wall is at
 //! least `cell` thick to a walker. That is the honest limit of a grid, and it
 //! errs towards a wall being there.
+//! Rings that know about each other. A polygon inside a polygon is a HOLE, not
+//! a second solid - so a cell is solid when it is inside an odd number of the
+//! rings, which is the rule a filled outline has followed since the first
+//! plotter. Filling each ring on its own, the way this used to, turns a floor
+//! plate with a lightwell in it into a solid block with a solid block in it,
+//! and that is the whole of "it can see the holes but not the outline".
+//!
+//! \p carve reverses it: what is inside an odd number of rings is FLOOR and
+//! everything else is off the plate. Same arithmetic, opposite meaning, which
+//! is the difference between a wall and a floor slab and cannot be worked out
+//! from the geometry alone - somebody has to say which they meant.
+export function fillRings(grid, rings, { carve = false } = {}) {
+  const real = rings.filter(ring => ring.length >= 3);
+  if (!real.length) return;
+  const parity = new Uint8Array(grid.blocked.length);
+  for (const ring of real) {
+    let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+    for (const p of ring) {
+      lo = [Math.min(lo[0], p[0]), Math.min(lo[1], p[1])];
+      hi = [Math.max(hi[0], p[0]), Math.max(hi[1], p[1])];
+    }
+    const [i0, j0] = toCell(grid, lo[0], lo[1]);
+    const [i1, j1] = toCell(grid, hi[0], hi[1]);
+    for (let j = Math.max(0, j0); j <= Math.min(grid.height - 1, j1); j++)
+      for (let i = Math.max(0, i0); i <= Math.min(grid.width - 1, i1); i++) {
+        const [x, y] = toWorld(grid, i, j);
+        if (pointInPolygon([x, y], ring)) parity[cellIndex(grid, i, j)] ^= 1;
+      }
+  }
+  const blocked = grid.blocked;
+  if (carve) for (let k = 0; k < parity.length; k++) { if (!parity[k]) blocked[k] = 1; }
+  else for (let k = 0; k < parity.length; k++) { if (parity[k]) blocked[k] = 1; }
+  // The lines themselves, after the fill: a wall thinner than a cell falls
+  // between two cell centres and is a wall nobody can see.
+  if (!carve) for (const ring of real) traceRing(grid, ring);
+}
+
+//! Just the line of a ring, marked blocked.
+export function traceRing(grid, polygon) {
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i], b = polygon[(i + 1) % polygon.length];
+    const span = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const steps = Math.max(1, Math.ceil(span / (grid.cell * 0.25)));
+    for (let n = 0; n <= steps; n++) {
+      const k = n / steps;
+      const [i2, j2] = toCell(grid, a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k);
+      if (inGrid(grid, i2, j2)) grid.blocked[cellIndex(grid, i2, j2)] = 1;
+    }
+  }
+}
+
 export function blockPolygon(grid, polygon) {
   if (polygon.length < 2) return;
   for (let i = 0; i < polygon.length; i++) {
