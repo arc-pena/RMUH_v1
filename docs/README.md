@@ -846,7 +846,7 @@ message, so one bad radius never takes the model down.
 
 ```sh
 python3 docs/build.py              # both builds; fetches the kernel from npm on first run
-python3 docs/build.py --only site  # just public/
+python3 docs/build.py --only site  # just the served site
 ```
 
 It builds twice, for two places that want opposite things.
@@ -854,7 +854,7 @@ It builds twice, for two places that want opposite things.
 | | | |
 |---|---|---|
 | `docs/parametric-cad.html` | **one file**, ~11 MB | published as an Artifact |
-| `public/` | a folder of files, ~25 MB | served by GitHub Pages, or by a native kernel |
+| `docs/index.html` + `app/` + `kernel/` | a folder of files, ~25 MB | served by GitHub Pages |
 
 An Artifact may load scripts from a few CDNs but may not fetch anything at run
 time, and the WebAssembly module is a runtime fetch. So for that build the
@@ -863,20 +863,33 @@ the browser inflates and stream-compiles on load — and so do the showroom engi
 and every package's data.
 
 A web server has no such rule, and fetching is what a browser is good at. So the
-public build leaves those three as files beside the page: streamed, compiled
-while they arrive, and cached by the browser between visits instead of re-parsed
-out of the HTML on every load. The source modules go across as they are and the
-browser resolves the imports itself — nothing is concatenated, so the file it
-fetches is the file in `src/` and a stack trace points at a real line.
+site build leaves those three as files beside the page: streamed, compiled while
+they arrive, and cached by the browser between visits instead of re-parsed out of
+the HTML on every load. The source modules go across as they are and the browser
+resolves the imports itself — nothing is concatenated, so the file it fetches is
+the file in `src/` and a stack trace points at a real line.
+
+The site is **this folder**, because GitHub Pages, serving straight from a
+branch, offers the repository root and `docs/` and nothing else. So the served
+page sits beside the source it is built from:
 
 ```
-public/
+docs/
   index.html            the same shell, with a doctype and one module script
   app/*.js              src/, copied — plus occt-glue.js, emscripten's own module
   kernel/               replicad_single.wasm, playcanvas.min.js
-  data/cities.json      the Climate package's site table
+  data/cities.json      the Climate package's site table, served where it lives
   .nojekyll             Pages runs Jekyll over what it serves unless told not to
+  src/ test/ build.py   the source, which is served too and does no harm
 ```
+
+`index.html`, `app/` and `kernel/` are generated: the build wipes those two
+folders and rewrites all three, so a module deleted from `src/` stops being
+served. Nothing else in `docs/` is touched.
+
+Point Pages at it once: **Settings → Pages → Source: Deploy from a branch →
+`/docs`**. It serves what is committed, so `python3 docs/build.py` and a commit
+are what publish a change.
 
 `src/payload.js` is what makes one source tree serve both: every big piece is
 asked for by name, and it is unpacked from a payload element in the page when
@@ -885,15 +898,9 @@ it knows which build it is in.
 
 Two consequences worth knowing. Every module must stand on its own imports — in
 the single file they share one scope and a missing import goes unnoticed, and
-served as modules it is a `ReferenceError` on load. And `public/` is committed
+served as modules it is a `ReferenceError` on load. And the site is committed
 while `docs/parametric-cad.html` is not: Pages serves what is in the repository,
 so what is served is what was reviewed.
-
-GitHub Pages, serving straight from a branch, offers the repository root and
-`docs/` and nothing else, so `public/` goes out through
-`.github/workflows/pages.yml` instead. Turn it on once, under **Settings →
-Pages → Source → GitHub Actions**. The workflow publishes the committed folder
-and builds nothing.
 
 | | |
 |---|---|

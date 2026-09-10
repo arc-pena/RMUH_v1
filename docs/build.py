@@ -2,7 +2,7 @@
 """Build the page, both ways.
 
     docs/parametric-cad.html   ONE file, for publishing as an Artifact
-    public/                    a folder of files, for serving from a web server
+    docs/index.html + app/     a folder of files, for serving from GitHub Pages
 
 They exist for opposite reasons. An Artifact may load scripts from a handful of
 CDNs but may not fetch anything at run time, and OpenCascade's WebAssembly
@@ -10,7 +10,7 @@ module is a runtime fetch - so for that build the kernel travels inside the
 page, gzipped and base64'd, 22 MB of wasm becoming about 9 MB of text.
 
 A web server has no such rule, and fetching is what a browser is good at. So
-the public build leaves the kernel, the showroom engine and the package data as
+the site build leaves the kernel, the showroom engine and the package data as
 files beside the page: streamed, compiled while they arrive, and cached by the
 browser between visits instead of re-parsed out of the HTML on every load. The
 source modules go across as they are, imported natively - nothing is
@@ -36,11 +36,17 @@ ROOT = pathlib.Path(__file__).resolve().parent
 SRC = ROOT / "src"
 OUT = ROOT / "parametric-cad.html"
 
-# The served site, at the top of the repository so GitHub Pages can be pointed
-# at it. Rebuilt from nothing every time: everything in it is a copy of
-# something in src/ or of a package pulled from npm, so nothing is ever edited
-# here and nothing is lost by wiping it.
-SITE = ROOT.parent / "public"
+# The served site lives in docs/ - this folder - because that is one of the two
+# places GitHub Pages will serve from when it serves straight from a branch, and
+# the other is the repository root. So the page, the modules and the kernel sit
+# beside the source they are built from.
+#
+# Only these are generated, and only these are wiped and rewritten. Everything
+# else in docs/ is source and is never touched.
+SITE = ROOT
+SITE_INDEX = "index.html"
+SITE_MODULES = "app"
+SITE_BINARIES = "kernel"
 
 # OpenCascade for the browser: a trimmed OCCT build, 22 MB of WebAssembly.
 KERNEL_PACKAGE = "replicad-opencascadejs"
@@ -122,26 +128,31 @@ def build_site(shell, glue_path, wasm_path, stage_path):
     Nothing is bundled and nothing is inlined. The browser resolves the imports
     itself, which means the file it fetches is the file in src/ - so what is
     served can be read, and a stack trace from it points at a real line."""
-    if SITE.exists():
-        shutil.rmtree(SITE)
-    (SITE / "app").mkdir(parents=True)
-    (SITE / "kernel").mkdir()
-    (SITE / "data").mkdir()
+    # The two generated folders go completely, so a module that has been
+    # deleted from src/ stops being served. Nothing else here is touched:
+    # src/, test/, data/ and the READMEs are source, and data/ is served as it
+    # stands - a package's table is already a file in the right place.
+    for folder in (SITE_MODULES, SITE_BINARIES):
+        if (SITE / folder).exists():
+            shutil.rmtree(SITE / folder)
+    (SITE / SITE_MODULES).mkdir(parents=True)
+    (SITE / SITE_BINARIES).mkdir()
 
     for name in MODULES:
-        shutil.copyfile(SRC / name, SITE / "app" / name)
-    shutil.copyfile(glue_path, SITE / "app" / GLUE_MODULE)
-    shutil.copyfile(wasm_path, SITE / "kernel" / wasm_path.name)
-    shutil.copyfile(stage_path, SITE / "kernel" / stage_path.name)
+        shutil.copyfile(SRC / name, SITE / SITE_MODULES / name)
+    shutil.copyfile(glue_path, SITE / SITE_MODULES / GLUE_MODULE)
+    shutil.copyfile(wasm_path, SITE / SITE_BINARIES / wasm_path.name)
+    shutil.copyfile(stage_path, SITE / SITE_BINARIES / stage_path.name)
     for _, name in PAYLOADS:
-        shutil.copyfile(DATA / name, SITE / "data" / name)
+        if not (DATA / name).exists():
+            sys.exit("missing %s" % (DATA / name))
 
     # The shell is written as a fragment because an Artifact supplies the
     # document around it. A served page has no such wrapper, and a page with no
     # doctype is a page in quirks mode - so this build supplies one. The icon
     # is drawn here rather than fetched: a favicon request that 404s is the
     # only broken link a site like this would otherwise have.
-    (SITE / "index.html").write_text("\n".join([
+    (SITE / SITE_INDEX).write_text("\n".join([
         "<!doctype html>",
         '<html lang="en">',
         '<link rel="icon" href="data:image/svg+xml,'
@@ -162,8 +173,10 @@ def build_site(shell, glue_path, wasm_path, stage_path):
     # like. This file is how it is told not to.
     (SITE / ".nojekyll").write_text("")
 
-    total = sum(f.stat().st_size for f in SITE.rglob("*") if f.is_file())
-    print("wrote %s/  %.1f MB  (%d modules, kernel served as a file)" % (
+    served = [SITE / SITE_INDEX, *(SITE / SITE_MODULES).rglob("*"),
+              *(SITE / SITE_BINARIES).rglob("*"), *(DATA).rglob("*")]
+    total = sum(f.stat().st_size for f in served if f.is_file())
+    print("wrote the site into %s/  %.1f MB  (%d modules, kernel served as a file)" % (
         SITE.name, total / 1048576, len(MODULES) + 1))
 
 
