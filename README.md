@@ -131,6 +131,17 @@ any nozzle, so the print variant reads the pavilions as massing: canopy, slabs,
 columns and a solid glazed volume per storey. The one marginal feature is the
 0.70 mm slab, whose 1.2 mm oversail is a thin ledge.
 
+## The modeller
+
+`docs/` holds a second thing entirely: a parametric CAD modeller built on
+OpenCascade's OCAF, running in the browser. A specification tree, a sketcher, a
+node graph, solids and polymeshes, file exchange, and packages for climate
+analysis and pedestrian flow. Its own README is in `docs/README.md`.
+
+`public/` is that modeller built as a website — the page, the source modules,
+and the WebAssembly kernel as files beside them. It is what GitHub Pages serves;
+`python3 docs/build.py` regenerates it.
+
 ## Regenerating
 
 ```bash

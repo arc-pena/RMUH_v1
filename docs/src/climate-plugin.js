@@ -1270,7 +1270,8 @@ export const CLIMATE = offerPlugin({
   //! Loading. The table is unpacked here and not before, so a session that
   //! never opens the Analyse mode never pays for it.
   async start(kit) {
-    const table = await unpackResource("climate-sites", "the Climate package's site table");
+    const table = await unpackResource("climate-sites", "the Climate package's site table",
+                                       "data/cities.json");
     const view = kit.THREE ? new AnalyseView(kit, table.sites) : null;
     return {
       drivers: climateDrivers(kit),

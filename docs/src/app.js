@@ -1,8 +1,13 @@
+// The emscripten glue, as a module. In the single-file build this import is
+// stripped and the glue is concatenated in ahead of everything else, which
+// declares the same name; served as modules, it is the file next door.
+import replicadInit from "./occt-glue.js";
+import { resource } from "./payload.js";
 import { createWasmKernel } from "./wasm-kernel.js";
 import { createHttpKernel } from "./http-kernel.js";
 import { ENVIRONMENTS, FINISHES, Showroom, findFinish } from "./showroom.js";
 import { Mdl } from "./mdl.js";
-import { acceptsFrom, dataLines, lightenModel, SAMPLES, sliderSpan } from "./ocaf.js";
+import { acceptsFrom, dataLines, lightenModel, round, SAMPLES, sliderSpan } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
 import { Agent, agentTrouble } from "./agent.js";
 import { PluginHost } from "./plugin.js";
@@ -2924,45 +2929,40 @@ async function attachKernel(next, model) {
   fitView();
 }
 
+/* Where the big pieces sit when they are not inside the page. Relative to the
+   page, because that is what makes the folder movable: a site at /cad and a
+   site at / are the same files. */
+const KERNEL_URL = "kernel/replicad_single.wasm";
+const STAGE_URL = "kernel/playcanvas.min.js";
+
 const boot = message => {
   const el = document.getElementById("boot-message");
   if (el) el.textContent = message;
 };
 
-//! The kernel travels in this page gzipped - 22 MB of WebAssembly packs down to
-//! about 9 MB of text. Inflating it with the browser's own decompressor and
-//! feeding that straight to the streaming compiler means the module is being
-//! compiled while it is still being unpacked.
-function packedKernelBytes() {
-  const element = document.getElementById("kernel-payload");
-  if (!element) throw new Error("this page is missing its kernel payload");
-  const packed = atob(element.textContent.trim());
-  const bytes = new Uint8Array(packed.length);
-  for (let i = 0; i < packed.length; i++) bytes[i] = packed.charCodeAt(i);
-  return bytes;
-}
-
-function kernelResponse() {
-  if (typeof DecompressionStream !== "function")
-    throw new Error("this browser cannot unpack the kernel (no DecompressionStream)");
-  const stream = new Blob([packedKernelBytes()]).stream()
-    .pipeThrough(new DecompressionStream("gzip"));
-  return new Response(stream, { headers: { "Content-Type": "application/wasm" } });
-}
+//! Where the 22 MB of WebAssembly comes from. In the single-file build it is
+//! inside the page, gzipped to about 9 MB of text; served from a web server it
+//! is a file beside the page. Either way it arrives as a Response, so the
+//! streaming compiler starts on it before it has finished arriving.
+const kernelResponse = () =>
+  resource("kernel-payload", KERNEL_URL, "the OpenCascade kernel", "application/wasm");
 
 let pageKernel = null;
 async function usePageKernel() {
   if (!pageKernel) {
     boot("unpacking and compiling OpenCascade");
     const instantiateWasm = (imports, onReady) => {
-      WebAssembly.instantiateStreaming(kernelResponse(), imports)
+      kernelResponse()
+        .then(answer => WebAssembly.instantiateStreaming(answer, imports))
         .then(result => onReady(result.instance, result.module))
-        .catch(() => {
-          // Some browsers refuse to stream-compile a synthesised response.
-          new Response(kernelResponse().body).arrayBuffer()
+        .catch(() =>
+          // Some browsers refuse to stream-compile a synthesised response, so
+          // the whole of it is read first and compiled from the buffer.
+          kernelResponse()
+            .then(answer => answer.arrayBuffer())
             .then(buffer => WebAssembly.instantiate(buffer, imports))
-            .then(result => onReady(result.instance, result.module));
-        });
+            .then(result => onReady(result.instance, result.module))
+            .catch(err => boot(err.message)));
       return {};   // emscripten reads this as "the instance is coming later"
     };
     pageKernel = await createWasmKernel({ initModule: replicadInit, instantiateWasm, onProgress: boot });
@@ -3245,6 +3245,7 @@ document.getElementById("ai-prompt").addEventListener("keydown", event => {
 const showroom = new Showroom({
   canvas: document.getElementById("stage-canvas"),
   payloadId: "showroom-payload",
+  payloadUrl: STAGE_URL,
 });
 const stage = document.getElementById("showroom");
 const stageUi = document.getElementById("stage-ui");

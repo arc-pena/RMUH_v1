@@ -1,0 +1,47 @@
+# Publishes public/ to GitHub Pages.
+#
+# Pages, when it serves straight from a branch, offers two folders and only
+# two: the repository root and docs/. This site is neither - it lives in
+# public/ - so it goes out through Actions instead, which can publish any
+# folder. Turn it on once: Settings -> Pages -> Source -> GitHub Actions.
+#
+# Nothing is built here. public/ is committed, and `python3 docs/build.py`
+# is what regenerates it, so what is served is what was reviewed.
+name: Pages
+
+on:
+  push:
+    paths:
+      - "public/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and a run in progress is left to finish: a
+# half-published site is worse than a slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # The github-pages environment only accepts deployments from the default
+    # branch unless that is changed in its settings, so a push to any other
+    # branch stops here rather than failing loudly.
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deployment
+        uses: actions/deploy-pages@v4

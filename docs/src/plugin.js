@@ -40,6 +40,8 @@ import { registerTypes, unregisterTypes } from "./ocaf.js";
 //! The shape of a package, checked when it is declared rather than when it is
 //! switched on. A package that is wrong about itself should say so at the
 //! moment it is written, not the first time somebody clicks it.
+import { resource } from "./payload.js";
+
 export function definePlugin(manifest) {
   const need = (key, what) => {
     if (!manifest[key]) throw new Error('a package needs "' + key + '" - ' + what);
@@ -187,19 +189,11 @@ export class PluginHost {
 
 /* ------------------------------------------------------------ resources
 
-   A package's data - a table of cities, a set of coefficients - rides in the
-   page the way the kernel and the showroom engine do: gzipped, base64'd, in a
-   script element the HTML tokenizer scans straight past. Unpacked on load and
-   not before, so it costs nothing until it is wanted.                       */
+   A package's data - a table of cities, a set of coefficients - arrives the
+   way the kernel and the showroom engine do: unpacked from inside the page in
+   the single-file build, fetched from beside it when the page is served. On
+   load and not before, so it costs nothing until the package is wanted.    */
 
-export async function unpackResource(elementId, what = "package data") {
-  const element = document.getElementById(elementId);
-  if (!element) throw new Error("this page is missing its " + what);
-  const packed = atob(element.textContent.trim());
-  const bytes = new Uint8Array(packed.length);
-  for (let i = 0; i < packed.length; i++) bytes[i] = packed.charCodeAt(i);
-  if (typeof DecompressionStream !== "function")
-    throw new Error("this browser cannot unpack " + what);
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return JSON.parse(await new Response(stream).text());
+export async function unpackResource(elementId, what = "package data", url = null) {
+  return await (await resource(elementId, url, what)).json();
 }

@@ -1,0 +1,1120 @@
+<!doctype html>
+<html lang="en">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z' fill='none' stroke='%232f6feb' stroke-width='1.3' stroke-linejoin='round'/%3E%3C/svg%3E">
+<meta charset="utf-8">
+<title>OCAF Feature Modeller</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<style>
+/* The model is the interface. Everything else floats over it, stays quiet
+   until it is wanted, and can be put away. */
+:root {
+  --ground:      #e9edf1;
+  --panel:       rgba(250, 252, 253, .82);
+  --panel-solid: #f6f8fa;
+  --panel-2:     rgba(0, 20, 40, .05);
+  --line:        rgba(20, 40, 60, .13);
+  --line-soft:   rgba(20, 40, 60, .07);
+  --ink:         #15212b;
+  --ink-2:       #4a5b69;
+  --ink-3:       #7d8d99;
+  --accent:      #0a6cb0;
+  --accent-ink:  #ffffff;
+  --accent-soft: rgba(10, 108, 176, .12);
+  --datum:       #b07408;
+  --good:        #1c7a52;
+  --bad:         #bb3a2c;
+  --bad-soft:    rgba(187, 58, 44, .12);
+  --view-top:    #e4e9ee;
+  --view-bottom: #bcc7d1;
+  --shape:       #93a2ad;
+  --shape-edge:  #3d4c58;
+  --curve:       #12775b;
+  --grid:        #c3ccd4;
+  --grid-axis:   #a2aeb9;
+  --shadow:      0 1px 2px rgba(16, 28, 38, .08), 0 10px 34px rgba(16, 28, 38, .12);
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --edge: 12px;
+  --radius: 9px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #0d1319;
+    --panel:       rgba(23, 32, 40, .82);
+    --panel-solid: #19222b;
+    --panel-2:     rgba(255, 255, 255, .06);
+    --line:        rgba(255, 255, 255, .11);
+    --line-soft:   rgba(255, 255, 255, .06);
+    --ink:         #e6eef4;
+    --ink-2:       #a6b6c2;
+    --ink-3:       #74858f;
+    --accent:      #4aa8ea;
+    --accent-ink:  #06131d;
+    --accent-soft: rgba(74, 168, 234, .18);
+    --datum:       #e0a33c;
+    --good:        #4fb98a;
+    --bad:         #e2705f;
+    --bad-soft:    rgba(226, 112, 95, .16);
+    --view-top:    #18232c;
+    --view-bottom: #0a0f14;
+    --shape:       #7d8d99;
+    --shape-edge:  #cfdbe4;
+    --curve:       #59d0a2;
+    --grid:        #263440;
+    --grid-axis:   #3a4c58;
+    --shadow:      0 1px 2px rgba(0, 0, 0, .5), 0 12px 34px rgba(0, 0, 0, .42);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground:      #0d1319;
+  --panel:       rgba(23, 32, 40, .82);
+  --panel-solid: #19222b;
+  --panel-2:     rgba(255, 255, 255, .06);
+  --line:        rgba(255, 255, 255, .11);
+  --line-soft:   rgba(255, 255, 255, .06);
+  --ink:         #e6eef4;
+  --ink-2:       #a6b6c2;
+  --ink-3:       #74858f;
+  --accent:      #4aa8ea;
+  --accent-ink:  #06131d;
+  --accent-soft: rgba(74, 168, 234, .18);
+  --datum:       #e0a33c;
+  --good:        #4fb98a;
+  --bad:         #e2705f;
+  --bad-soft:    rgba(226, 112, 95, .16);
+  --view-top:    #18232c;
+  --view-bottom: #0a0f14;
+  --shape:       #7d8d99;
+  --shape-edge:  #cfdbe4;
+  --curve:       #59d0a2;
+  --grid:        #1d2831;
+  --grid-axis:   #2c3b46;
+  --shadow:      0 1px 2px rgba(0, 0, 0, .5), 0 12px 34px rgba(0, 0, 0, .42);
+}
+
+* { box-sizing: border-box; }
+/* Said once, loudly. Anything given its own `display` beats the browser's own
+   [hidden] rule, so a hidden flex row stays on screen - which is a bug you find
+   by looking at a screenshot rather than by reading the code. */
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ------------------------------------------------------------- viewport */
+#viewport { position: fixed; inset: 0; }
+#viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+/* The shared look of everything that floats over the model. */
+.float {
+  position: fixed;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+/* --------------------------------------------------------- the tool rail */
+/* Forty-three tools do not fit in one column, or two: the rail runs three wide
+   and still scrolls on a short window. Its own width is a variable because the
+   tree stands beside it and has to know. */
+:root { --rail-cols: 3; --rail-w: calc(var(--rail-cols) * 34px + (var(--rail-cols) - 1) * 2px + 12px); }
+#rail {
+  left: var(--edge); top: 50%; transform: translateY(-50%);
+  width: var(--rail-w);
+  padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  z-index: 3; max-height: calc(100vh - 120px); overflow-y: auto; scrollbar-width: thin;
+}
+#rail::-webkit-scrollbar { width: 5px; }
+#rail::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+#rail [data-group] { display: grid; grid-template-columns: repeat(var(--rail-cols), 34px); gap: 2px; }
+#rail hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 4px; }
+
+/* ------------------------------------------------------------ the sketcher */
+/* The sketch rail stands exactly where the tool rail does, because it is the
+   same rail: while a sketch is open, drawing is the only thing to do. */
+#sketch-rail {
+  left: var(--edge); top: 50%; transform: translateY(-50%);
+  padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  z-index: 4; max-height: calc(100vh - 120px); overflow-y: auto; scrollbar-width: thin;
+}
+#sketch-rail [data-group] { display: grid; grid-template-columns: repeat(2, 34px); gap: 2px; }
+/* display: flex beats the browser's own [hidden] rule, so say it here: the two
+   rails swap places, and neither may be half on screen. */
+#rail[hidden], #sketch-rail[hidden], #sketch-bar[hidden] { display: none; }
+#sketch-rail hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 4px; }
+#sketch-rail .tool.on { background: var(--accent); color: #fff; }
+/* A relation with enough picked to apply says so, rather than sitting there
+   disabled and silent about what it wants. */
+#sketch-rail .tool[data-relation] { opacity: .45; }
+#sketch-rail .tool[data-relation].ready { opacity: 1; color: var(--accent); }
+#sketch-bar .sk-exit[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+#sketch-bar .sk-exit[hidden] { display: none; }
+#sketch-bar .sk-drop:hover { background: var(--bad); border-color: var(--bad); color: #fff; }
+#sketch-bar {
+  /* Below the chip, not over it: the toolbar is still the way out. */
+  left: 50%; top: calc(var(--edge) + 46px); transform: translateX(-50%);
+  z-index: 4; padding: 6px 8px 6px 12px;
+  display: flex; align-items: center; gap: 12px; font-size: 11.5px;
+}
+#sketch-bar .sk-name { font-weight: 600; color: var(--ink); }
+#sketch-bar .sk-hint { color: var(--ink-3); font-family: var(--mono); font-size: 10px; }
+#sketch-bar .sk-exit {
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2);
+  color: var(--ink); font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
+}
+#sketch-bar .sk-exit:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tool {
+  position: relative;
+  width: 34px; height: 34px; padding: 0;
+  display: grid; place-items: center;
+  border: 0; border-radius: 7px; background: none; color: var(--ink-2);
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.tool svg { width: 18px; height: 18px; }
+.tool:hover:not(:disabled) { background: var(--panel-2); color: var(--ink); }
+.tool[data-armed="true"] { background: var(--accent); color: var(--accent-ink); }
+.tool:disabled { opacity: .3; cursor: default; }
+/* The label appears beside the button rather than as a browser tooltip, so it
+   arrives instantly and matches the rest of the interface.
+
+   It is one element, fixed to the window, rather than a ::after on each button:
+   a rail that scrolls has overflow-x: auto forced on it by the rules, so
+   anything drawn beside a button inside it is clipped off - which is exactly
+   what was happening to every one of these. */
+#tip {
+  position: fixed; z-index: 40; pointer-events: none;
+  padding: 4px 9px; border-radius: 5px; white-space: nowrap;
+  background: var(--panel-solid); color: var(--ink);
+  border: 1px solid var(--line); box-shadow: var(--shadow);
+  font-size: 11.5px; opacity: 0; transition: opacity .1s;
+}
+#tip.on { opacity: 1; }
+#tip.dim { color: var(--ink-3); }
+
+/* ------------------------------------------------------ the context menu
+   Right-click on a node in the tree. Only a set has questions worth putting
+   here, but everything gets the same menu so the gesture means one thing. */
+#menu {
+  position: fixed; z-index: 60; margin: 0; padding: 4px; list-style: none;
+  min-width: 190px; border-radius: 7px;
+  background: var(--panel-solid); border: 1px solid var(--line);
+  box-shadow: var(--shadow); font-size: 12px;
+}
+#menu li {
+  display: flex; align-items: baseline; gap: 10px; justify-content: space-between;
+  padding: 5px 9px; border-radius: 4px; cursor: pointer; white-space: nowrap;
+}
+#menu li:hover { background: var(--panel-2); }
+#menu .menu-note { color: var(--ink-3); font-size: 10.5px; }
+#menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+/* A heading, for the menu that is a document menu rather than one question
+   about one node. Not an item: there is nothing to press. */
+#menu .menu-head {
+  display: block; padding: 7px 9px 3px; cursor: default;
+  font-size: 9.5px; font-weight: 600; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+#menu .menu-head:hover { background: none; }
+#menu li.off { cursor: default; opacity: .55; }
+#menu li.off:hover { background: none; }
+
+/* ---------------------------------------------------------- the packages
+   What is on the shelf, and what is running. Deliberately plain: this is a
+   switchboard, not a shop. */
+#packages {
+  position: fixed; z-index: 30; right: var(--edge); top: calc(var(--edge) + 42px);
+  width: 320px; max-height: 70vh; overflow: auto; padding: 6px;
+  background: var(--panel-solid); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+#packages h3 {
+  margin: 0; padding: 6px 8px 8px; font-size: 9.5px; font-weight: 600;
+  letter-spacing: .11em; text-transform: uppercase; color: var(--ink-3);
+}
+.pkg { display: flex; gap: 9px; padding: 8px; border-radius: 7px; align-items: flex-start; }
+.pkg:hover { background: var(--panel-2); }
+.pkg .pkg-text { flex: 1; min-width: 0; }
+.pkg b { display: block; font-size: 12.5px; }
+.pkg span { display: block; margin-top: 3px; font-size: 11px; color: var(--ink-3); line-height: 1.45; }
+.pkg .pkg-adds {
+  margin-top: 5px; font-family: var(--mono); font-size: 9.5px; color: var(--ink-3);
+  word-break: break-word;
+}
+.pkg button {
+  flex: none; min-width: 58px; padding: 4px 9px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel-2); color: var(--ink); font: inherit; font-size: 11px;
+}
+.pkg button:hover { border-color: var(--accent); color: var(--accent); }
+.pkg.on button { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.pkg.on button:hover { filter: brightness(1.08); color: var(--accent-ink); }
+.pkg-note { padding: 6px 9px 8px; font-size: 11px; color: var(--bad); }
+
+#mode-buttons { display: flex; align-items: stretch; }
+#mode-buttons .sep { width: 1px; background: var(--line-soft); }
+
+/* --------------------------------------------------------- Analyse mode */
+body.analysing .fades:not(#chip) { opacity: 0; pointer-events: none; }
+.an-bar {
+  left: 50%; bottom: calc(var(--edge) + 38px); transform: translateX(-50%);
+  width: min(760px, calc(100vw - var(--edge) * 2 - 380px));
+  z-index: 8; padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 7px;
+}
+.an-bar[hidden], .an-panel[hidden] { display: none; }
+.an-row { display: flex; align-items: center; gap: 10px; }
+.an-tag {
+  flex: none; width: 108px; font-family: var(--mono); font-size: 9.5px;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
+}
+.an-site input[type="text"] {
+  flex: 1; min-width: 0; height: 28px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2);
+  color: var(--ink); font-size: 12.5px;
+}
+.an-site input:focus { outline: none; border-color: var(--accent); }
+.an-where { font-family: var(--mono); font-size: 10px; color: var(--ink-3); white-space: nowrap; }
+.an-epw {
+  flex: none; padding: 4px 10px; border: 1px dashed var(--line); border-radius: 6px;
+  font-size: 11px; color: var(--ink-2); cursor: pointer; white-space: nowrap;
+}
+.an-epw:hover { border-color: var(--accent); color: var(--accent); border-style: solid; }
+.an-hits {
+  list-style: none; margin: -2px 0 0 118px; padding: 4px; max-height: 190px; overflow: auto;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--panel-solid);
+}
+.an-hits li {
+  display: flex; align-items: baseline; gap: 8px; padding: 5px 8px;
+  border-radius: 5px; cursor: pointer; font-size: 12px;
+}
+.an-hits li:hover { background: var(--accent-soft); }
+.an-hits b { font-weight: 600; }
+.an-hits span { color: var(--ink-3); font-size: 11px; flex: 1; }
+.an-hits i { font-family: var(--mono); font-size: 10px; color: var(--ink-3); font-style: normal; }
+.an-hits .an-miss { color: var(--ink-3); cursor: default; }
+.an-when input[type="range"] { flex: 1; min-width: 60px; margin: 0; accent-color: var(--accent); }
+.an-read {
+  flex: none; width: 92px; text-align: center; font-family: var(--mono);
+  font-size: 11px; color: var(--ink);
+}
+.an-sun { flex: none; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.an-go .seg { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--panel-2); }
+.an-go .seg button {
+  border: 0; background: none; color: var(--ink-2); cursor: pointer;
+  padding: 3px 9px; border-radius: 5px; font-size: 11.5px;
+}
+.an-go .seg button[aria-pressed="true"] {
+  background: var(--panel-solid); color: var(--ink); font-weight: 500;
+  box-shadow: 0 1px 2px rgba(16, 28, 38, .1);
+}
+.an-note { flex: 1; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+.an-panel {
+  right: var(--edge); top: var(--edge); width: 300px;
+  max-height: calc(100vh - var(--edge) * 2); z-index: 8;
+  display: flex; flex-direction: column;
+}
+.an-site-name { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.an-body { overflow: auto; padding-bottom: 8px; }
+.an-block { padding: 10px 12px 12px; border-top: 1px solid var(--line-soft); }
+.an-block:first-child { border-top: 0; }
+.an-block h3 {
+  margin: 0 0 8px; font-size: 9.5px; font-weight: 600; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.an-pair { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 1.5px 0; }
+.an-pair span { color: var(--ink-2); }
+.an-pair b { font-family: var(--mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+.an-small { margin: 7px 0 0; font-size: 10.5px; color: var(--ink-3); line-height: 1.5; }
+.an-figure { margin: 2px 0 8px; }
+.an-chart { width: 100%; height: auto; display: block; overflow: visible; }
+.an-chart .an-axis { font-family: var(--mono); font-size: 7.5px; fill: var(--ink-3); }
+.an-chart .an-mid { text-anchor: middle; }
+.an-chart .an-plot { fill: var(--panel-2); stroke: var(--line); stroke-width: .6; }
+.an-chart .an-sat { fill: none; stroke: var(--ink-3); stroke-width: 1.1; }
+.an-chart .an-rh { fill: none; stroke: var(--line); stroke-width: .7; }
+.an-chart .an-zone { fill: var(--accent-soft); stroke: var(--accent); stroke-width: .8; }
+.an-chart .an-ring { fill: none; stroke: var(--line); stroke-width: .7; }
+.an-chart .an-range { stroke: var(--line); stroke-width: 3; stroke-linecap: round; }
+.an-legend { display: flex; align-items: center; gap: 0; margin-bottom: 7px; flex-wrap: wrap; }
+.an-legend span { flex: 1; height: 11px; min-width: 12px; }
+.an-legend span:first-of-type { border-radius: 3px 0 0 3px; }
+.an-legend span:nth-of-type(7) { border-radius: 0 3px 3px 0; }
+.an-legend b, .an-legend i {
+  width: 100%; font-family: var(--mono); font-size: 9.5px; font-weight: 400;
+  font-style: normal; color: var(--ink-3); margin-top: 3px;
+}
+.an-legend b { width: 50%; }
+.an-legend i { width: 50%; text-align: right; }
+
+/* ------------------------------------------------------------ Flow mode */
+body.flowing .fades:not(#chip) { opacity: 0; pointer-events: none; }
+.fl-bar {
+  left: 50%; bottom: calc(var(--edge) + 38px); transform: translateX(-50%);
+  width: min(700px, calc(100vw - var(--edge) * 2 - 360px));
+  z-index: 8; padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 7px;
+}
+.fl-bar[hidden], .fl-panel[hidden] { display: none; }
+.fl-row { display: flex; align-items: center; gap: 10px; }
+.fl-tag {
+  flex: none; width: 62px; font-family: var(--mono); font-size: 9.5px;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
+}
+.fl-row input[type="range"] { flex: 1; min-width: 50px; margin: 0; accent-color: var(--accent); }
+.fl-read {
+  flex: none; width: 62px; text-align: right; font-family: var(--mono);
+  font-size: 11px; color: var(--ink);
+}
+.fl-row .btn { flex: none; padding: 3px 10px; font-size: 11.5px; }
+.fl-toggles .seg { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--panel-2); }
+.fl-toggles .seg button {
+  border: 0; background: none; color: var(--ink-3); cursor: pointer;
+  padding: 3px 9px; border-radius: 5px; font-size: 11.5px;
+}
+.fl-toggles .seg button[aria-pressed="true"] {
+  background: var(--panel-solid); color: var(--ink); font-weight: 500;
+  box-shadow: 0 1px 2px rgba(16, 28, 38, .1);
+}
+.fl-note { flex: 1; font-family: var(--mono); font-size: 10px; color: var(--ink-3); text-align: right; }
+.fl-toggles { flex-wrap: wrap; }
+#fl-map button[aria-pressed="true"] { color: var(--accent); }
+
+.fl-panel {
+  right: var(--edge); top: var(--edge); width: 292px;
+  max-height: calc(100vh - var(--edge) * 2); z-index: 8;
+  display: flex; flex-direction: column;
+}
+.fl-clock { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.fl-body { overflow: auto; padding-bottom: 8px; }
+.fl-block { padding: 10px 12px 12px; border-top: 1px solid var(--line-soft); }
+.fl-block:first-child { border-top: 0; }
+.fl-block h3 {
+  margin: 0 0 8px; font-size: 9.5px; font-weight: 600; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.fl-pair { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 1.5px 0; }
+.fl-pair span { color: var(--ink-2); }
+.fl-pair b { font-family: var(--mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+.fl-small { margin: 7px 0 0; font-size: 10.5px; color: var(--ink-3); line-height: 1.5; }
+.fl-los { display: flex; align-items: center; gap: 7px; padding: 1.5px 0; }
+.fl-los b { flex: none; width: 12px; font-family: var(--mono); font-size: 11px; font-weight: 600; }
+.fl-los-bar { flex: 1; height: 9px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+.fl-los-bar i { display: block; height: 100%; border-radius: 3px; }
+.fl-small.fl-warn { color: var(--bad); }
+.fl-legend { margin: 0 0 5px 19px; font-size: 10px; color: var(--ink-3); }
+.fl-los b[style] { border-radius: 3px; height: 11px; }
+.fl-los em {
+  flex: none; width: 30px; text-align: right; font-style: normal;
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+}
+
+/* A set in the tree: its own row, then everything in it, indented. */
+li.holds { display: block; }
+li.holds > .branch { margin-left: 11px; border-left: 1px solid var(--line); }
+
+/* ------------------------------------------------------- the corner chip */
+#chip {
+  left: var(--edge); top: var(--edge); z-index: 3;
+  display: flex; align-items: stretch; overflow: hidden;
+}
+#chip button {
+  border: 0; background: none; cursor: pointer; padding: 8px 11px;
+  display: flex; align-items: center; gap: 8px; color: inherit;
+}
+#chip button:hover { background: var(--panel-2); }
+#chip .name { font-weight: 600; letter-spacing: -.01em; }
+#chip .count { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+#chip .sep { width: 1px; background: var(--line-soft); }
+/* Undo and redo sit in the chip because that is where the document lives.
+   Greyed rather than hidden when there is nothing to go back to: what a stack
+   has on it is worth being able to see. */
+#chip .step { padding: 8px 9px; }
+#chip .step svg { width: 15px; height: 15px; }
+#chip .step:disabled { opacity: .3; cursor: default; }
+#chip .step:disabled:hover { background: none; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
+#btn-link.live .dot { background: var(--good); box-shadow: 0 0 0 3px rgba(28, 122, 82, .18); }
+#link-label { font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); }
+
+/* ------------------------------------------------------------ the tree */
+/* The rail runs down the left edge, so the tree stands beside it rather than
+   under it. */
+#tree-panel {
+  left: calc(var(--edge) * 2 + var(--rail-w)); top: calc(var(--edge) + 46px);
+  width: 232px; max-height: min(46vh, 460px);
+  display: flex; flex-direction: column; z-index: 3;
+}
+#tree-panel[hidden] { display: none; }
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--line-soft);
+}
+.panel-head h2 {
+  margin: 0; font-size: 9.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .11em; color: var(--ink-3);
+}
+.icon-btn {
+  border: 0; background: none; cursor: pointer; color: var(--ink-3);
+  width: 24px; height: 24px; border-radius: 5px; display: grid; place-items: center;
+}
+.icon-btn:hover { background: var(--panel-2); color: var(--ink); }
+.icon-btn svg { width: 14px; height: 14px; }
+#tree { list-style: none; margin: 0; padding: 6px 0 8px; overflow: auto; }
+.tree .branch { list-style: none; margin: 0; padding: 0; }
+.set-label {
+  padding: 6px 12px 3px; font-size: 9.5px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
+}
+.node {
+  display: flex; align-items: center; gap: 7px;
+  padding: 3px 8px 3px 12px; cursor: pointer; user-select: none;
+  border-left: 2px solid transparent;
+}
+.node:hover { background: var(--panel-2); }
+.node.selected { background: var(--accent-soft); border-left-color: var(--accent); }
+/* Shift-clicked alongside the one the panel is showing. Marked, but not as
+   loudly as the one whose definition is open. */
+.node.alongside { background: var(--accent-soft); border-left-color: var(--line); }
+.node .glyph { width: 14px; height: 14px; flex: none; color: var(--ink-2); }
+.node.datum .glyph { color: var(--datum); }
+.node .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node.consumed .label, .node.consumed .glyph { opacity: .42; }
+.node.consumed .label { text-decoration: line-through; text-decoration-thickness: 1px; }
+.node.failed .label { color: var(--bad); }
+.node .kind { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
+.eye {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  width: 14px; height: 14px; color: var(--ink-3); opacity: 0;
+}
+.node:hover .eye, .eye.off { opacity: .7; }
+.eye:hover { opacity: 1; color: var(--accent); }
+
+/* ------------------------------------------------------ the definition */
+#def-panel {
+  right: var(--edge); top: var(--edge);
+  width: 288px; max-height: calc(100vh - var(--edge) * 2 - 40px);
+  display: flex; flex-direction: column; z-index: 3;
+}
+#def-panel[hidden] { display: none; }
+#def { overflow: auto; }
+.def-head { padding: 11px 12px 10px; border-bottom: 1px solid var(--line-soft); }
+.name-row { display: flex; gap: 8px; align-items: center; }
+input.name {
+  flex: 1; min-width: 0; background: none; border: 1px solid transparent;
+  border-radius: 5px; padding: 3px 6px; font-weight: 600; margin-left: -6px;
+}
+input.name:hover { border-color: var(--line); }
+input.name:focus { background: var(--panel-2); border-color: var(--accent); outline: none; }
+.badge {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .03em;
+  padding: 2px 7px; border-radius: 999px; background: var(--panel-2); color: var(--ink-2);
+}
+.badge.datum { color: var(--datum); }
+.badge.body, .badge.operation { color: var(--accent); background: var(--accent-soft); }
+.def-head .meta {
+  margin-top: 6px; font-family: var(--mono); font-size: 9.5px;
+  color: var(--ink-3); line-height: 1.65; word-break: break-all;
+}
+.summary { padding: 10px 12px 0; color: var(--ink-2); font-size: 12px; max-width: 40ch; }
+.field { padding: 10px 12px 11px; border-top: 1px solid var(--line-soft); }
+.field:first-of-type { border-top: 0; }
+.field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.field-head label { font-weight: 500; }
+.value-box { display: flex; align-items: baseline; gap: 3px; }
+.value-box input[type="number"] {
+  width: 66px; text-align: right; background: var(--panel-2);
+  border: 1px solid transparent; border-radius: 5px; padding: 2px 6px;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.value-box input:focus { border-color: var(--accent); outline: none; }
+.value-box .unit { font-family: var(--mono); font-size: 10px; color: var(--ink-3); width: 17px; }
+input[type="range"] { width: 100%; margin: 8px 0 0; accent-color: var(--accent); }
+select {
+  width: 100%; margin-top: 6px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px;
+}
+/* a choice argument: the alternatives side by side, not hidden in a menu */
+.segmented { display: flex; gap: 2px; margin-top: 7px; padding: 2px; border-radius: 7px; background: var(--panel-2); }
+.segmented button {
+  flex: 1; border: 0; background: none; color: var(--ink-2); cursor: pointer;
+  padding: 4px 8px; border-radius: 5px; font-size: 12px;
+}
+.segmented button:hover { color: var(--ink); }
+.segmented button[aria-pressed="true"] {
+  background: var(--panel-solid); color: var(--ink); font-weight: 500;
+  box-shadow: 0 1px 2px rgba(16, 28, 38, .1);
+}
+/* Import: the ways one file can land, each with the consequence written beside
+   it. Not a preference - "one object" and "an assembly" are two different
+   documents, so the difference is spelled out rather than abbreviated. */
+#import-choice { display: grid; gap: 6px; padding: 2px 14px 6px; }
+.pick-opt {
+  display: block; width: 100%; text-align: left; padding: 9px 11px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2);
+  color: var(--ink); cursor: pointer; font: inherit;
+}
+.pick-opt:hover { border-color: var(--accent); }
+.pick-opt[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.pick-opt b { display: block; font-size: 12.5px; font-weight: 600; }
+.pick-opt span { display: block; margin-top: 3px; font-size: 11px; color: var(--ink-3); line-height: 1.45; }
+
+/* the code editor: a Script feature needs more room than a slider does */
+#def-panel.wide { width: 460px; }
+.editor { padding: 10px 12px 12px; border-top: 1px solid var(--line-soft); }
+.editor-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.editor textarea {
+  width: 100%; height: 260px; margin-top: 7px; resize: vertical;
+  background: var(--panel-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px;
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.6; tab-size: 2;
+  white-space: pre; overflow-wrap: normal; overflow-x: auto;
+}
+.editor textarea:focus { border-color: var(--accent); outline: none; }
+.editor .hint { margin-top: 7px; font-size: 11px; color: var(--ink-3); }
+.editor .row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.editor .row .spacer { flex: 1; }
+/* the drawing, in the panel: the way in to the sketcher, and the JSON that is
+   the drawing itself rather than a report of it */
+.field .row-btn {
+  width: 100%; margin: 4px 0 6px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2);
+  color: var(--ink); font: inherit; font-size: 11px; padding: 5px 8px; cursor: pointer;
+}
+.field .row-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.field textarea.code {
+  width: 100%; resize: vertical;
+  background: var(--panel-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px;
+  font-family: var(--mono); font-size: 10px; line-height: 1.55;
+  white-space: pre; overflow-wrap: normal; overflow-x: auto;
+}
+.field textarea.code:focus { border-color: var(--accent); outline: none; }
+
+.params-head {
+  padding: 10px 12px 0; font-size: 9.5px; font-weight: 600;
+  letter-spacing: .11em; text-transform: uppercase; color: var(--ink-3);
+}
+/* A slider being driven from somewhere else, and the way back off it. */
+.wired {
+  display: flex; align-items: center; gap: 8px; margin-top: 7px; padding: 5px 8px;
+  border-radius: 6px; background: var(--accent-soft); font-size: 11px; color: var(--ink-2);
+}
+.wired span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wired b { color: var(--ink); font-weight: 600; }
+.wired button {
+  flex: none; height: 20px; padding: 0 8px; border: 1px solid var(--line);
+  border-radius: 5px; background: var(--panel-solid); color: var(--ink-2);
+  font-size: 10.5px; cursor: pointer;
+}
+.wired button:hover { color: var(--bad); border-color: var(--bad); }
+select.drive { margin-top: 7px; }
+select.drive[hidden] { display: none; }
+/* A slider can be driven from a number, but most never are, so the way to do it
+   is one small button rather than a dropdown under every parameter. */
+.drive-toggle {
+  flex: none; width: 19px; height: 19px; margin-left: 2px; padding: 0;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 5px; background: none;
+  color: var(--ink-3); cursor: pointer;
+}
+.drive-toggle:hover, .drive-toggle[aria-expanded="true"] {
+  color: var(--accent); border-color: var(--accent); background: var(--accent-soft);
+}
+.drive-toggle svg { width: 12px; height: 12px; }
+input[type="range"]:disabled { opacity: .55; }
+input[type="number"]:disabled { opacity: .7; }
+
+/* What a feature computed, as opposed to what it built. */
+.readout {
+  margin-top: 6px; padding: 7px 9px; border-radius: 6px; max-height: 132px; overflow: auto;
+  background: var(--panel-2); border: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.55; color: var(--ink-2);
+  word-break: break-word;
+}
+
+select.many { margin-top: 4px; }
+input.line {
+  width: 100%; margin-top: 6px; height: 26px; padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel-solid);
+  font-family: var(--mono); font-size: 11px; color: var(--ink);
+}
+input.line:focus { outline: none; border-color: var(--accent); }
+/* Three numbers side by side: the offset on the vertex under the handle. */
+.triple { display: flex; gap: 6px; margin-top: 7px; }
+.triple label { flex: 1; display: flex; align-items: center; gap: 5px; min-width: 0; }
+.triple span { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.triple input { width: 100%; min-width: 0; }
+.attr-path { margin-top: 6px; font-family: var(--mono); font-size: 9px; color: var(--ink-3); }
+.attr-path b { color: var(--ink-2); font-weight: 500; }
+.notice {
+  margin: 10px 12px; padding: 8px 10px; border-radius: 6px;
+  background: var(--bad-soft); color: var(--bad); font-size: 12px;
+}
+.notice.info { background: var(--panel-2); color: var(--ink-2); }
+.actions { display: flex; gap: 6px; padding: 11px 12px; border-top: 1px solid var(--line-soft); }
+.btn {
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+  border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); color: var(--accent-ink); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn svg { width: 14px; height: 14px; }
+
+/* -------------------------------------------------------- bottom status */
+#status {
+  left: var(--edge); bottom: var(--edge); z-index: 3;
+  display: flex; align-items: stretch; overflow: hidden;
+  font-family: var(--mono); font-size: 10.5px;
+}
+#status > * { padding: 6px 11px; display: flex; align-items: center; gap: 7px; }
+#status .sep { width: 1px; padding: 0; background: var(--line-soft); }
+#status-sel { color: var(--ink-2); }
+#status-sel b { color: var(--ink); font-weight: 500; }
+#btn-log { border: 0; background: none; cursor: pointer; color: var(--ink-3); }
+#btn-log:hover { background: var(--panel-2); color: var(--ink); }
+#btn-log .ran { color: var(--good); }
+#btn-log .err { color: var(--bad); }
+
+#log-pop {
+  left: var(--edge); bottom: calc(var(--edge) + 38px);
+  width: 300px; max-height: 40vh; overflow: auto; z-index: 4;
+  padding: 8px 0; font-family: var(--mono); font-size: 10.5px; line-height: 1.75;
+}
+#log-pop[hidden] { display: none; }
+#log-pop div { padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#log-pop .head { color: var(--ink-2); }
+#log-pop .ran { color: var(--good); }
+#log-pop .same { color: var(--ink-3); }
+#log-pop .err { color: var(--bad); white-space: normal; }
+#log-pop .stream { color: var(--accent); }
+
+/* ------------------------------------------------------- view controls */
+#view-tools {
+  right: var(--edge); bottom: var(--edge); z-index: 3;
+  display: flex; padding: 3px; gap: 2px;
+}
+#view-tools button {
+  border: 0; background: none; cursor: pointer; color: var(--ink-3);
+  padding: 5px 9px; border-radius: 6px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .06em;
+}
+#view-tools button:hover { background: var(--panel-2); color: var(--ink); }
+
+#chip button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+/* The samples menu. One click opens it, a second picks - so a whole document
+   is never replaced by a single stray click. */
+#sample-menu {
+  position: fixed; z-index: 20; min-width: 268px; max-width: 320px; padding: 6px;
+  background: var(--panel-solid); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+#sample-menu[hidden] { display: none; }
+#sample-menu button {
+  display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px;
+  background: none; color: var(--ink); text-align: left; cursor: pointer;
+}
+#sample-menu button:hover { background: var(--accent-soft); }
+#sample-menu b { display: block; font-size: 12.5px; font-weight: 600; }
+#sample-menu span { display: block; margin-top: 3px; font-size: 11px; color: var(--ink-3); line-height: 1.45; }
+#sample-menu .warn {
+  padding: 6px 10px 2px; font-family: var(--mono); font-size: 9.5px; color: var(--ink-3);
+}
+
+/* ------------------------------------------------------------- showroom */
+#showroom { position: fixed; inset: 0; z-index: 6; opacity: 0; pointer-events: none; }
+#showroom.on { opacity: 1; pointer-events: auto; }
+#showroom canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+/* The move between the two views is a dissolve, not a cut. */
+#showroom, .fades { transition: opacity .5s cubic-bezier(.4,0,.2,1); }
+body.staging .fades { opacity: 0; pointer-events: none; }
+
+#stage-ui {
+  position: fixed; left: 50%; bottom: 18px; transform: translate(-50%, 0);
+  z-index: 7; display: flex; flex-direction: column; gap: 10px; align-items: center;
+  opacity: 0; pointer-events: none;
+  transition: opacity .45s .18s cubic-bezier(.4,0,.2,1), transform .45s .18s cubic-bezier(.4,0,.2,1);
+}
+body.staging #stage-ui { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+#stage-ui:not(.shown) { transform: translate(-50%, 22px); }
+
+.tray {
+  display: flex; align-items: center; gap: 3px; padding: 5px;
+  border-radius: 12px; background: rgba(16, 20, 26, .68); border: 1px solid rgba(255,255,255,.12);
+  backdrop-filter: blur(20px) saturate(150%); -webkit-backdrop-filter: blur(20px) saturate(150%);
+  box-shadow: 0 8px 30px rgba(0,0,0,.35); color: #eef3f7;
+}
+.tray .divider { width: 1px; align-self: stretch; margin: 3px 5px; background: rgba(255,255,255,.14); }
+.tray .caption {
+  font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: rgba(238,243,247,.5); padding: 0 8px 0 4px;
+}
+.tray button {
+  border: 0; background: none; color: inherit; cursor: pointer;
+  padding: 6px 11px; border-radius: 8px; font-size: 12px;
+}
+.tray button:hover { background: rgba(255,255,255,.1); }
+.tray button[aria-pressed="true"] { background: rgba(255,255,255,.92); color: #10151b; font-weight: 500; }
+.tray .part { font-family: var(--mono); font-size: 11px; padding: 0 10px; color: rgba(238,243,247,.85); }
+.swatch {
+  width: 26px; height: 26px; border-radius: 50%; padding: 0;
+  border: 1px solid rgba(255,255,255,.28); cursor: pointer;
+}
+.swatch[aria-pressed="true"] { outline: 2px solid #fff; outline-offset: 2px; }
+.tray input[type="range"] { width: 96px; accent-color: #fff; margin: 0 8px; }
+#stage-hint {
+  font-family: var(--mono); font-size: 10px; color: rgba(238,243,247,.55);
+  text-shadow: 0 1px 6px rgba(0,0,0,.6);
+}
+
+/* ------------------------------------------------------------------- the AI
+   A bar along the bottom, over the model, because the model is the thing being
+   talked about. It grows upwards as there is more to say. */
+#ai-bar {
+  /* Clear of the status strip, which is also along the bottom. */
+  left: 50%; bottom: calc(var(--edge) + 38px); transform: translateX(-50%);
+  width: min(720px, calc(100vw - var(--edge) * 2 - 40px));
+  z-index: 8; display: flex; flex-direction: column; overflow: hidden;
+}
+#ai-bar[hidden] { display: none; }
+.ai-log {
+  max-height: min(46vh, 380px); overflow-y: auto; padding: 0;
+  font-size: 12px; line-height: 1.55; scrollbar-width: thin;
+}
+.ai-log:empty { display: none; }
+/* Folded away: the prompt stays, the working goes. What is happening is still
+   on screen - it is the model. */
+#ai-bar.folded .ai-log { display: none; }
+.ai-fold {
+  flex: none; width: 22px; height: 22px; padding: 0; position: relative;
+  display: grid; place-items: center; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel-2); color: var(--ink-3);
+}
+.ai-fold:hover { color: var(--ink); }
+.ai-fold::before {
+  content: ""; width: 7px; height: 7px; border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translate(-1px, -1px);
+}
+#ai-bar.folded .ai-fold::before { transform: rotate(-135deg) translate(-1px, -1px); }
+/* Shut, with something behind it: say how much rather than hiding it silently. */
+#ai-bar.folded .ai-fold[data-count]:not([data-count=""])::after {
+  content: attr(data-count); position: absolute; left: 100%; margin-left: 5px;
+  font-family: var(--mono); font-size: 9.5px; color: var(--ink-3);
+}
+.ai-log > * { padding: 7px 13px; border-bottom: 1px solid var(--line-soft); }
+.ai-log .said { color: var(--ink); }
+.ai-log .asked { color: var(--ink-2); background: var(--panel-2); font-weight: 500; }
+.ai-log .did {
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+  display: flex; gap: 8px; align-items: baseline;
+}
+.ai-log .did b { color: var(--good); font-weight: 500; flex: none; }
+.ai-log .did span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-log .bad { color: var(--bad); font-family: var(--mono); font-size: 10.5px; }
+.ai-row { display: flex; align-items: center; gap: 7px; padding: 8px 9px 8px 13px; }
+.ai-row .ai-tag {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-3); flex: none;
+}
+#ai-prompt {
+  flex: 1; min-width: 0; height: 30px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2);
+  color: var(--ink); font-size: 12.5px;
+}
+#ai-prompt:focus { outline: none; border-color: var(--accent); }
+#ai-bar.working .ai-tag { color: var(--accent); }
+@keyframes ai-pulse { 50% { opacity: .35; } }
+#ai-bar.working .ai-tag { animation: ai-pulse 1.4s ease-in-out infinite; }
+
+/* ------------------------------------------------------------ boot state */
+#boot {
+  position: fixed; inset: 0; z-index: 10;
+  display: grid; place-content: center; justify-items: center; gap: 13px;
+  text-align: center; background: var(--ground);
+}
+#boot[hidden] { display: none; }
+#boot .ring {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--accent);
+  animation: spin 900ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#boot b { font-size: 13px; font-weight: 600; }
+#boot-message { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+#boot .note { font-size: 11.5px; color: var(--ink-3); max-width: 38ch; margin: 0; }
+#boot.failed .ring { animation: none; border-color: var(--bad); }
+
+/* ----------------------------------------------------------------- modals */
+dialog {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 0;
+  background: var(--panel-solid); color: var(--ink);
+  max-width: 600px; width: calc(100% - 40px); box-shadow: var(--shadow);
+}
+dialog::backdrop { background: rgba(8, 14, 19, .5); }
+dialog .dhead { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); }
+dialog h3 { margin: 0; font-size: 13px; }
+dialog p { margin: 6px 0 0; color: var(--ink-2); max-width: 62ch; font-size: 12.5px; }
+dialog ol { margin: 10px 0 0; padding-left: 20px; color: var(--ink-2); line-height: 1.85; font-size: 12.5px; }
+dialog code {
+  font-family: var(--mono); font-size: 10.5px; background: var(--panel-2);
+  border-radius: 4px; padding: 1px 5px; color: var(--accent);
+}
+dialog label.row { display: block; padding: 13px 16px 0; font-size: 12.5px; }
+dialog input.url {
+  width: 100%; margin-top: 6px; padding: 6px 9px; font-family: var(--mono);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+}
+dialog textarea {
+  width: 100%; height: 290px; border: 0;
+  border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft);
+  background: var(--panel-2); color: var(--ink);
+  font-family: var(--mono); font-size: 11px; padding: 12px 16px; resize: vertical;
+}
+dialog .cli {
+  padding: 10px 16px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+  border-bottom: 1px solid var(--line-soft); overflow-x: auto; white-space: nowrap;
+}
+dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: flex-end; }
+
+@media (max-width: 720px) {
+  #tree-panel { max-height: 34vh; width: 200px; }
+  #def-panel { width: calc(100vw - var(--edge) * 2 - 62px); max-width: 288px; }
+  :root { --rail-cols: 2; }
+  #rail { top: auto; bottom: 56px; transform: none; max-height: 52vh; }
+}
+@media (prefers-reduced-motion: reduce) { *, ::after { transition: none !important; animation: none !important; } }
+</style>
+
+<div id="viewport"></div>
+
+<div id="boot">
+  <div class="ring"></div>
+  <b>OCAF Feature Modeller</b>
+  <div id="boot-message">loading</div>
+  <p class="note">OpenCascade is compiled into this page. The first load unpacks the
+     kernel; after that it is instant.</p>
+</div>
+
+<div class="float fades" id="chip">
+  <!-- The document menu. First button, top left, where a file menu has always
+       been: what comes in and what goes out. -->
+  <button class="step" id="btn-menu" title="Document menu" aria-label="Document menu"
+          aria-haspopup="true" aria-expanded="false"></button>
+  <div class="sep"></div>
+  <button id="btn-tree" title="Specification tree (T)">
+    <span class="name" id="doc-title">Part1</span>
+    <span class="count" id="doc-count"></span>
+  </button>
+  <div class="sep"></div>
+  <button id="btn-link" title="Which kernel is building this"><span class="dot"></span><span id="link-label">starting…</span></button>
+  <div class="sep"></div>
+  <button class="step" id="btn-undo" data-label="Undo (Ctrl+Z)" aria-label="Undo" disabled></button>
+  <button class="step" id="btn-redo" data-label="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled></button>
+  <div class="sep"></div>
+  <button id="btn-model" title="The parametric model file">Model</button>
+  <div class="sep"></div>
+  <button id="btn-sample" title="Load a worked example">Samples</button>
+  <div class="sep"></div>
+  <button id="btn-graph" aria-pressed="false" title="Edit the model as a node graph (G)">Nodes</button>
+  <div class="sep"></div>
+  <button id="btn-stage" title="See it as a product">Showroom</button>
+  <div class="sep"></div>
+  <!-- One button per mode a loaded package offers. Empty until one is. -->
+  <span id="mode-buttons"></span>
+  <button id="btn-ai" aria-pressed="false" title="Ask Claude to build it (A)">AI</button>
+  <div class="sep"></div>
+  <button class="step" id="btn-packages" title="Packages" aria-label="Packages"
+          aria-pressed="false"></button>
+</div>
+
+<!-- What is on the shelf. A package is off until it is asked for: its nodes are
+     not in the catalogue, not on the rail and not in the assistant's briefing
+     until then, and its data is not unpacked. -->
+<div id="packages" hidden></div>
+
+<aside class="float fades" id="tree-panel">
+  <div class="panel-head">
+    <h2>Specification tree</h2>
+    <span class="count" id="tree-entry" style="font-family:var(--mono);font-size:9.5px;color:var(--ink-3)">0:1:1</span>
+  </div>
+  <ul id="tree"></ul>
+</aside>
+
+<nav class="float fades" id="rail"></nav>
+
+<!-- The sketcher's rail. Same place, same shape: while a sketch is open the
+     modelling tools have nothing to add, so they step aside for the ones that
+     draw. -->
+<nav class="float fades" id="sketch-rail" hidden></nav>
+
+<!-- What the sketcher is doing, along the top: which sketch, what is being
+     drawn, and the way out. -->
+<div class="float fades" id="sketch-bar" hidden>
+  <span class="sk-name" id="sketch-who">Sketch</span>
+  <span class="sk-hint" id="sketch-hint">click to draw</span>
+  <button class="sk-exit" id="sketch-tangent" aria-pressed="true" hidden
+          title="Leave the last segment smoothly">Tangent</button>
+  <button class="sk-exit sk-drop" id="sketch-unrelate" hidden
+          title="Take this relation off (Delete)">Delete relation</button>
+  <button class="sk-exit" id="sketch-done">Done</button>
+</div>
+
+<aside class="float fades" id="def-panel" hidden>
+  <div class="panel-head">
+    <h2>Definition</h2>
+    <button class="icon-btn" id="btn-def-close" title="Close (Esc)" aria-label="Close"></button>
+  </div>
+  <div id="def"></div>
+</aside>
+
+<div class="float fades" id="status">
+  <span id="status-sel">nothing selected</span>
+  <div class="sep"></div>
+  <button id="btn-log" title="What the last regeneration did"><span id="status-regen">ready</span></button>
+  <div class="sep"></div>
+  <span id="status-kernel"></span>
+</div>
+<div class="float" id="log-pop" hidden></div>
+<div id="sample-menu" hidden></div>
+<div id="tip"></div>
+<ul id="menu" hidden></ul>
+
+<div class="float fades" id="view-tools">
+  <button data-view="iso">ISO</button>
+  <button data-view="top">TOP</button>
+  <button data-view="front">FRONT</button>
+  <button data-view="right">RIGHT</button>
+  <button data-view="fit">FIT</button>
+</div>
+
+<!-- Claude, working the same channel everything else works. What it writes
+     goes through mdl.run like a dragged wire, so the part is built in front of
+     you rather than handed over finished. -->
+<section class="float" id="ai-bar" hidden>
+  <div class="ai-log" id="ai-log"></div>
+  <div class="ai-row">
+    <button class="ai-fold" id="ai-fold" aria-pressed="false"
+            data-label="Hide what it is doing" aria-label="Hide what it is doing"></button>
+    <span class="ai-tag" id="ai-state">ask</span>
+    <input id="ai-prompt" type="text" spellcheck="false" autocomplete="off"
+           placeholder="a hillside villa with a lap pool and a cantilevered roof…"
+           aria-label="What to build">
+    <button class="btn primary" id="ai-send">Build</button>
+    <button class="btn" id="ai-stop" hidden>Stop</button>
+    <button class="icon-btn" id="ai-close" title="Close (Esc)" aria-label="Close"></button>
+  </div>
+</section>
+
+<div id="showroom"><canvas id="stage-canvas"></canvas></div>
+
+<div id="stage-ui">
+  <div id="stage-hint">drag to orbit · shift-drag to pan · wheel to zoom · click a part to re-finish it</div>
+  <div class="tray" id="tray-finish">
+    <span class="part" id="stage-part">nothing selected</span>
+    <div class="divider"></div>
+    <span class="caption">Finish</span>
+    <span id="stage-finishes" style="display:flex;gap:4px"></span>
+  </div>
+  <div class="tray">
+    <button id="btn-stage-exit">← Modelling</button>
+    <div class="divider"></div>
+    <span class="caption">Scene</span>
+    <span id="stage-envs" style="display:flex;gap:2px"></span>
+    <div class="divider"></div>
+    <span class="caption">Light</span>
+    <input type="range" id="stage-exposure" min="0.4" max="2" step="0.05" value="1">
+    <div class="divider"></div>
+    <button id="btn-stage-ground" aria-pressed="false">Floor</button>
+    <button id="btn-stage-reflect" aria-pressed="true">Reflection</button>
+    <button id="btn-stage-spin" aria-pressed="false">Turntable</button>
+  </div>
+</div>
+
+<dialog id="modal-step">
+  <div class="dhead">
+    <h3 id="step-title">Export STEP</h3>
+    <p id="step-note"></p>
+  </div>
+  <div class="cli" id="step-summary"></div>
+  <textarea id="step-text" spellcheck="false" readonly></textarea>
+  <div class="dfoot">
+    <button class="btn" id="btn-step-copy">Copy</button>
+    <button class="btn primary" id="btn-step-close">Done</button>
+  </div>
+</dialog>
+
+<!-- Import. The file is already read by the time this is on screen, so what it
+     asks is the one question the file cannot answer for itself: whether the
+     parts in it should stay together or become the assembly they describe.
+     Offered only for a file that has more than one thing in it. -->
+<dialog id="modal-import">
+  <div class="dhead">
+    <h3 id="import-title">Import</h3>
+    <p id="import-note"></p>
+  </div>
+  <div id="import-choice"></div>
+  <div class="dfoot">
+    <button class="btn" id="btn-import-cancel">Cancel</button>
+    <button class="btn primary" id="btn-import-go">Import</button>
+  </div>
+</dialog>
+<input type="file" id="file-input" hidden>
+
+<dialog id="modal-link">
+  <div class="dhead">
+    <h3>Which kernel</h3>
+    <p>This page carries OpenCascade compiled to WebAssembly, and builds the geometry
+       itself. A native kernel does the same work with the real OCAF document behind
+       it — labels, TFunction drivers, TNaming results — and can write
+       <code>.cbf</code>, STEP and OBJ to disk.</p>
+    <ol>
+      <li>Build it once: <code>cmake -S ocaf -B ocaf/build &amp;&amp; cmake --build ocaf/build -j</code></li>
+      <li>Serve a model: <code>ocaf/build/ocafcad serve ocaf/examples/cube_fillet.ocaf.json</code></li>
+    </ol>
+  </div>
+  <label class="row">Kernel address
+    <input class="url" id="link-url" value="http://127.0.0.1:8787" spellcheck="false">
+  </label>
+  <div class="dfoot">
+    <button class="btn" id="btn-disconnect">Use the kernel in this page</button>
+    <button class="btn primary" id="btn-connect">Connect</button>
+  </div>
+</dialog>
+
+<dialog id="modal">
+  <div class="dhead">
+    <h3>Model file — <span class="badge">.ocaf.json</span></h3>
+    <p id="model-note">The parametric model — every feature, its arguments and its
+       references. Paste one in and the kernel rebuilds it.</p>
+  </div>
+  <div class="cli">$ ocafcad build model.ocaf.json -o part.cbf --step part.step</div>
+  <textarea id="model-text" spellcheck="false"></textarea>
+  <div class="dfoot">
+    <button class="btn" id="btn-copy">Copy</button>
+    <button class="btn" id="btn-load">Rebuild</button>
+    <button class="btn primary" id="btn-close">Done</button>
+  </div>
+</dialog>
+
+<script type="module" src="app/app.js"></script>
+</html>

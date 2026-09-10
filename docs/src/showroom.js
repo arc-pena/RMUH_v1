@@ -13,6 +13,8 @@
 // runtime, so the environment is not an HDR file but six canvas faces run
 // through PlayCanvas's own prefilter - which is all an image-based light is.
 
+import { resource } from "./payload.js";
+
 export const FINISHES = [
   { key: "steel",   label: "Brushed steel", color: [0.62, 0.65, 0.68], metalness: 1,    gloss: 0.62 },
   { key: "chrome",  label: "Chrome",        color: [0.88, 0.90, 0.93], metalness: 1,    gloss: 0.96 },
@@ -49,21 +51,12 @@ export const findFinish = key => FINISHES.find(f => f.key === key) || FINISHES[0
 const findEnvironment = key => ENVIRONMENTS.find(e => e.key === key) || ENVIRONMENTS[0];
 
 //! Runs the engine source in global scope. A published page may not fetch it,
-//! so it travels inside the document, gzipped, and is unpacked on first use.
-async function loadEngine(payloadId) {
+//! so it travels inside the document, gzipped, and is unpacked on first use;
+//! served from a web server it is a file beside the page. Not loaded at all
+//! until somebody opens the showroom, either way.
+async function loadEngine(payloadId, payloadUrl) {
   if (window.pc) return window.pc;
-
-  const element = document.getElementById(payloadId);
-  if (!element) throw new Error("this page is missing its showroom engine");
-  const packed = atob(element.textContent.trim());
-  const bytes = new Uint8Array(packed.length);
-  for (let i = 0; i < packed.length; i++) bytes[i] = packed.charCodeAt(i);
-
-  if (typeof DecompressionStream !== "function")
-    throw new Error("this browser cannot unpack the showroom engine");
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-  const source = await new Response(stream).text();
-
+  const source = await (await resource(payloadId, payloadUrl, "the showroom engine")).text();
   const script = document.createElement("script");
   script.textContent = source;
   document.head.appendChild(script);
@@ -72,9 +65,10 @@ async function loadEngine(payloadId) {
 }
 
 export class Showroom {
-  constructor({ canvas, payloadId }) {
+  constructor({ canvas, payloadId, payloadUrl }) {
     this.canvas = canvas;
     this.payloadId = payloadId;
+    this.payloadUrl = payloadUrl || null;
     this.app = null;
     this.pc = null;
     this.parts = new Map();          // feature id -> { entity, material, aabb }
@@ -91,7 +85,7 @@ export class Showroom {
 
   async start() {
     if (this.app) return;
-    const pc = this.pc = await loadEngine(this.payloadId);
+    const pc = this.pc = await loadEngine(this.payloadId, this.payloadUrl);
 
     const device = await pc.createGraphicsDevice(this.canvas, {
       deviceTypes: ["webgl2", "webgl1"], antialias: true, alpha: false,

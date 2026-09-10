@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
-"""Assemble docs/parametric-cad.html from src/.
+"""Build the page, both ways.
 
-The page has to be one file: an Artifact may load scripts from a handful of
-CDNs but may not fetch anything at runtime, and OpenCascade's WebAssembly module
-is a runtime fetch. So the kernel travels inside the page, gzipped and base64'd
-- 22 MB of wasm becomes about 9 MB of text, which fits.
+    docs/parametric-cad.html   ONE file, for publishing as an Artifact
+    public/                    a folder of files, for serving from a web server
 
-    python3 docs/build.py [--wasm-dir DIR]
+They exist for opposite reasons. An Artifact may load scripts from a handful of
+CDNs but may not fetch anything at run time, and OpenCascade's WebAssembly
+module is a runtime fetch - so for that build the kernel travels inside the
+page, gzipped and base64'd, 22 MB of wasm becoming about 9 MB of text.
+
+A web server has no such rule, and fetching is what a browser is good at. So
+the public build leaves the kernel, the showroom engine and the package data as
+files beside the page: streamed, compiled while they arrive, and cached by the
+browser between visits instead of re-parsed out of the HTML on every load. The
+source modules go across as they are, imported natively - nothing is
+concatenated, so what is served is what is in src/.
+
+One switch decides which, at run time, per resource: a payload element is in
+the page or it is not. Nothing in src/ knows which build it is in.
+
+    python3 docs/build.py [--wasm-dir DIR] [--only artifact|site]
 """
 import argparse
 import base64
@@ -14,6 +27,7 @@ import gzip
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -21,6 +35,12 @@ import tarfile
 ROOT = pathlib.Path(__file__).resolve().parent
 SRC = ROOT / "src"
 OUT = ROOT / "parametric-cad.html"
+
+# The served site, at the top of the repository so GitHub Pages can be pointed
+# at it. Rebuilt from nothing every time: everything in it is a copy of
+# something in src/ or of a package pulled from npm, so nothing is ever edited
+# here and nothing is lost by wiping it.
+SITE = ROOT.parent / "public"
 
 # OpenCascade for the browser: a trimmed OCCT build, 22 MB of WebAssembly.
 KERNEL_PACKAGE = "replicad-opencascadejs"
@@ -30,10 +50,21 @@ KERNEL_PACKAGE = "replicad-opencascadejs"
 STAGE_PACKAGE = "playcanvas"
 STAGE_FILE = "build/playcanvas.min.js"
 
-# Concatenated in this order into one module script.
-MODULES = ["sketch.js", "factory.js", "exchange.js", "ocaf.js", "wasm-kernel.js", "http-kernel.js", "mdl.js", "graph.js",
+# Concatenated in this order into one module script for the single-file build.
+# The site build copies the same files and lets the browser resolve the imports,
+# so this order is only the order they are stapled together in.
+MODULES = ["payload.js", "sketch.js", "factory.js", "exchange.js", "ocaf.js", "wasm-kernel.js",
+           "http-kernel.js", "mdl.js", "graph.js",
            "agent.js", "showroom.js", "plugin.js", "climate.js", "climate-plugin.js",
            "crowd.js", "crowd-plugin.js", "app.js"]
+
+# The one module the page loads; everything else is reached through its imports.
+ENTRY = "app.js"
+
+# The emscripten glue, copied beside the modules under this name. It is already
+# a module - it ends in `export default Module` - so the site build needs to do
+# nothing to it but put it where app.js says it is.
+GLUE_MODULE = "occt-glue.js"
 
 # A package's data rides the way the kernel and the showroom engine do: gzipped,
 # base64'd, in a script element the HTML tokenizer scans straight past. Unpacked
@@ -85,11 +116,64 @@ def fetch_stage():
                      "package/" + STAGE_FILE)
 
 
+def build_site(shell, glue_path, wasm_path, stage_path):
+    """The served build: the page, the modules, and the big pieces as files.
+
+    Nothing is bundled and nothing is inlined. The browser resolves the imports
+    itself, which means the file it fetches is the file in src/ - so what is
+    served can be read, and a stack trace from it points at a real line."""
+    if SITE.exists():
+        shutil.rmtree(SITE)
+    (SITE / "app").mkdir(parents=True)
+    (SITE / "kernel").mkdir()
+    (SITE / "data").mkdir()
+
+    for name in MODULES:
+        shutil.copyfile(SRC / name, SITE / "app" / name)
+    shutil.copyfile(glue_path, SITE / "app" / GLUE_MODULE)
+    shutil.copyfile(wasm_path, SITE / "kernel" / wasm_path.name)
+    shutil.copyfile(stage_path, SITE / "kernel" / stage_path.name)
+    for _, name in PAYLOADS:
+        shutil.copyfile(DATA / name, SITE / "data" / name)
+
+    # The shell is written as a fragment because an Artifact supplies the
+    # document around it. A served page has no such wrapper, and a page with no
+    # doctype is a page in quirks mode - so this build supplies one. The icon
+    # is drawn here rather than fetched: a favicon request that 404s is the
+    # only broken link a site like this would otherwise have.
+    (SITE / "index.html").write_text("\n".join([
+        "<!doctype html>",
+        '<html lang="en">',
+        '<link rel="icon" href="data:image/svg+xml,'
+        "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E"
+        "%3Cpath d='M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z' fill='none' stroke='%232f6feb' "
+        "stroke-width='1.3' stroke-linejoin='round'/%3E%3C/svg%3E\">",
+        shell.rstrip(),
+        "",
+        # One script element, and it is the entry module. Everything else
+        # arrives because something imported it.
+        '<script type="module" src="app/%s"></script>' % ENTRY,
+        "</html>",
+        "",
+    ]))
+
+    # Pages runs Jekyll over what it serves unless told not to, and Jekyll
+    # eats folders beginning with an underscore and rewrites what it feels
+    # like. This file is how it is told not to.
+    (SITE / ".nojekyll").write_text("")
+
+    total = sum(f.stat().st_size for f in SITE.rglob("*") if f.is_file())
+    print("wrote %s/  %.1f MB  (%d modules, kernel served as a file)" % (
+        SITE.name, total / 1048576, len(MODULES) + 1))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--wasm-dir", default=None,
                         help="directory holding replicad_single.js and .wasm "
                              "(default: fetch replicad-opencascadejs from npm into docs/.kernel)")
+    parser.add_argument("--only", choices=["artifact", "site"], default=None,
+                        help="build just one of the two (default: both)")
     args = parser.parse_args()
 
     wasm_dir = pathlib.Path(args.wasm_dir) if args.wasm_dir else fetch_kernel()
@@ -100,6 +184,14 @@ def main():
             sys.exit("missing %s" % path)
 
     shell = (SRC / "index.html").read_text()
+    stage_path = fetch_stage() / pathlib.PurePosixPath(STAGE_FILE).name
+    if not stage_path.exists():
+        sys.exit("missing %s" % stage_path)
+
+    if args.only != "artifact":
+        build_site(shell, glue_path, wasm_path, stage_path)
+    if args.only == "site":
+        return
 
     # The emscripten glue is a module whose default export is the factory.
     glue = glue_path.read_text()
@@ -109,9 +201,6 @@ def main():
 
     packed = base64.b64encode(gzip.compress(wasm_path.read_bytes(), 9)).decode("ascii")
 
-    stage_path = fetch_stage() / pathlib.PurePosixPath(STAGE_FILE).name
-    if not stage_path.exists():
-        sys.exit("missing %s" % stage_path)
     stage_packed = base64.b64encode(
         gzip.compress(stage_path.read_bytes(), 9)).decode("ascii")
 
