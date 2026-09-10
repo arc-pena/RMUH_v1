@@ -2,6 +2,10 @@
 <html lang="en">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z' fill='none' stroke='%232f6feb' stroke-width='1.3' stroke-linejoin='round'/%3E%3C/svg%3E">
 <meta charset="utf-8">
+<!-- Without this a phone lays the page out at 980 px and then shrinks it, which
+     is why an interface designed for a desktop arrives unreadable. With it the
+     phone rules below are the ones that run. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>OCAF Feature Modeller</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -917,6 +921,225 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
   #rail { top: auto; bottom: 56px; transform: none; max-height: 52vh; }
 }
 @media (prefers-reduced-motion: reduce) { *, ::after { transition: none !important; animation: none !important; } }
+/* ==========================================================================
+   The phone.
+
+   Same program, same document, same everything below the surface - a different
+   arrangement of the surface, because a phone has a third of the width, no
+   hover, no right-click and a thumb instead of a pointer.
+
+   Three rules decide the whole of it.
+
+   The model gets the screen. Everything else is off it until it is asked for,
+   and then it comes up over the model as a sheet and goes away again.
+
+   One bar, always in the same place. On a desktop the way between modes is a
+   row of buttons floating in the top left; on a phone that is exactly the
+   wrong place - it is the far corner from a thumb, and every panel it opens
+   floats somewhere else again. Here there is one dock along the bottom, and
+   the modes are a list with names in it.
+
+   Nothing is hover-only. The rail's labels are printed under its icons rather
+   than waiting for a pointer that never arrives.
+   ========================================================================== */
+@media (max-width: 760px) {
+  :root {
+    --edge: 8px;
+    --dock-h: calc(54px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* ------------------------------------------------------------ the top */
+  /* The title, what can be undone, and the way into the document menu. Every
+     other thing that lived up here is in the dock or in that menu now. */
+  #chip {
+    left: var(--edge); right: var(--edge); top: var(--edge);
+    border-radius: 12px;
+  }
+  #chip .sep, #chip #btn-link, #chip #btn-model, #chip #btn-sample,
+  #chip #btn-graph, #chip #btn-stage, #chip #mode-buttons, #chip #btn-ai,
+  #chip #btn-packages { display: none; }
+  #chip #btn-tree { flex: 1; min-width: 0; }
+  #chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chip button { padding: 10px 12px; }
+
+  /* A hover label is no use without a pointer. */
+  #tip { display: none !important; }
+
+  /* ----------------------------------------------------------- the dock */
+  #dock {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 9;
+    display: flex; align-items: stretch;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--panel-solid); border-top: 1px solid var(--line);
+    box-shadow: 0 -8px 28px rgba(10, 22, 34, .12);
+  }
+  #dock[hidden] { display: none; }
+  #dock button {
+    flex: 1; min-width: 0; border: 0; background: none; cursor: pointer;
+    color: var(--ink-3); padding: 7px 2px 8px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  #dock button[aria-pressed="true"] { color: var(--accent); }
+  #dock button:disabled { opacity: .35; }
+  #dock .dock-icon { display: block; height: 19px; }
+  #dock .dock-icon svg { width: 19px; height: 19px; display: block; }
+  #dock .dock-name {
+    font-size: 9.5px; letter-spacing: .02em; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+  }
+
+  /* --------------------------------------------------------- the sheets */
+  /* Every panel that floated somewhere different becomes the same thing: a
+     sheet that comes up from the dock, over the model, and goes away. One at
+     a time, because two would be two thirds of a phone. */
+  #rail, #sketch-rail, #tree-panel, #def-panel, #ai-bar, #sheet-modes {
+    position: fixed;
+    left: 0 !important; right: 0 !important; top: auto !important;
+    bottom: var(--dock-h) !important;
+    width: auto !important; max-width: none !important;
+    transform: none !important;
+    max-height: min(58vh, 460px) !important;
+    border-radius: 14px 14px 0 0;
+    border-left: 0; border-right: 0; border-bottom: 0;
+    z-index: 8;
+  }
+  #def-panel.wide { width: auto !important; }
+
+  body:not([data-sheet="tools"]) #rail,
+  body:not([data-sheet="tools"]) #sketch-rail,
+  body:not([data-sheet="tree"]) #tree-panel,
+  body:not([data-sheet="def"]) #def-panel,
+  body:not([data-sheet="ai"]) #ai-bar,
+  body:not([data-sheet="modes"]) #sheet-modes { display: none !important; }
+
+  /* Shown by the dock rather than by whatever used to hide them - except the
+     two rails, where [hidden] still decides which of the two it is. */
+  body[data-sheet="tools"] #rail:not([hidden]),
+  body[data-sheet="tools"] #sketch-rail:not([hidden]) { display: flex !important; }
+  body[data-sheet="tree"] #tree-panel,
+  body[data-sheet="def"] #def-panel { display: flex !important; }
+  body[data-sheet="ai"] #ai-bar { display: flex !important; flex-direction: column; }
+  body[data-sheet="modes"] #sheet-modes { display: block !important; overflow: auto; }
+
+  /* ------------------------------------------------------------ the rail */
+  /* Icons with their names under them, as wide as the screen allows. A tool
+     nobody can name is a tool nobody presses. */
+  #rail, #sketch-rail { padding: 8px 8px 12px; overflow-y: auto; }
+  #rail [data-group], #sketch-rail [data-group] {
+    grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)) !important;
+    gap: 3px;
+  }
+  #rail .tool, #sketch-rail .tool {
+    width: auto !important; height: auto !important;
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 9px 3px 7px; min-height: 58px;
+  }
+  #rail .tool::after, #sketch-rail .tool::after {
+    content: attr(data-label);
+    font-size: 9px; line-height: 1.15; color: var(--ink-3);
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* A tool with a short name of its own uses that: the long one is a sentence
+     for a hover label, and half a sentence is worse than a word. */
+  #rail .tool[data-short]::after, #sketch-rail .tool[data-short]::after {
+    content: attr(data-short);
+    font-size: 9px; line-height: 1.15; color: var(--ink-3);
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #rail .tool[data-armed="true"]::after, #sketch-rail .tool[data-armed="true"]::after,
+  #sketch-rail .tool.on::after { color: inherit; }
+
+  /* ----------------------------------------------------- the modes sheet */
+  #sheet-modes { padding: 6px 6px 12px; }
+  #sheet-modes h3 {
+    margin: 0; padding: 8px 10px 6px; font-size: 9.5px; font-weight: 600;
+    letter-spacing: .11em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .mode-row {
+    display: flex; align-items: center; gap: 11px; width: 100%;
+    padding: 11px 12px; border: 0; background: none; color: inherit;
+    border-radius: 9px; cursor: pointer; text-align: left;
+  }
+  .mode-row[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+  .mode-row .mode-icon svg { width: 18px; height: 18px; display: block; }
+  .mode-row b { display: block; font-size: 13px; font-weight: 600; }
+  .mode-row span { display: block; font-size: 11px; color: var(--ink-3); line-height: 1.4; }
+  .mode-row[aria-pressed="true"] span { color: inherit; opacity: .8; }
+  #sheet-modes .mode-cams { display: flex; gap: 4px; padding: 2px 8px 4px; flex-wrap: wrap; }
+  #sheet-modes .mode-cams button {
+    flex: 1; min-width: 62px; border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--ink-2); border-radius: 7px; padding: 9px 4px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .06em; cursor: pointer;
+  }
+
+  /* --------------------------------------------------- what is left over */
+  #tree-panel { max-height: min(58vh, 460px); }
+  #tree { flex: 1; }
+  #def-panel { padding-bottom: 4px; }
+
+  /* The status line sits on the dock, and stands down while a sheet is up. */
+  #status {
+    left: var(--edge); right: var(--edge); bottom: calc(var(--dock-h) + 6px);
+    border-radius: 9px; font-size: 10px; z-index: 6;
+  }
+  #status .sep, #status #status-kernel { display: none; }
+  #status > * { padding: 5px 9px; min-width: 0; }
+  #status-sel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  body[data-sheet]:not([data-sheet=""]) #status { display: none; }
+
+  /* The camera's five buttons are 34 px wide, which is under a fingertip. They
+     move into the modes sheet, where they can be the size of one. */
+  #view-tools { display: none; }
+
+  /* The sketcher's bar goes where the status line is; the sketch rail is a
+     sheet like the tool rail, because while a sketch is open it IS the rail. */
+  #sketch-bar {
+    left: var(--edge); right: var(--edge); bottom: calc(var(--dock-h) + 6px);
+    top: auto; transform: none; border-radius: 9px; z-index: 7;
+    flex-wrap: wrap; justify-content: space-between;
+  }
+
+  /* A package's own bar is full width above the dock, not a card in the middle
+     of the screen. */
+  #an-bar, #fl-bar {
+    left: var(--edge) !important; right: var(--edge) !important;
+    bottom: calc(var(--dock-h) + 6px) !important;
+    width: auto !important; max-width: none !important; transform: none !important;
+  }
+  #an-panel, #fl-panel {
+    left: var(--edge) !important; right: var(--edge) !important;
+    top: calc(var(--edge) + 52px) !important; width: auto !important;
+    max-height: 40vh !important;
+  }
+
+  /* The shelf and the menus, sized for a phone rather than for a corner. */
+  #packages { left: var(--edge); right: var(--edge); width: auto; top: calc(var(--edge) + 52px); }
+  #menu { min-width: 0; left: var(--edge) !important; right: var(--edge);
+          max-height: 70vh; overflow: auto; }
+  #menu li { padding: 10px 11px; }
+  #sample-menu { left: var(--edge) !important; right: var(--edge); width: auto; max-height: 60vh; }
+
+  dialog {
+    width: calc(100vw - 16px); max-width: none; max-height: 86vh;
+    margin: auto; border-radius: 14px;
+  }
+  dialog textarea { height: 40vh; }
+
+  /* The showroom's own controls, above the dock. */
+  #stage-ui { bottom: calc(var(--dock-h) + 8px); }
+}
+
+/* A phone lying on its side has room across and none down: the sheets take
+   less of it, and the dock loses its labels. */
+@media (max-width: 900px) and (max-height: 460px) {
+  :root { --dock-h: calc(42px + env(safe-area-inset-bottom, 0px)); }
+  #rail, #sketch-rail, #tree-panel, #def-panel, #ai-bar, #sheet-modes {
+    max-height: 72vh !important;
+  }
+  #dock .dock-name { display: none; }
+  #dock button { padding: 10px 2px; }
+}
+
 </style>
 
 <div id="viewport"></div>
@@ -1012,6 +1235,23 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
 <div id="sample-menu" hidden></div>
 <div id="tip"></div>
 <ul id="menu" hidden></ul>
+
+<!-- The phone dock. On a phone the mode switch is not five floating buttons in a
+     corner - it is this: one bar along the bottom, always in the same place,
+     where a thumb is. Four of its tabs raise a sheet over the model and the
+     fifth lists the modes by name. Nothing here exists on a desktop. -->
+<nav id="dock" hidden>
+  <button data-sheet="tools"><span class="dock-icon"></span><span class="dock-name">Build</span></button>
+  <button data-sheet="tree"><span class="dock-icon"></span><span class="dock-name">Tree</span></button>
+  <button data-sheet="def"><span class="dock-icon"></span><span class="dock-name">Edit</span></button>
+  <button data-sheet="modes"><span class="dock-icon"></span><span class="dock-name">Modes</span></button>
+  <button data-sheet="ai"><span class="dock-icon"></span><span class="dock-name">Ask</span></button>
+</nav>
+
+<!-- What the Modes tab raises: every way of looking at this model, by name,
+     with the one that is open marked. Built from the same list the desktop
+     buttons are built from, so a package that adds a mode adds a row here. -->
+<div class="float" id="sheet-modes" hidden></div>
 
 <div class="float fades" id="view-tools">
   <button data-view="iso">ISO</button>

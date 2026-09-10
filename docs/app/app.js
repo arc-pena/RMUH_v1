@@ -810,6 +810,9 @@ function nearestElement(uv, drawing = sketchDrawing()) {
 function enterSketch(id) {
   const entry = feature(id);
   if (!entry || !entry.sketch) return;
+  // Drawing needs the drawing surface. On a phone whatever sheet is up is over
+  // it, so it goes down - the sketch rail is one tap away on Build.
+  if (onPhone() && sheetOpen()) openSheet("");
   if (handEditing()) { meshEdit.id = null; meshEdit.vertex = -1; refreshMeshEdit(); }
   sketcher.id = id;
   sketcher.tool = "select";
@@ -827,8 +830,13 @@ function enterSketch(id) {
   buildSketchRail();
   refreshSketch();
   // The drawing is worth having open while you draw on it: the panel shows the
-  // JSON, which is the drawing itself and not a report of it.
+  // JSON, which is the drawing itself and not a report of it. Beside the canvas
+  // on a desktop - but on a phone it would be OVER the canvas, so the sheet
+  // stays down and the Edit tab is where it waits.
+  const raise = phoneSheets;
+  phoneSheets = false;
   select(id, true);
+  phoneSheets = raise;
 }
 
 function leaveSketch() {
@@ -1308,6 +1316,11 @@ function buildSketchRail() {
       : type === "arc" ? "Arc · 3 clicks, or tangent to what you just drew"
       : SKETCH_CLICKS[type] ? SKETCH_LABELS[type] + " · " + SKETCH_CLICKS[type] + " clicks"
       : SKETCH_LABELS[type] + " · click points, Enter to finish";
+    // The long form is the hover label; the short one is what is printed under
+    // the icon on a phone, where "Polyline · click corner after co…" is not a
+    // name, it is a sentence cut in half.
+    button.dataset.short = type === "select" ? "Select"
+      : type === "line" ? "Polyline" : SKETCH_LABELS[type] || type;
     button.setAttribute("aria-label", type);
     button.innerHTML = svg(SKETCH_ICONS[type]);
     button.addEventListener("click", () => pickSketchTool(type));
@@ -1323,6 +1336,7 @@ function buildSketchRail() {
     button.className = "tool";
     button.dataset.relation = spec.key;
     button.dataset.label = spec.label + " · " + spec.hint;
+    button.dataset.short = spec.label;
     button.setAttribute("aria-label", spec.label);
     button.innerHTML = svg(SKETCH_ICONS[spec.key]);
     button.addEventListener("click", () => putRelation(spec.key));
@@ -2132,7 +2146,17 @@ function buildPanel() {
   panel.hidden = !entry;
   // A script needs room to be read; everything else stays narrow.
   panel.classList.toggle("wide", !!entry && !!entry.code);
-  if (!entry) return;
+  if (!entry) {
+    // On a desktop the panel simply is not there when nothing is being edited.
+    // On a phone the dock has a tab for it, and a tab that opens a blank sheet
+    // is a tab that looks broken - so it says what to do instead.
+    const empty = document.createElement("div");
+    empty.className = "def-head";
+    empty.innerHTML = '<div class="summary">Nothing is being edited. Tap a body in the '
+      + "model, or a row in the tree, to put its arguments here.</div>";
+    host.appendChild(empty);
+    return;
+  }
 
   const spec = schemaType(entry.type);
   const head = document.createElement("div");
@@ -2861,6 +2885,11 @@ function select(id, openDefinition, keep = false) {
     : "click a body · double-click to edit it";
   buildTree(); buildPanel(); refreshToolbar(); paintSelection();
   refreshMeshEdit();
+  // "Open its definition" means show it, and on a phone the definition is a
+  // sheet. Selecting alone does not raise it: the model is what you are
+  // looking at, and a sheet over it every time you tapped a body would be
+  // the model half the time.
+  if (phoneSheets && openDefinition && onPhone() && state.edited) openSheet("def");
   // Selecting anything else leaves the sketch; the tree is a way out too.
   if (sketcher.id && id !== sketcher.id) leaveSketch();
   else if (sketcher.id) refreshSketch();
@@ -2914,6 +2943,7 @@ async function attachKernel(next, model) {
   ready = false;
   state.schema = await kernel.schema();
   buildToolbar();
+  buildDock();
 
   for (const [, { group }] of shapes) disposeGroup(group);
   shapes.clear();
@@ -2925,7 +2955,12 @@ async function attachKernel(next, model) {
   applyState(payload);
 
   const bodies = state.tree.features.filter(f => f.category !== "datum");
+  // Selected and its definition ready, but on a phone the sheet stays down:
+  // the first thing anybody should see is the model, not a panel about it.
+  const raise = phoneSheets;
+  phoneSheets = false;
   select(bodies.length ? bodies[bodies.length - 1].id : null, true);
+  phoneSheets = raise;
   fitView();
 }
 
@@ -3219,7 +3254,11 @@ function foldAI(shut) {
 function openAI(open) {
   aiBar.hidden = !open;
   document.getElementById("btn-ai").setAttribute("aria-pressed", open ? "true" : "false");
-  if (!open) { agent.stop(); return; }
+  if (!open) {
+    agent.stop();
+    if (sheetOpen() === "ai") openSheet("");
+    return;
+  }
   document.getElementById("ai-prompt").focus();
   // Said once, on the first opening, so nobody types into a bar that cannot ask.
   if (!aiBar.dataset.checked) {
@@ -3536,6 +3575,149 @@ async function afterPackages() {
 
 //! A button per mode, in the chip beside Showroom. A package that is put away
 //! takes its button - and its open mode - with it.
+/* ==========================================================================
+   The phone.
+
+   One document, one kernel, one set of edits - a second arrangement of the
+   surface, because a phone is a third of the width with no hover, no
+   right-click and a thumb rather than a pointer.
+
+   The model gets the screen. Everything that floated somewhere different on a
+   desktop - the rail, the tree, the definition, the assistant - becomes the
+   same thing here: a sheet that comes up from the dock over the model, one at
+   a time, and goes away again. And the way between modes is not five buttons
+   in the far corner from a thumb; it is a tab in that dock, and the modes are
+   a list with names in it.
+   ========================================================================== */
+
+const PHONE = matchMedia("(max-width: 760px)");
+const onPhone = () => PHONE.matches;
+
+//! Whether opening a definition should raise the sheet that shows it. It should
+//! - that is what opening one means - except while the page is starting, where
+//! nobody asked for anything yet and the model is the thing to see.
+let phoneSheets = true;
+
+const DOCK_ICONS = {
+  tools: ICONS.Cube || ICONS.part,
+  tree: '<path d="M3 4h10M3 8h10M3 12h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  def: '<path d="M2.8 12.4l7.1-7.1 2.8 2.8-7.1 7.1H2.8z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'
+     + '<path d="M9.9 5.3l1.6-1.6a1.4 1.4 0 012 0l.8.8a1.4 1.4 0 010 2l-1.6 1.6" fill="none" stroke="currentColor" stroke-width="1.3"/>',
+  modes: '<rect x="2" y="2.5" width="5" height="5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.25"/>'
+       + '<rect x="9" y="2.5" width="5" height="5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.25"/>'
+       + '<rect x="2" y="8.8" width="5" height="5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.25"/>'
+       + '<rect x="9" y="8.8" width="5" height="5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.25"/>',
+  ai: '<path d="M8 2.2l1.5 3.9L13.4 7.6 9.5 9.1 8 13 6.5 9.1 2.6 7.6 6.5 6.1z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>',
+};
+
+const MODE_ICONS = {
+  model: ICONS.Cube || ICONS.part,
+  nodes: '<circle cx="4" cy="4.5" r="2" fill="none" stroke="currentColor" stroke-width="1.25"/>'
+       + '<circle cx="12" cy="11.5" r="2" fill="none" stroke="currentColor" stroke-width="1.25"/>'
+       + '<path d="M5.7 5.6c2.2 1.4 2.6 3 4.6 4.6" fill="none" stroke="currentColor" stroke-width="1.2"/>',
+  showroom: '<path d="M2.4 9.5c1.6-3.6 3.5-5.4 5.6-5.4s4 1.8 5.6 5.4" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>'
+          + '<ellipse cx="8" cy="12" rx="4.6" ry="1.5" fill="none" stroke="currentColor" stroke-width="1.1"/>',
+  mode: '<circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.25"/>'
+      + '<path d="M8 2.4v11.2M2.4 8h11.2" stroke="currentColor" stroke-width="1"/>',
+};
+
+//! Which sheet is up, or none. The body carries it because the rules that lay
+//! the sheets out are the ones that need to know, and they are stylesheet
+//! rules: nothing here moves anything, it only says what is open.
+function openSheet(name) {
+  const was = document.body.dataset.sheet || "";
+  const now = was === name ? "" : (name || "");
+  document.body.dataset.sheet = now;
+  for (const button of document.querySelectorAll("#dock button"))
+    button.setAttribute("aria-pressed", button.dataset.sheet === now ? "true" : "false");
+  if (now === "modes") buildModeSheet();
+  if (now === "ai") openAI(true);
+  if (now === "def") buildPanel();
+  if (now === "tools") refreshToolbar();
+  return now;
+}
+
+const sheetOpen = () => document.body.dataset.sheet || "";
+
+function buildDock() {
+  const dock = document.getElementById("dock");
+  for (const button of dock.querySelectorAll("button")) {
+    const key = button.dataset.sheet;
+    button.querySelector(".dock-icon").innerHTML = svg(DOCK_ICONS[key] || ICONS.part);
+    button.setAttribute("aria-pressed", "false");
+    button.addEventListener("click", () => openSheet(key));
+  }
+  dock.hidden = !onPhone();
+}
+
+//! Every way of looking at this model, by name. The rows come from the same
+//! list the desktop's buttons come from, so a package that adds a mode adds a
+//! row here without knowing this exists.
+function buildModeSheet() {
+  const host = document.getElementById("sheet-modes");
+  host.textContent = "";
+  const head = text => {
+    const h = document.createElement("h3");
+    h.textContent = text;
+    host.appendChild(h);
+  };
+  const row = (icon, name, note, on, run) => {
+    const button = document.createElement("button");
+    button.className = "mode-row";
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+    button.innerHTML = '<span class="mode-icon">' + svg(icon) + "</span><span><b>"
+      + escapeHtml(name) + "</b><span>" + escapeHtml(note) + "</span></span>";
+    button.addEventListener("click", () => { openSheet(""); run(); });
+    host.appendChild(button);
+    return button;
+  };
+
+  head("Looking at it");
+  const plain = !openMode && !staging && !graph.showing;
+  row(MODE_ICONS.model, "Model", "the part, and the tools that build it", plain, () => {
+    if (openMode) leaveMode();
+    if (staging) leaveShowroom();
+    if (graph.showing) graph.close();
+  });
+  row(MODE_ICONS.nodes, "Nodes", "the model as a graph you can wire", graph.showing,
+      () => graph.toggle());
+  row(MODE_ICONS.showroom, "Showroom", "see it as a product, lit and finished", staging,
+      () => (staging ? leaveShowroom() : enterShowroom()));
+  for (const mode of modes)
+    row(MODE_ICONS.mode, mode.label, mode.title || "", openMode === mode,
+        () => (openMode === mode ? leaveMode() : enterMode(mode)));
+
+  head("Camera");
+  const cams = document.createElement("div");
+  cams.className = "mode-cams";
+  for (const name of ["iso", "top", "front", "right", "fit"]) {
+    const button = document.createElement("button");
+    button.textContent = name.toUpperCase();
+    button.addEventListener("click", () => {
+      if (name === "fit") return fitView();
+      Object.assign(view, STANDARD_VIEWS[name]);
+      placeCamera(); draw();
+    });
+    cams.appendChild(button);
+  }
+  host.appendChild(cams);
+
+  head("The document");
+  row(ICONS.packages, "Packages", "what is on the shelf, and what is loaded", false,
+      () => togglePackages(true));
+  row(DOCK_ICONS.tree, "Samples", "a worked example to start from", false,
+      () => document.getElementById("btn-sample").click());
+}
+
+//! A phone that has been turned, or a window someone dragged wider. The dock
+//! appears and goes, and a sheet left open on a desktop would be a panel stuck
+//! to the bottom of the screen - so it is put away on the way across.
+function refreshLayout() {
+  document.getElementById("dock").hidden = !onPhone();
+  if (!onPhone() && sheetOpen()) openSheet("");
+}
+PHONE.addEventListener("change", refreshLayout);
+
 function buildModes() {
   const host = document.getElementById("mode-buttons");
   const was = openMode ? openMode.key : null;
@@ -3563,9 +3745,11 @@ function buildModes() {
     const again = modes.find(m => m.key === was);
     if (again) { openMode = again; again.button.setAttribute("aria-pressed", "true"); }
   }
+  if (sheetOpen() === "modes") buildModeSheet();
 }
 
 function enterMode(mode) {
+  if (onPhone() && sheetOpen()) openSheet("");
   if (staging) leaveShowroom();
   if (sketching()) leaveSketch();
   if (openMode) leaveMode();
@@ -4023,7 +4207,12 @@ function toggleTree(force) {
   treePanel.hidden = force === undefined ? !treePanel.hidden : !force;
   remember("ocafcad/tree", treePanel.hidden ? "off" : "on");
 }
-document.getElementById("btn-tree").addEventListener("click", () => toggleTree());
+document.getElementById("btn-tree").addEventListener("click", () => {
+  // On a phone the tree is a sheet and the dock owns it; the title is still the
+  // way in, because that is where a hand goes.
+  if (onPhone()) { openSheet("tree"); return; }
+  toggleTree();
+});
 document.getElementById("btn-def-close").addEventListener("click", () => {
   state.edited = null;
   buildPanel();

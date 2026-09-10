@@ -254,6 +254,17 @@ const GRAPH_CSS = `
   background: var(--g-ground); box-shadow: 0 20px 70px rgba(6,14,22,.34);
 }
 .g-float.rolled { height: 34px !important; resize: none; }
+/* On a phone it is not a window over the model, it is the screen: there is no
+   room to be beside anything, and nothing to drag it with. It still minimises
+   to its bar, which is how you get the model back. */
+.g-float.g-phone {
+  left: 0 !important; right: 0 !important; top: auto !important;
+  bottom: var(--dock-h, 62px) !important;
+  width: auto !important; height: 74vh !important;
+  border-radius: 14px 14px 0 0; border-left: 0; border-right: 0; border-bottom: 0;
+}
+.g-float.g-phone.rolled { height: 34px !important; }
+.g-float.g-phone .g-grip { display: none; }
 .g-float.rolled .g-frame { display: none; }
 .g-bar-w {
   display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 8px 0 11px;
@@ -489,7 +500,12 @@ export class GraphEditor {
     // Where it was left, if it has been moved before. Otherwise about two
     // thirds of the viewport, off to the right, with the model still visible
     // beside it - a window over the work, not instead of it.
-    const kept = readWindowState();
+    // A phone has no second place to put a window, so it does not get one: the
+    // graph fills the width, sits on the dock, and the only thing worth
+    // remembering about it is nothing.
+    const phone = innerWidth <= 760;
+    if (phone) floater.classList.add("g-phone");
+    const kept = phone ? {} : readWindowState();
     const w = Math.round(Math.min(1040, Math.max(560, innerWidth * 0.62), innerWidth - 80));
     const h = Math.round(Math.min(680, Math.max(320, innerHeight * 0.68), innerHeight - 110));
     const box = {
@@ -517,7 +533,10 @@ export class GraphEditor {
       this.rememberWindow(floater);
     };
     const chrome = [
-      ["pop", "Open in a separate window", () => { this.close(); this.open(true); }],
+      // A "separate window" on a phone is another tab with the model hidden
+      // behind it, which is the thing this is here to avoid.
+      ...(phone ? [] : [["pop", "Open in a separate window",
+                         () => { this.close(); this.open(true); }]]),
       ["roll", floater.classList.contains("rolled") ? "Restore" : "Minimise", roll],
       ["shut", "Close (G)", () => this.close()],
     ];
@@ -550,6 +569,7 @@ export class GraphEditor {
     this.floater = floater;
 
     floater.addEventListener("pointerdown", () => { floater.style.zIndex = String(++GraphEditor.top); }, true);
+    if (phone) { this.build(doc, frame, true); return; }
     this.drag(bar, (dx, dy, start) => {
       floater.style.left = Math.max(0, Math.min(innerWidth - 120, start.left + dx)) + "px";
       floater.style.top = Math.max(0, Math.min(innerHeight - 40, start.top + dy)) + "px";
