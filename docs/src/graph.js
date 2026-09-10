@@ -303,6 +303,10 @@ const gnum = v => Math.round(v * 1e6) / 1e6;
 
 //! What a node shows it computed. A mesh already counts itself in its preview,
 //! so it is not counted twice.
+//! kB or MB, for a size that is only ever read.
+const gsize = n => n < 1024 ? n + " B"
+  : n < 1024 * 1024 ? (n / 1024).toFixed(1) + " kB" : (n / 1024 / 1024).toFixed(1) + " MB";
+
 const gDataLine = data => data.kind === "mesh"
   ? gesc(data.preview)
   : '<span class="g-count">' + data.count + " " + gesc(data.kind) +
@@ -719,7 +723,9 @@ export class GraphEditor {
       || [{ key: "datum", label: "datums" }, { key: "body", label: "solids" },
           { key: "operation", label: "operations" }];
     for (const group of groups) {
-      const types = schema.types.filter(t => t.category === group.key);
+      // Hidden types are the ones something else makes - an import - so they
+      // are not offered here either.
+      const types = schema.types.filter(t => t.category === group.key && !t.hidden);
       if (!types.length) continue;
       const head = doc.createElement("div");
       head.className = "g-sect";
@@ -923,6 +929,7 @@ export class GraphEditor {
       else if (arg.kind === "text") body.appendChild(this.textRow(entry, arg));
       else if (arg.kind === "sketch") body.appendChild(this.sketchRow(entry, arg));
       else if (arg.kind === "choice") body.appendChild(this.choiceRow(entry, arg));
+      else if (arg.kind === "blob") body.appendChild(this.blobRow(entry, arg));
       else body.appendChild(this.realRow(entry, arg, arg.key, entry.values[arg.key], ports));
     }
 
@@ -1152,6 +1159,19 @@ export class GraphEditor {
       this.onSketch(entry.id);
     });
     row.appendChild(draw);
+    return row;
+  }
+
+  //! Imported geometry, as a line that says how much of it there is. There is
+  //! no control here because there is nothing to turn: an import is what it
+  //! is, and what it holds is the shape itself.
+  blobRow(entry, arg) {
+    const size = (entry.sizes && entry.sizes[arg.key]) || 0;
+    const row = this.doc.createElement("div");
+    row.className = "g-code";
+    row.innerHTML = "<span>" + gesc((arg.carries || arg.label).toLowerCase()) + "</span><span>"
+      + gesc(size ? gsize(size) : "empty") + "</span>";
+    row.title = "Read from a file. Nothing to turn - it is the geometry itself.";
     return row;
   }
 

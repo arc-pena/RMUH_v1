@@ -82,6 +82,29 @@ export function packagesBrief(packages) {
   return out.join("\n");
 }
 
+//! What can be read and written, and the one rule about which. Said here
+//! because a request to import something is a request the assistant can act
+//! on - the import op takes the file's text - and because a format that is not
+//! in this list is one to say no to rather than one to try.
+export function exchangeBrief(formats) {
+  if (!formats || !formats.length) return "No file exchange in this kernel.";
+  const line = f => "  " + f.name + " (" + f.extensions.join(", ") + ") "
+    + (f.read && f.write ? "in and out" : f.read ? "in only" : "out only")
+    + (f.structure ? ", carries several parts" : "")
+    + "\n      " + f.summary;
+  return `The "import" edit reads a file into the document; the interface writes
+files out, from the burger menu, which you cannot press. An import is stored as
+the geometry itself, so it rebuilds without the reader that read it, and it has
+no parameters to turn - it is dead geometry that anything downstream can still
+move, cut, fillet and measure. A mesh keeps the faces it was authored with, so
+a quad cage from Blender stays a quad cage and can be subdivided here.
+
+Only a format that carries several parts can be broken up ("as":"parts");
+everything else comes in as one object.
+
+${formats.map(line).join("\n")}`;
+}
+
 export function briefing(schema, model, packages) {
   const ops = mdlSchema().ops.map(op =>
     "  " + op.op + "(" + op.fields.join(", ") + ")"
@@ -145,6 +168,9 @@ Never use a node from a package that is not loaded: it is not in the catalogue
 above, so it does not exist yet.
 
 ${packagesBrief(packages)}
+
+FILES
+${exchangeBrief(schema.exchange)}
 
 THE DOCUMENT AS IT STANDS
 ${JSON.stringify(model)}`;

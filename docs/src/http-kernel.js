@@ -52,6 +52,8 @@ export async function createHttpKernel(base) {
     },
     setAppearance(id, appearance) { return this.post("/api/appearance", { id, appearance }); },
     exportStep() { return this.get("/api/step"); },
+    importFile(request) { return this.post("/api/import", request); },
+    exportShapes(format) { return this.get("/api/export?format=" + encodeURIComponent(format)); },
 
     //! Only the native kernels can do this: write the document to disk beside
     //! the model, as OCAF's own format or as STEP.

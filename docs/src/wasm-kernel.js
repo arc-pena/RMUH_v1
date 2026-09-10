@@ -27,6 +27,8 @@ import { CATALOGUE, Doc, Driver, F, clampTo, dataLines, kernelMessage, meshFaces
 import { sketchArcPoint, sketchChainEnds, sketchEnds, sketchLoops, sketchNesting,
          sketchOutline, solveSketch, splinePoints } from "./sketch.js";
 import { CONFUSION, V, factorySchema, makeFactories, turnAbout } from "./factory.js";
+import { FORMATS, fromBase64, isAssembly, parseObj, parseStl, realNames,
+         utf8, writeObj, writeStl } from "./exchange.js";
 
 export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm, onProgress }) {
   if (onProgress) onProgress("starting OpenCascade");
@@ -2848,6 +2850,43 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
   };
   builders.Body = builders.GeometricalSet;
 
+  /* ---------------------------------------------------------- imported
+
+     Two drivers, and neither builds anything. What they hold IS the geometry -
+     a B-Rep string, or OBJ text - so rebuilding is reading it back. Held that
+     way rather than as the file it arrived in so that one reader rebuilds
+     every import, whichever reader first read it. */
+
+  builders.Imported = {
+    precondition: f => F.code(f, "brep", "") ? null
+      : "this import holds no geometry - it was read from a file that had none",
+    build: f => {
+      const shape = oc.BRepToolsWrapper.Read(F.code(f, "brep", ""));
+      if (!shape || shape.IsNull())
+        throw new Error("the stored geometry will not read back - the model file may be truncated");
+      return shape;
+    },
+  };
+
+  builders.MeshImported = {
+    precondition: f => F.code(f, "obj", "") ? null
+      : "this import holds no geometry - it was read from a file that had none",
+    build: f => {
+      const parts = parseObj(F.code(f, "obj", ""));
+      if (!parts.length) throw new Error("the stored geometry has no faces in it");
+      // A part is written per feature, so there is normally one. Several are
+      // merged rather than refused: an OBJ typed in by hand may have any number.
+      const points = [], faces = [];
+      for (const part of parts) {
+        const base = points.length;
+        for (const p of part.points) points.push(p);
+        for (const face of part.faces) faces.push(face.map(i => i + base));
+      }
+      return { data: { ...packMesh(checkMesh({ points, faces }, "imported mesh")),
+                       smooth: Feature_choice(f, "smooth") === 1 } };
+    },
+  };
+
   const drivers = new Map();
   for (const spec of CATALOGUE) {
     const builder = builders[spec.type];
@@ -2956,6 +2995,141 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
 
   const state = report => ({ ok: true, tree: doc.treeJson(), report });
 
+  /* ------------------------------------------------------------ exchange
+
+     Everything the readers and writers need that is not arithmetic. The
+     arithmetic - OBJ and STL, both ways - is in exchange.js and knows nothing
+     about OpenCascade; what is here is the part that does.                  */
+
+  //! OpenCascade's own shape format, read back. It is what every import is
+  //! stored as, so this is the road every rebuild of an import takes.
+  const readBrep = text => {
+    const shape = oc.BRepToolsWrapper.Read(text);
+    if (!shape || shape.IsNull())
+      throw new Error("that BREP file will not read - it may not be a BREP file");
+    return { shape };
+  };
+
+  //! A STEP file, transferred. Every root separately: an assembly written as
+  //! several products comes back as several shapes, and that is the structure
+  //! the file itself carries. What it does NOT carry through these bindings is
+  //! the nesting below that - the compound of a sub-assembly arrives whole -
+  //! so a part is a solid, and the import says so rather than implying a tree
+  //! it cannot see.
+  const readStep = text => {
+    const path = "/import.step";
+    if (oc.Interface_Static)
+      oc.Interface_Static.SetCVal("xstep.cascade.unit", doc.units === "m" ? "M" : "MM");
+    oc.FS.writeFile(path, text);
+    const reader = new oc.STEPControl_Reader();
+    let status;
+    try {
+      status = String(reader.ReadFile(path));
+    } finally {
+      try { oc.FS.unlink(path); } catch (err) { /* the scratch file is not important */ }
+    }
+    if (status !== "IFSelect_RetDone")
+      throw new Error("OpenCascade refused that STEP file (" + status + ")");
+    if (!reader.NbRootsForTransfer())
+      throw new Error("that STEP file holds nothing that transfers to a shape");
+    reader.TransferRoots(new oc.Message_ProgressRange());
+    const parts = [];
+    for (let i = 1; i <= reader.NbShapes(); i++) {
+      const shape = reader.Shape(i);
+      if (shape && !shape.IsNull()) parts.push({ shape });
+    }
+    return parts;
+  };
+
+  //! A transferred root broken into the parts a person would call parts:
+  //! solids if there are any, shells if there are not, faces if there are
+  //! neither. A root that is one of those already comes back as itself.
+  const explode = parts => {
+    const SHELL = oc.TopAbs_ShapeEnum.TopAbs_SHELL;
+    const out = [];
+    for (const part of parts) {
+      const solids = subShapes(part.shape, SOLID, oc.TopoDS.Solid);
+      const shells = solids.length ? [] : subShapes(part.shape, SHELL, oc.TopoDS.Shell);
+      const faces = solids.length || shells.length ? [] : subShapes(part.shape, FACE, oc.TopoDS.Face);
+      const pieces = solids.length ? solids : shells.length ? shells : faces;
+      if (!pieces.length) { out.push(part); continue; }
+      for (const piece of pieces) out.push({ shape: piece, name: part.name });
+    }
+    return out;
+  };
+
+  const describeShape = shape => {
+    const solids = countSubShapes(shape, SOLID), faces = countSubShapes(shape, FACE);
+    const count = (n, one) => n + " " + one + (n === 1 ? "" : "s");
+    return solids ? count(solids, "solid") + ", " + count(faces, "face")
+      : faces ? count(faces, "face") : "no surfaces - wireframe only";
+  };
+
+  //! STL gives every triangle its own three vertices, so a cube arrives as 36
+  //! points that are really 8. Welding is what makes it a mesh rather than a
+  //! pile, and it is done against the size of the thing rather than against a
+  //! fixed number, because a file in metres and a file in millimetres are the
+  //! same model.
+  const weldTriangles = mesh => {
+    if (!mesh.points.length) return mesh;
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const p of mesh.points)
+      for (let i = 0; i < 3; i++) {
+        if (p[i] < min[i]) min[i] = p[i];
+        if (p[i] > max[i]) max[i] = p[i];
+      }
+    const diagonal = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+    return weldMesh(mesh, Math.max(1e-7, diagonal * 1e-6), true);
+  };
+
+  //! Several parts as one mesh, vertices renumbered. Faces are copied across
+  //! exactly as they are: a quad stays a quad.
+  const mergeParts = (parts, name) => {
+    const points = [], faces = [];
+    for (const part of parts) {
+      const base = points.length;
+      for (const p of part.points) points.push(p);
+      for (const face of part.faces) faces.push(face.map(i => i + base));
+    }
+    return { name, points, faces };
+  };
+
+  //! An OBJ group name may not carry a space and survive every reader.
+  const objName = name => String(name || "part").replace(/\s+/g, "_");
+
+  //! Everything visible, as polygons. A polymesh gives up its own faces
+  //! untouched - which is the whole point: a quad cage exported here opens as
+  //! a quad cage in Blender, and comes back as one. A B-Rep has no faces to
+  //! keep, so it is tessellated and welded, and those are triangles because
+  //! that is what a tessellation is.
+  const exportParts = () => {
+    const parts = [];
+    for (const f of doc.features()) {
+      if (!F.visible(f)) continue;
+      const data = F.data(f);
+      if (data && data.kind === "mesh") {
+        parts.push({ name: objName(F.name(f)), points: F.triples(data), faces: meshFaces(data) });
+        continue;
+      }
+      // A datum plane has a face on it so it can be seen; it is not geometry
+      // anybody wants in a mesh file.
+      if (F.spec(f).category === "datum") continue;
+      const shape = F.shape(f);
+      if (!shape || countSubShapes(shape, FACE) === 0) continue;   // nothing to tessellate
+      const stream = tessellate(shape, deflectionFor(shape));
+      if (!stream.positions || !stream.index || !stream.index.length) continue;
+      const points = [], faces = [];
+      for (let i = 0; i + 2 < stream.positions.length; i += 3)
+        points.push([stream.positions[i], stream.positions[i + 1], stream.positions[i + 2]]);
+      for (let i = 0; i + 2 < stream.index.length; i += 3)
+        faces.push([stream.index[i], stream.index[i + 1], stream.index[i + 2]]);
+      const box = extents(shape);
+      parts.push({ name: objName(F.name(f)),
+                   ...weldMesh({ points, faces }, Math.max(1e-4, (box ? box.diagonal : 100) * 1e-5), true) });
+    }
+    return parts;
+  };
+
   return {
     kind: "wasm",
     description: "OpenCascade (WebAssembly), in this page",
@@ -2964,7 +3138,10 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
     //! built out of. Two halves of one answer - a node is a driver and a driver
     //! is one factory call - so they are published together and anything
     //! reading the kernel, the node editor or the assistant, gets both.
-    async schema() { return { ...schemaJson(), api: factorySchema({ hybrid: HSF, shape: SF }) }; },
+    async schema() {
+      return { ...schemaJson(), api: factorySchema({ hybrid: HSF, shape: SF }),
+               exchange: FORMATS };
+    },
 
     /* ------------------------------------------------------- packages
 
@@ -3188,7 +3365,141 @@ export async function createWasmKernel({ initModule, wasmBinary, instantiateWasm
       const text = oc.FS.readFile(path, { encoding: "utf8" });
       try { oc.FS.unlink(path); } catch (err) { /* the scratch file is not important */ }
 
-      return { ok: true, text, solids: parts.length, name: doc.title, units: doc.units };
+      return { ok: true, text, solids: parts.length, name: doc.title, units: doc.units,
+               parts: parts.length,
+               note: parts.length + (parts.length === 1 ? " solid" : " solids")
+                 + ", each its own root, in " + doc.units };
+    },
+
+    /* ------------------------------------------------------ exchange
+
+       Files in and files out. Two rules hold this end of it together.
+
+       A mesh keeps its faces. A quad stays a quad, an n-gon stays an n-gon,
+       through the import, through the document and back out again - because a
+       low-poly model from Blender or Max is a CAGE, and a cage triangulated on
+       the way in is a cage you can no longer subdivide. Triangles appear in
+       exactly two places and both are forced: STL, which has nothing else, and
+       the tessellation of a B-Rep, which never had faces to keep.
+
+       Whatever arrives is converted once, here, to the one form the document
+       stores - a B-Rep string for solids, OBJ text for meshes. So every import
+       rebuilds through one reader rather than through whichever reader first
+       read it, and the model file says what it holds in a form a person can
+       still read. */
+
+    //! What can be read and written, published so the interface builds its
+    //! menus from the kernel's own answer rather than from a list of its own
+    //! that can drift.
+    formats: FORMATS,
+
+    //! One file in. Returns the document, and a note saying what was found -
+    //! which is the part worth reading, because "14 solids in 3 assemblies"
+    //! and "one solid" are both successes and only one of them is what was
+    //! expected.
+    async importFile({ format, name = "", data = "", encoding = "text", as = "single" }) {
+      const spec = FORMATS.find(f => f.key === format);
+      if (!spec || !spec.read) throw new Error('this kernel cannot read "' + format + '"');
+      const bytes = encoding === "base64" ? fromBase64(data) : null;
+      const stem = String(name).replace(/\.[^.]*$/, "") || "Imported";
+
+      const made = [];
+      const hold = (type, key, geometry, partName, source) => {
+        const f = doc.addFeature(type, null, partName);
+        F.setCode(f, key, geometry);
+        F.setCode(f, "source", source);
+        made.push(f);
+        return f;
+      };
+
+      let note = "", folder = "Body";
+      if (format === "step" || format === "brep") {
+        const text = bytes ? utf8(bytes) : String(data);
+        const parts = format === "brep" ? [readBrep(text)] : readStep(text);
+        if (!parts.length) throw new Error("nothing in that file transferred into a shape");
+
+        // One object, or one per part. Exploding is only offered for a format
+        // that carries several - everything else has one thing in it, and
+        // pretending otherwise would make a set of one.
+        const pieces = as === "parts" ? explode(parts) : [{ shape: compoundOf(parts.map(p => p.shape)) }];
+        const names = format === "step" ? realNames(text) : [];
+        const named = names.length === pieces.length ? names : null;
+        pieces.forEach((piece, i) => {
+          const label = pieces.length === 1 ? stem
+            : (piece.name || (named ? named[i] : "") || stem + " " + (i + 1));
+          hold("Imported", "brep", oc.BRepToolsWrapper.Write(piece.shape), label, name);
+        });
+        note = pieces.length === 1
+          ? "one object, " + describeShape(pieces[0].shape)
+          : pieces.length + " parts"
+            + (named ? ", named from the file" : ", numbered - the file gave no usable names");
+        if (format === "step" && as !== "parts" && isAssembly(text))
+          note += " (this file is an assembly - import it again as sub-components to break it up)";
+        // Freed in the order they were made: a piece is a sub-shape of a part,
+        // and a part is only its own if nothing exploded it.
+        for (const piece of pieces)
+          if (!parts.some(part => part.shape === piece.shape)) release(piece.shape);
+        for (const part of parts) release(part.shape);
+      } else if (format === "obj" || format === "stl") {
+        folder = "GeometricalSet";
+        const parts = format === "obj"
+          ? parseObj(bytes ? utf8(bytes) : String(data))
+          : [{ name: stem, ...weldTriangles(parseStl(bytes || String(data))) }];
+        if (!parts.length) throw new Error("no faces in that file");
+        const kept = parts.reduce((n, part) => n + part.faces.length, 0);
+        const quads = parts.reduce((n, part) => n + part.faces.filter(f => f.length > 3).length, 0);
+
+        const pieces = as === "parts" ? parts : [mergeParts(parts, stem)];
+        for (const piece of pieces)
+          hold("MeshImported", "obj", writeObj([piece], "from " + name), piece.name || stem, name);
+        note = pieces.length + (pieces.length === 1 ? " mesh, " : " meshes, ") + kept + " faces"
+          + (quads ? " - " + quads + " of them with more than three sides, kept as they are"
+                   : " - all triangles");
+      } else {
+        throw new Error('"' + format + '" is not read here - a model file is opened, not imported');
+      }
+
+      // Several parts are a set, the way anything several is a set here: they
+      // are filed under one, so the tree shows the file as one thing that can
+      // be opened rather than as fourteen loose features.
+      let holder = null;
+      if (made.length > 1) {
+        holder = doc.addFeature(folder, null, stem);
+        for (const f of made) doc.setParent(f, holder);
+      }
+
+      return { ...state(doc.recompute(false)), note,
+               created: made.map(F.id), set: holder ? F.id(holder) : null };
+    },
+
+    //! Everything visible, out. STEP is a separate road because it is the only
+    //! one OpenCascade writes for us; the rest are written here, from what the
+    //! features already hold.
+    async exportShapes(format) {
+      if (format === "step") return await this.exportStep();
+      const spec = FORMATS.find(f => f.key === format);
+      if (!spec || !spec.write) throw new Error('this kernel cannot write "' + format + '"');
+      const stem = (doc.title || "part").replace(/[^\w.-]+/g, "-");
+
+      if (format === "brep") {
+        const shapes = doc.features().filter(f => F.visible(f) && F.shape(f)).map(F.shape);
+        if (!shapes.length) throw new Error("there is no B-Rep geometry visible to write");
+        return { ok: true, text: oc.BRepToolsWrapper.Write(compoundOf(shapes)),
+                 parts: shapes.length, name: doc.title, units: doc.units,
+                 note: shapes.length + " shapes, exactly as the kernel holds them" };
+      }
+
+      const parts = exportParts();
+      if (!parts.length) throw new Error("there is nothing visible to write");
+      const polygons = parts.reduce((n, p) => n + p.faces.filter(f => f.length > 3).length, 0);
+      const note = "from " + doc.title + ", " + doc.units;
+      const text = format === "obj" ? writeObj(parts, note) : writeStl(parts, stem);
+      return { ok: true, text, parts: parts.length, name: doc.title, units: doc.units,
+               note: format === "obj"
+                 ? parts.length + " objects" + (polygons
+                     ? ", " + polygons + " faces of more than three sides kept as they are"
+                     : "")
+                 : parts.length + " objects, fanned into triangles - which is all STL has" };
     },
 
     //! Only the shapes the caller names, which is only ever the shapes whose

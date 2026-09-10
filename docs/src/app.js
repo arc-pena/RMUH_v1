@@ -2,12 +2,14 @@ import { createWasmKernel } from "./wasm-kernel.js";
 import { createHttpKernel } from "./http-kernel.js";
 import { ENVIRONMENTS, FINISHES, Showroom, findFinish } from "./showroom.js";
 import { Mdl } from "./mdl.js";
-import { acceptsFrom, dataLines, SAMPLES, sliderSpan } from "./ocaf.js";
+import { acceptsFrom, dataLines, lightenModel, SAMPLES, sliderSpan } from "./ocaf.js";
 import { GraphEditor } from "./graph.js";
 import { Agent, agentTrouble } from "./agent.js";
 import { PluginHost } from "./plugin.js";
 import { CLIMATE } from "./climate-plugin.js";
 import { CROWD } from "./crowd-plugin.js";
+import { FORMATS, IMPORT_LIMIT, formatFor, isAssembly, isBinaryStl, parseObj,
+         productNames, readable, toBase64, whyNot } from "./exchange.js";
 import { SKETCH_CLICKS, SKETCH_RELATIONS, SKETCH_TYPES, nextSketchId, readSketch,
          sketchCrossings, sketchDirectionAt, sketchElement, sketchHandleAt, sketchHandles,
          sketchMoveHandle, sketchOutline, sketchRelationMarks,
@@ -1556,6 +1558,7 @@ const ICONS = {
   Ribbon: '<path d="M5.2 4.4L2 8l3.2 3.6M10.8 4.4L14 8l-3.2 3.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
         + '<path d="M6.3 10.6c1-3.6 2.2-5 3.4-5s1.5 1.1 0 1.1" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>'
         + '<path d="M6.3 8.6c1.1-2.6 2-3.6 3-3.6" fill="none" stroke="currentColor" stroke-width=".9" stroke-linecap="round" opacity=".6"/>',
+  menu: '<path d="M2.6 4.4h10.8M2.6 8h10.8M2.6 11.6h10.8" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>',
   packages: '<path d="M2.4 5.2L8 2.4l5.6 2.8v5.6L8 13.6l-5.6-2.8z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>'
           + '<path d="M2.4 5.2L8 8l5.6-2.8M8 8v5.6" fill="none" stroke="currentColor" stroke-width="1.05"/>',
   undo: '<path d="M3.4 7.6h6.2a3.6 3.6 0 010 7.2H6.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6.2 4.2L2.8 7.6l3.4 3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
@@ -1757,7 +1760,10 @@ const svg = body => '<svg viewBox="0 0 16 16" aria-hidden="true">' + body + "</s
 // elsewhere, a scroll, Escape, or the tree being rebuilt under it.
 addEventListener("pointerdown", event => {
   const menu = document.getElementById("menu");
-  if (menu && !menu.hidden && !menu.contains(event.target)) closeMenu();
+  // The burger is left alone: it closes the menu itself, and closing it here
+  // first would mean it could only ever open.
+  if (menu && !menu.hidden && !menu.contains(event.target)
+      && !event.target.closest("#btn-menu")) closeMenu();
 }, true);
 addEventListener("scroll", () => {
   const menu = document.getElementById("menu");
@@ -1788,6 +1794,9 @@ function buildToolbar() {
   });
 
   for (const spec of state.schema.types) {
+    // A node nobody adds by hand has no button. Import makes these, and an
+    // import of nothing is not a thing to offer.
+    if (spec.hidden) continue;
     const button = document.createElement("button");
     button.className = "tool";
     button.innerHTML = svg(ICONS[spec.type] || ICONS.part);
@@ -1802,6 +1811,7 @@ function buildToolbar() {
   document.getElementById("btn-undo").innerHTML = svg(ICONS.undo);
   document.getElementById("btn-redo").innerHTML = svg(ICONS.redo);
   document.getElementById("btn-packages").innerHTML = svg(ICONS.packages);
+  document.getElementById("btn-menu").innerHTML = svg(ICONS.menu);
   refreshSteps();
 }
 
@@ -1984,20 +1994,76 @@ function closeMenu() {
   const menu = document.getElementById("menu");
   menu.hidden = true;
   menu.textContent = "";
+  const button = document.getElementById("btn-menu");
+  if (button) button.setAttribute("aria-expanded", "false");
+}
+
+//! One line in a menu. Both menus are the same list in the same place - only
+//! the questions differ - so they are built the same way. An item with nothing
+//! to run is a line that says something rather than a line to press.
+function menuItem(label, note, run) {
+  const menu = document.getElementById("menu");
+  const li = document.createElement("li");
+  li.innerHTML = '<span class="menu-label">' + escapeHtml(label) + "</span>"
+    + (note ? '<span class="menu-note">' + escapeHtml(note) + "</span>" : "");
+  if (run) li.addEventListener("click", () => { closeMenu(); run(); });
+  else li.className = "off";
+  menu.appendChild(li);
+  return li;
+}
+
+function menuHead(text) {
+  const li = document.createElement("li");
+  li.className = "menu-head";
+  li.textContent = text;
+  document.getElementById("menu").appendChild(li);
+}
+
+const menuRule = () =>
+  document.getElementById("menu").appendChild(document.createElement("hr"));
+
+//! Shown, then placed: the size it measures is the size it will be.
+function placeMenu(x, y) {
+  const menu = document.getElementById("menu");
+  menu.hidden = false;
+  const box = menu.getBoundingClientRect();
+  menu.style.left = Math.min(x, innerWidth - box.width - 8) + "px";
+  menu.style.top = Math.min(y, innerHeight - box.height - 8) + "px";
+}
+
+/* -------------------------------------------------------- the document menu
+
+   The first button, top left, where a file menu has always been. Everything
+   here is about the document as a file: what comes in, what goes out, and the
+   text the whole thing really is.                                           */
+
+function openDocMenu() {
+  const menu = document.getElementById("menu");
+  menu.textContent = "";
+
+  menuHead("Import");
+  menuItem("From a file…", FORMATS.filter(f => f.read).map(f => f.name).join(", "),
+           () => fileInput.click());
+  menuRule();
+
+  menuHead("Export");
+  for (const format of FORMATS.filter(f => f.write))
+    menuItem(format.name, format.short, () => exportAs(format.key));
+  menuRule();
+
+  menuHead("Document");
+  menuItem("Model file as text…", "read it, or paste one in", () => openModelDialog());
+  menuItem("Packages…", "what is on the shelf", () => togglePackages(true));
+  placeMenu(8, 44);
+  const button = document.getElementById("btn-menu");
+  button.setAttribute("aria-expanded", "true");
 }
 
 function openMenu(event, entry) {
   const menu = document.getElementById("menu");
   menu.textContent = "";
-  const item = (label, note, run) => {
-    const li = document.createElement("li");
-    li.innerHTML = '<span class="menu-label">' + escapeHtml(label) + "</span>"
-      + (note ? '<span class="menu-note">' + escapeHtml(note) + "</span>" : "");
-    li.addEventListener("click", () => { closeMenu(); run(); });
-    menu.appendChild(li);
-    return li;
-  };
-  const rule = () => menu.appendChild(document.createElement("hr"));
+  const item = (label, note, run) => menuItem(label, note, run);
+  const rule = () => menuRule();
 
   if (entry.category === "container") {
     const inputs = (entry.inputs || []).map(id => (feature(id) || {}).name || id);
@@ -2031,11 +2097,7 @@ function openMenu(event, entry) {
     entry.category === "container" ? "keeps what is in it" : "",
     () => edit({ op: "delete", id: entry.id }));
 
-  menu.hidden = false;
-  // Placed after it is shown, so its measured size is the size it will be.
-  const box = menu.getBoundingClientRect();
-  menu.style.left = Math.min(event.clientX, innerWidth - box.width - 8) + "px";
-  menu.style.top = Math.min(event.clientY, innerHeight - box.height - 8) + "px";
+  placeMenu(event.clientX, event.clientY);
 }
 
 //! Is \p id inside the set \p setId, at any depth? Asked so a set cannot be
@@ -2099,6 +2161,7 @@ function buildPanel() {
                    : arg.kind === "choice" ? choiceField(entry, arg)
                    : arg.kind === "edits" ? editsField(entry, arg)
                    : arg.kind === "text" ? textField(entry, arg)
+                   : arg.kind === "blob" ? blobField(entry, arg)
                    : arg.kind === "sketch" ? sketchField(entry, arg)
                    : refField(entry, arg));
   }
@@ -2227,6 +2290,24 @@ function choiceField(entry, arg) {
 
 //! One line of text: a list of numbers, typed. Applied when you leave the
 //! field, because a half-typed list is not a list.
+//! Imported geometry, in the panel. It says what it holds and how much of it,
+//! and offers nothing to change - because there is nothing: an import has no
+//! recipe, only the shape it arrived as. Everything downstream of it works the
+//! same way it works on anything else, which is the whole point of keeping it
+//! as a feature rather than as a file on the side.
+function blobField(entry, arg) {
+  const field = document.createElement("div");
+  field.className = "field";
+  const size = (entry.sizes && entry.sizes[arg.key]) || 0;
+  field.innerHTML = '<div class="field-head"><label>' + escapeHtml(arg.label) + "</label>" +
+    '<span class="kind">' + escapeHtml(arg.carries || "geometry") + "</span></div>" +
+    '<div class="attr-path">' + (size ? readable(size) + ", read from a file and kept in "
+      + "the model" : "empty") + "</div>" +
+    '<div class="attr-path">' + (entry.labels[arg.key] || entry.entry)
+    + " · <b>TDataStd_AsciiString</b></div>";
+  return field;
+}
+
 function textField(entry, arg) {
   const field = document.createElement("div");
   field.className = "field";
@@ -3036,7 +3117,10 @@ const agent = new Agent({
     // do a sun study" is "load the Climate package" rather than an invented
     // node or a flat no.
     packages: packages.schema(),
-    model: await kernel.model(),
+    // Lightened: a document carrying imported geometry is megabytes of B-Rep,
+    // and in a prompt that is megabytes of nothing. What the assistant needs
+    // to know about an import is that it is there and how big it is.
+    model: lightenModel(await kernel.model()),
     errors: (state.tree ? state.tree.features : [])
       .filter(f => f.error).map(f => f.id + ' \"' + f.name + '\": ' + f.error),
   }),
@@ -3457,12 +3541,19 @@ function buildPackagesSoon() {
   packagesPending = setTimeout(buildPackages, 4000);
 }
 
-document.getElementById("btn-packages").addEventListener("click", event => {
+//! The shelf, open or shut. Reached from its own button and from the document
+//! menu, so it is one function rather than one handler.
+function togglePackages(force) {
   const host = document.getElementById("packages");
-  const opening = host.hidden;
+  const opening = force === undefined ? host.hidden : force;
   if (opening) buildPackages();
   host.hidden = !opening;
-  event.currentTarget.setAttribute("aria-pressed", opening ? "true" : "false");
+  document.getElementById("btn-packages")
+    .setAttribute("aria-pressed", opening ? "true" : "false");
+}
+document.getElementById("btn-packages").addEventListener("click", () => togglePackages());
+document.getElementById("btn-menu").addEventListener("click", () => {
+  if (document.getElementById("menu").hidden) openDocMenu(); else closeMenu();
 });
 addEventListener("pointerdown", event => {
   const host = document.getElementById("packages");
@@ -3532,60 +3623,254 @@ document.getElementById("btn-step-copy").addEventListener("click", async () => {
   setTimeout(() => { button.textContent = "Copy"; }, 1600);
 });
 
-document.getElementById("btn-step").addEventListener("click", async () => {
-  const button = document.getElementById("btn-step");
-  const was = button.textContent;
-  button.disabled = true;
-  button.textContent = "writing…";
+/* ==========================================================================
+   Files.
+
+   One file in, one file out, and one rule about which: a format that carries
+   several parts may be broken into several features, and every other format
+   comes in as one object. That is not a preference to be set - it is what the
+   file itself does or does not say - so the question is only ever asked of a
+   file that has an answer to it.
+
+   Nothing here reads geometry. The kernel does that, through one call, and
+   what comes back is a feature in the tree like any other.
+   ========================================================================== */
+
+const EXTENSION = { step: ".step", brep: ".brep", obj: ".obj", stl: ".stl", model: ".ocaf.json" };
+
+//! The name to save under: the document's, made safe for a filesystem.
+const stemOf = () => ((state.tree && state.tree.name) || "part").replace(/[^\w.-]+/g, "-");
+
+//! One text file out, wherever this page is allowed to put one. The viewer's
+//! save allowlist has no .step or .brep in it, so a refused extension is
+//! retried under one it does accept and renamed on the way in; a page with no
+//! save surface at all hands over the text instead.
+async function offerFile(filename, text, title, note) {
+  let saved = null;
   try {
-    const step = await kernel.exportStep();
-    const summary = step.solids + " solid" + (step.solids === 1 ? "" : "s")
-      + " · " + Math.round(step.text.length / 1024) + " KB · " + step.units;
-    const stem = (step.name || "part").replace(/[^\w.-]+/g, "-");
-
-    let saved = null;
-    try {
-      saved = await saveFile(stem + ".step", step.text);
-    } catch (err) {
-      // The viewer's save allowlist has no .step, so the same text goes out
-      // under an extension it does accept and is renamed on the way in.
-      if (err && err.code === "rejected_extension") {
-        try { saved = await saveFile(stem + ".step.txt", step.text); }
-        catch (retry) { saved = { status: retry && retry.code === "declined" ? "declined" : "failed" }; }
-      } else {
-        saved = { status: err && err.code === "declined" ? "declined" : "failed" };
-      }
-    }
-
-    if (saved && saved.status === "saved") {
-      button.textContent = "saved";
-      setTimeout(() => { button.textContent = was; }, 2000);
-      return;
-    }
-    if (saved && saved.status === "declined") { button.textContent = was; return; }
-
-    // No save surface here: hand over the text instead.
-    document.getElementById("step-summary").textContent = summary;
-    document.getElementById("step-note").textContent =
-      "ISO-10303-21, written by OpenCascade. This view cannot save files, so copy "
-      + "the text and keep it as a .step file — or connect a native kernel, which "
-      + "writes one straight to disk.";
-    document.getElementById("step-text").value = step.text;
-    stepDialog.showModal();
-    button.textContent = was;
+    saved = await saveFile(filename, text);
   } catch (err) {
-    button.textContent = err.message.slice(0, 40);
-    setTimeout(() => { button.textContent = was; }, 3200);
-  } finally { button.disabled = false; }
+    if (err && err.code === "rejected_extension") {
+      try { saved = await saveFile(filename + ".txt", text); }
+      catch (retry) { saved = { status: retry && retry.code === "declined" ? "declined" : "failed" }; }
+    } else saved = { status: err && err.code === "declined" ? "declined" : "failed" };
+  }
+  if (saved && saved.status === "saved") return "saved";
+  if (saved && saved.status === "declined") return "declined";
+
+  // No save surface here, so the text is handed over instead - and a text box
+  // is no way to hand over a few megabytes. Say so rather than locking the
+  // page up filling one.
+  if (text.length > 2 * 1024 * 1024) {
+    say(filename + " is " + readable(text.length) + ", and this view cannot save files - "
+      + "it can only show text, which is no way to move a file that size. Connect a native "
+      + "kernel, or open the page where saving is allowed.");
+    return "too big";
+  }
+
+  document.getElementById("step-title").textContent = title;
+  document.getElementById("step-summary").textContent =
+    filename + " · " + readable(text.length);
+  document.getElementById("step-note").textContent = note;
+  document.getElementById("step-text").value = text;
+  stepDialog.showModal();
+  return "shown";
+}
+
+async function exportAs(key) {
+  const format = FORMATS.find(f => f.key === key);
+  if (!format || !format.write) { say("nothing here writes " + key); return; }
+  const filename = stemOf() + (EXTENSION[key] || "." + key);
+  say("writing " + filename + "…");
+  try {
+    // The model file is the document itself and needs no kernel; the rest is
+    // geometry, and only the kernel has that.
+    const answer = key === "model"
+      ? { text: await mdl.modelText(), note: "every feature, its arguments and its references" }
+      : await kernel.exportShapes(key);
+    const how = await offerFile(filename, answer.text, "Export " + format.name,
+      format.summary + " This view cannot save files, so copy the text and keep it under "
+      + "that name — or connect a native kernel, which writes one straight to disk.");
+    if (how === "saved") say(filename + " saved · " + answer.note);
+    else if (how === "declined") say("not saved");
+    else if (how === "shown") say(filename + " · " + answer.note);
+  } catch (err) {
+    say("could not write " + filename + " — " + err.message);
+  }
+}
+
+/* ------------------------------------------------------------------ import */
+
+const fileInput = document.getElementById("file-input");
+// Everything that can be read, and everything a CAD user will reasonably try:
+// a file this build cannot read is better picked and explained than greyed out
+// with no reason given.
+fileInput.accept = [...FORMATS.filter(f => f.read).flatMap(f => f.extensions),
+                    ".iges", ".igs", ".3dm", ".ifc", ".dxf", ".sat"].join(",");
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files && fileInput.files[0];
+  fileInput.value = "";                        // so the same file can be picked twice
+  if (file) takeFile(file);
 });
 
-document.getElementById("btn-model").addEventListener("click", async () => {
-  let text;
-  try { text = await mdl.modelText(); }
-  catch (err) { text = "// " + err.message; }
-  document.getElementById("model-text").value = text;
-  modal.showModal();
+//! How many parts a file says it has, read from the file's own words rather
+//! than from the geometry - which is what makes it cheap enough to ask before
+//! anything is transferred.
+function partsNamed(key, text) {
+  // A STEP file names a product per part, and one more per sub-assembly when
+  // it has any. Both are parts of it as far as the question goes: is this one
+  // thing, or several?
+  if (key === "step") return Math.max(productNames(text).length, isAssembly(text) ? 2 : 1);
+  if (key === "obj") return parseObj(text).length;
+  return 1;
+}
+
+async function takeFile(file) {
+  const excuse = whyNot(file.name);
+  if (excuse) { say(file.name + " is " + excuse.name + ", and " + excuse.reason); return; }
+  const format = formatFor(file.name);
+  if (!format || !format.read) {
+    say("nothing here reads " + file.name + " — try "
+      + FORMATS.filter(f => f.read).map(f => f.name).join(", "));
+    return;
+  }
+  if (file.size > IMPORT_LIMIT) {
+    say(file.name + " is " + readable(file.size) + ", and the limit is "
+      + readable(IMPORT_LIMIT) + " — the whole file is kept in the model, and in every "
+      + "step of the undo stack with it");
+    return;
+  }
+
+  say("reading " + file.name + " · " + readable(file.size) + "…");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  // A model file is not an import: it IS the document, so it replaces it.
+  if (format.key === "model") {
+    try {
+      await mdl.run({ op: "model", model: new TextDecoder().decode(bytes) });
+      fitView();
+      say(file.name + " opened");
+    } catch (err) { say("could not open " + file.name + " — " + err.message); }
+    return;
+  }
+
+  // A binary STL travels as base64; everything else is text and travels as
+  // text, so the model file and the console stay readable.
+  const binary = format.key === "stl" && isBinaryStl(bytes);
+  const request = { op: "import", format: format.key, name: file.name,
+                    encoding: binary ? "base64" : "text",
+                    data: binary ? toBase64(bytes) : new TextDecoder().decode(bytes) };
+
+  const several = format.structure && !binary ? partsNamed(format.key, request.data) : 1;
+  if (several > 1) askImport(request, format, several);
+  else runImport({ ...request, as: "single" });
+}
+
+const importDialog = document.getElementById("modal-import");
+let pending = null;
+
+//! The one question a file cannot answer for itself. Asked only when the file
+//! says it has more than one part in it, which is the whole of the rule.
+function askImport(request, format, several) {
+  pending = { ...request, as: "parts" };
+  document.getElementById("import-title").textContent = "Import " + format.name;
+  document.getElementById("import-note").textContent =
+    request.name + " · " + readable(request.data.length) + " — this file describes "
+    + several + (format.key === "step"
+        ? (isAssembly(request.data) ? " products in an assembly." : " separate products.")
+        : " named groups.")
+    + " It can come in either way.";
+
+  const host = document.getElementById("import-choice");
+  host.textContent = "";
+  const options = [
+    { as: "parts", title: "As sub-components",
+      note: format.key === "step"
+        ? "One feature per part, filed together in a Body — the assembly as the file "
+          + "has it. Each part can then be moved, cut or measured on its own."
+        : "One feature per named group, filed together in a set. Each mesh keeps the "
+          + "faces it was authored with." },
+    { as: "single", title: "As one single object",
+      note: format.key === "step"
+        ? "Every solid in one feature. Lighter in the tree, and the right answer when "
+          + "what arrived is one thing that happens to be written as several."
+        : "Every group merged into one mesh." },
+  ];
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.className = "pick-opt";
+    button.setAttribute("aria-pressed", String(option.as === pending.as));
+    button.innerHTML = "<b>" + escapeHtml(option.title) + "</b><span>"
+      + escapeHtml(option.note) + "</span>";
+    button.addEventListener("click", () => {
+      pending.as = option.as;
+      for (const other of host.children)
+        other.setAttribute("aria-pressed", String(other === button));
+    });
+    host.appendChild(button);
+  }
+  importDialog.showModal();
+}
+
+document.getElementById("btn-import-cancel").addEventListener("click", () => {
+  importDialog.close();
+  pending = null;
+  say("nothing imported");
 });
+document.getElementById("btn-import-go").addEventListener("click", () => {
+  importDialog.close();
+  const request = pending;
+  pending = null;
+  if (request) runImport(request);
+});
+
+async function runImport(request) {
+  const button = document.getElementById("btn-menu");
+  button.disabled = true;
+  say("building " + request.name + "…");
+  try {
+    const answer = await mdl.run(request);
+    fitView();
+    // Selected on arrival: a set if it made one, the feature itself if not, so
+    // what came in is the thing in front of you.
+    const landed = answer.set || (answer.created && answer.created[0]);
+    if (landed) select(landed, false);
+    say(request.name + " — " + answer.note);
+  } catch (err) {
+    say("could not import " + request.name + " — " + err.message);
+  } finally { button.disabled = false; }
+}
+
+//! The document as text. Normally the whole of it - that is the point, the
+//! JSON is the model - but a document carrying imported geometry is megabytes
+//! of B-Rep that nobody reads and no text box enjoys, so those are shown as a
+//! note of their size and the Rebuild button stands down. It is refused rather
+//! than allowed to rebuild without them: a model that quietly lost its
+//! geometry looks exactly like one that worked.
+async function openModelDialog() {
+  const heading = document.getElementById("model-note");
+  const rebuild = document.getElementById("btn-load");
+  let text = "", light = null;
+  try {
+    text = await mdl.modelText();
+    if (text.length > 600000) light = lightenModel(await kernel.model());
+  } catch (err) { text = "// " + err.message; }
+  if (light) {
+    document.getElementById("model-text").value = JSON.stringify(light, null, 2);
+    heading.textContent = "The parametric model — every feature, its arguments and its "
+      + "references. " + readable(light.elided) + " of imported geometry is shown as its "
+      + "size rather than its contents, so this text cannot be rebuilt from. Export the "
+      + "model file to keep it whole.";
+    rebuild.disabled = true;
+  } else {
+    document.getElementById("model-text").value = text;
+    heading.textContent = "The parametric model — every feature, its arguments and its "
+      + "references. Paste one in and the kernel rebuilds it.";
+    rebuild.disabled = false;
+  }
+  modal.showModal();
+}
+document.getElementById("btn-model").addEventListener("click", openModelDialog);
 document.getElementById("btn-close").addEventListener("click", () => modal.close());
 document.getElementById("btn-copy").addEventListener("click", async () => {
   const button = document.getElementById("btn-copy");

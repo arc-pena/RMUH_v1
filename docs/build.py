@@ -31,7 +31,7 @@ STAGE_PACKAGE = "playcanvas"
 STAGE_FILE = "build/playcanvas.min.js"
 
 # Concatenated in this order into one module script.
-MODULES = ["sketch.js", "factory.js", "ocaf.js", "wasm-kernel.js", "http-kernel.js", "mdl.js", "graph.js",
+MODULES = ["sketch.js", "factory.js", "exchange.js", "ocaf.js", "wasm-kernel.js", "http-kernel.js", "mdl.js", "graph.js",
            "agent.js", "showroom.js", "plugin.js", "climate.js", "climate-plugin.js",
            "crowd.js", "crowd-plugin.js", "app.js"]
 

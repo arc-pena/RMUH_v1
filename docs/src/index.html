@@ -221,6 +221,16 @@ button, input, select { font: inherit; color: inherit; }
 #menu li:hover { background: var(--panel-2); }
 #menu .menu-note { color: var(--ink-3); font-size: 10.5px; }
 #menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+/* A heading, for the menu that is a document menu rather than one question
+   about one node. Not an item: there is nothing to press. */
+#menu .menu-head {
+  display: block; padding: 7px 9px 3px; cursor: default;
+  font-size: 9.5px; font-weight: 600; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+#menu .menu-head:hover { background: none; }
+#menu li.off { cursor: default; opacity: .55; }
+#menu li.off:hover { background: none; }
 
 /* ---------------------------------------------------------- the packages
    What is on the shelf, and what is running. Deliberately plain: this is a
@@ -547,6 +557,20 @@ select {
   background: var(--panel-solid); color: var(--ink); font-weight: 500;
   box-shadow: 0 1px 2px rgba(16, 28, 38, .1);
 }
+/* Import: the ways one file can land, each with the consequence written beside
+   it. Not a preference - "one object" and "an assembly" are two different
+   documents, so the difference is spelled out rather than abbreviated. */
+#import-choice { display: grid; gap: 6px; padding: 2px 14px 6px; }
+.pick-opt {
+  display: block; width: 100%; text-align: left; padding: 9px 11px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2);
+  color: var(--ink); cursor: pointer; font: inherit;
+}
+.pick-opt:hover { border-color: var(--accent); }
+.pick-opt[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.pick-opt b { display: block; font-size: 12.5px; font-weight: 600; }
+.pick-opt span { display: block; margin-top: 3px; font-size: 11px; color: var(--ink-3); line-height: 1.45; }
+
 /* the code editor: a Script feature needs more room than a slider does */
 #def-panel.wide { width: 460px; }
 .editor { padding: 10px 12px 12px; border-top: 1px solid var(--line-soft); }
@@ -889,6 +913,11 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
 </div>
 
 <div class="float fades" id="chip">
+  <!-- The document menu. First button, top left, where a file menu has always
+       been: what comes in and what goes out. -->
+  <button class="step" id="btn-menu" title="Document menu" aria-label="Document menu"
+          aria-haspopup="true" aria-expanded="false"></button>
+  <div class="sep"></div>
   <button id="btn-tree" title="Specification tree (T)">
     <span class="name" id="doc-title">Part1</span>
     <span class="count" id="doc-count"></span>
@@ -900,8 +929,6 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
   <button class="step" id="btn-redo" data-label="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled></button>
   <div class="sep"></div>
   <button id="btn-model" title="The parametric model file">Model</button>
-  <div class="sep"></div>
-  <button id="btn-step" title="Export every visible solid as STEP">STEP</button>
   <div class="sep"></div>
   <button id="btn-sample" title="Load a worked example">Samples</button>
   <div class="sep"></div>
@@ -1022,7 +1049,7 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
 
 <dialog id="modal-step">
   <div class="dhead">
-    <h3>Export STEP</h3>
+    <h3 id="step-title">Export STEP</h3>
     <p id="step-note"></p>
   </div>
   <div class="cli" id="step-summary"></div>
@@ -1032,6 +1059,23 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
     <button class="btn primary" id="btn-step-close">Done</button>
   </div>
 </dialog>
+
+<!-- Import. The file is already read by the time this is on screen, so what it
+     asks is the one question the file cannot answer for itself: whether the
+     parts in it should stay together or become the assembly they describe.
+     Offered only for a file that has more than one thing in it. -->
+<dialog id="modal-import">
+  <div class="dhead">
+    <h3 id="import-title">Import</h3>
+    <p id="import-note"></p>
+  </div>
+  <div id="import-choice"></div>
+  <div class="dfoot">
+    <button class="btn" id="btn-import-cancel">Cancel</button>
+    <button class="btn primary" id="btn-import-go">Import</button>
+  </div>
+</dialog>
+<input type="file" id="file-input" hidden>
 
 <dialog id="modal-link">
   <div class="dhead">
@@ -1057,7 +1101,7 @@ dialog .dfoot { padding: 12px 16px; display: flex; gap: 8px; justify-content: fl
 <dialog id="modal">
   <div class="dhead">
     <h3>Model file — <span class="badge">.ocaf.json</span></h3>
-    <p>The parametric model, no geometry — every feature, its arguments and its
+    <p id="model-note">The parametric model — every feature, its arguments and its
        references. Paste one in and the kernel rebuilds it.</p>
   </div>
   <div class="cli">$ ocafcad build model.ocaf.json -o part.cbf --step part.step</div>

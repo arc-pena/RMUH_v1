@@ -1,4 +1,4 @@
-import { acceptsFrom } from "./ocaf.js";
+import { acceptsFrom, isElided } from "./ocaf.js";
 import { SKETCH_CLICKS, nextSketchId, readSketch, sketchDirectionAt, sketchElement,
          sketchHandleAt, sketchMoveHandle, sketchRelation, sketchTangentArc,
          solveSketch } from "./sketch.js";
@@ -187,11 +187,38 @@ export const MDL_OPS = [
     async (ctx, edit) => {
       const model = typeof edit.model === "string" ? JSON.parse(edit.model) : edit.model;
       if (!model || typeof model !== "object") throw new Error('"model" must be a model file');
+      // A model that was shortened so a person could read it is not a model
+      // that can be built. Rebuilding from it would throw away the geometry it
+      // appears to describe, so it is refused by name instead.
+      const short = (model.features || []).find(f =>
+        Object.values(f.args || {}).some(isElided));
+      if (short)
+        throw new Error("this text has had its imported geometry shortened so it could be "
+          + "read - " + short.name + " is only a note of its size. Rebuilding from it would "
+          + "throw that geometry away. Edit the model in the tree, or open a model file you "
+          + "exported.");
       // The layout block is the graph's, not the kernel's; it travels in the
       // same file so a model opens looking the way it was left.
       if (model.layout && typeof model.layout === "object") ctx.readLayout(model.layout);
       return await ctx.kernel.loadModel(model);
     }),
+
+  modelOp("import", ["format", "data", "name?", "encoding?", "as?"],
+    "Read a file into the document. `format` is one of the kernel's read formats - step, "
+    + "brep, obj, stl - and `data` is the file itself, as text, or base64 with "
+    + '`encoding` set to "base64" for a binary STL. `as` is "single" for one feature or '
+    + '"parts" to break the file into the parts it names, which only a format that '
+    + "carries several will do anything with. What comes in is stored as geometry, not as "
+    + "the file, so it rebuilds without the reader that read it - and a mesh keeps the "
+    + "faces it was authored with, quads included.",
+    { op: "import", format: "step", name: "bracket.step", as: "parts", data: "ISO-10303-21;…" },
+    (ctx, edit) => ctx.kernel.importFile({
+      format: needText(edit, "format"),
+      data: needText(edit, "data"),
+      name: edit.name ? String(edit.name) : "",
+      encoding: edit.encoding === "base64" ? "base64" : "text",
+      as: edit.as === "parts" ? "parts" : "single",
+    })),
 
   modelOp("vertex", ["id", "index", "x", "y", "z"],
     "Move one vertex of a mesh, by an offset from where the mesh upstream put it. "
@@ -423,6 +450,15 @@ const coalesceKey = edit => {
 };
 const COALESCE_WINDOW = 900;   // ms
 
+//! What goes into the record of the session. Everything, except the file
+//! somebody imported: the console shows every edit that has run, and a
+//! megabyte of B-Rep in the middle of it is not something anyone reads. The
+//! edit itself ran with the whole file; only the copy kept for reading is
+//! shortened, and it says so.
+const forRecord = edit => (edit && typeof edit.data === "string" && edit.data.length > 400)
+  ? { ...edit, data: "<" + edit.data.length + " characters of file, not kept in the log>" }
+  : edit;
+
 export class Mdl {
   constructor(ctx) {
     this.ctx = ctx;              // { kernel, apply, setNode, readLayout, select, selected }
@@ -512,7 +548,8 @@ export class Mdl {
   async run(edit, hint) {
     const spec = OP_INDEX.get(edit && edit.op);
     if (!spec) throw new Error('unknown op "' + (edit && edit.op) + '"');
-    const record = { n: ++this.serial, at: Date.now(), edit, view: spec.view, ok: true, ms: 0 };
+    const record = { n: ++this.serial, at: Date.now(), edit: forRecord(edit),
+                     view: spec.view, ok: true, ms: 0 };
     const started = performance.now();
     // Taken before the edit runs, and kept only if it does: a refused edit
     // changed nothing, so it has nothing to undo.

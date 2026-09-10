@@ -749,18 +749,84 @@ fixed to the window, placed beside whatever the cursor is on and flipped to the
 other side when there is no room. Anything carrying `data-label` gets one, so
 the sketcher's rail and anything added later are covered without being told.
 
-## Getting the scene out
+## Files in and files out
 
-The **STEP** button writes every visible solid with `STEPControl_Writer` — each
-feature transferred as its own root, so the parts arrive separate rather than as
-one lump — and offers the file to the viewer through the `downloads` capability.
+The first button in the toolbar is the document menu, and everything to do with
+the document as a file is in it.
 
-The viewer's save allowlist has no `.step` in it, so the page asks for `.step`
-first and, if that comes back `rejected_extension`, sends the same text as
-`.step.txt` to be renamed. Where there is no save surface at all — served by a
-local kernel, or opened as a file — it hands over the text to copy instead. A
-connected native kernel writes a real `.step` straight to disk, either from
-`/api/save` or from the `ocafcad build --step` command line.
+| | in | out | |
+|---|---|---|---|
+| **STEP** | ✓ | ✓ | solids and surfaces, for any CAD system. Carries several parts |
+| **BREP** | ✓ | ✓ | OpenCascade's own format: exact, fast, and understood by nothing else |
+| **OBJ** | ✓ | ✓ | polygon meshes, grouped by name. Carries several parts |
+| **STL** | ✓ | ✓ | triangles, ASCII or binary in, ASCII out |
+| **Model file** | ✓ | ✓ | the parametric model itself — opening one replaces the document |
+
+IGES, 3DM, IFC, SAT and DXF are named too, and refused with the reason: the IGES
+reader is not in this OCCT build, Rhino's reader is a library the page may not
+fetch, and the rest are formats OpenCascade does not read at all. A file that is
+picked on purpose gets an answer, not silence.
+
+### One rule about structure
+
+A format that carries several parts may be broken into several features; every
+other format comes in as one object. That is not a preference — it is what the
+file itself does or does not say — so the question is only asked of a file with
+an answer to it. A STEP file that names three products, or an OBJ with three
+groups, opens the import dialog; a BREP or an STL does not.
+
+Imported as sub-components, each part becomes its own feature and they are filed
+together in one set — a `Body` for solids, a `GeometricalSet` for meshes — so the
+tree shows the file as one thing that opens rather than as forty loose features.
+Part names come from the file, and only when the count matches exactly; a name
+OpenCascade's own writer made up (`Open CASCADE STEP translator 8.0 2`) is not a
+name anybody gave, so those are numbered instead.
+
+What the STEP reader cannot give through these bindings is the nesting below the
+top level: `TopoDS_Iterator` is not in this build, so a sub-assembly arrives as a
+compound and is exploded to its solids. The import says one part per solid rather
+than implying a tree it cannot see.
+
+### A mesh keeps its faces
+
+A quad stays a quad, an n-gon stays an n-gon — through the import, through the
+document, and back out again. A low-poly model from Blender or Max is a *cage*,
+and a cage triangulated on the way in is a cage you can no longer subdivide. So a
+quad box from Blender opens here as six quads, `Subdivide` turns each into four,
+and the OBJ that goes back out is quads again.
+
+Triangles appear in exactly two places and both are forced: STL, which has
+nothing else, and the tessellation of a B-Rep, which never had faces to keep.
+
+### What an import is
+
+`Imported` and `MeshImported` are features like any other, with one difference:
+there is no recipe under them. What they hold *is* the geometry — a B-Rep string,
+or OBJ text — so rebuilding means reading it back, and the panel offers nothing
+to turn. Everything downstream works exactly as it does on anything else: an
+imported solid can be moved, cut, filleted and measured.
+
+Whatever arrives is converted **once**, on the way in, to the one form the
+document stores. So every import rebuilds through one reader rather than through
+whichever reader first read it, and the model file says what it holds in a form
+a person can still read.
+
+That geometry travels in the model file, which is what makes a document with an
+import in it stand on its own — and what makes it big. A document carrying a few
+megabytes of B-Rep shows those as a note of their size in the model text box, and
+Rebuild stands down rather than quietly rebuilding without them. The assistant is
+briefed with the same shortened copy: nobody reads a megabyte of B-Rep, and in a
+prompt it is a megabyte of nothing.
+
+### Saving
+
+Each export is offered to the viewer through the `downloads` capability. The
+viewer's save allowlist has no `.step` or `.brep` in it, so the page asks for the
+real extension first and, if that comes back `rejected_extension`, sends the same
+text under one it does accept to be renamed. Where there is no save surface at
+all — served by a local kernel, or opened as a file — it hands over the text to
+copy instead. A connected native kernel writes a real file straight to disk,
+either from `/api/save` or from the `ocafcad build --step` command line.
 
 ## Handling OpenCascade's failures
 

@@ -1470,6 +1470,13 @@ const code = (key, label, def) => ({ key, label, kind: "code", def });
 //! One line of text the user types, held as a TDataStd_AsciiString. Same
 //! storage as code, a different control: a field rather than an editor.
 const text = (key, label, def, hint = "") => ({ key, label, kind: "text", def, hint });
+//! Geometry that came from a file, held as a TDataStd_AsciiString like the two
+//! above. What makes it its own kind is not how it is stored but that nobody
+//! edits it: it is megabytes of B-Rep or OBJ, it travels in the model file so
+//! the document stands on its own, and every surface that shows a model to a
+//! person - the panel, the text box, the assistant's briefing - shows its size
+//! instead of its contents.
+const blob = (key, label, carries) => ({ key, label, kind: "blob", def: "", carries });
 //! A fixed set of alternatives, held as a TDataStd_Integer index.
 const choice = (key, label, options, def = 0) =>
   ({ key, label, kind: "choice", options, def });
@@ -1480,7 +1487,7 @@ const when = (arg, key, equals) => ({ ...arg, showWhen: { key, equals } });
 //! The same builders, handed out - because a package declares its nodes in
 //! exactly the form the catalogue above is written in, and a second way of
 //! spelling an argument is a second thing that can be wrong about one.
-export const ARG = { real, ref, refs, choice, text, code, edits, drawing, when,
+export const ARG = { real, ref, refs, choice, text, code, blob, edits, drawing, when,
                      ANY, KINDS };
 
 //! One table drives the toolbar, the label layout (an argument's index here is
@@ -1831,6 +1838,28 @@ export const CATALOGUE = [
      Containers drive no geometry. They hold nothing, build nothing and consume
      nothing - what is in one stays exactly as visible, as wired and as
      rebuildable as it was - so filing a node away can never change the part. */
+  /* ----------------------------------------------------------- imported
+     Geometry that arrived from a file. It has no recipe - there is nothing to
+     drive, no argument to slide - so what it holds is the geometry itself,
+     and rebuilding it means reading that back. That is the whole difference
+     between an import and every other node here, and the reason an import
+     can still be moved, cut, filleted and measured like anything else: what
+     it hands downstream is an ordinary shape. */
+  { type: "Imported", guid: "9a1b2c30-00b0-4c00-9e00-caf0000000b0", category: "body",
+    produces: "solid", hidden: true,
+    summary: "A solid or surface read from a file - STEP, or OpenCascade's own BREP. "
+           + "Kept as the shape itself rather than as the file it came from, so it "
+           + "rebuilds without the reader that first read it. Added by Import, not "
+           + "from the toolbar.",
+    args: [blob("brep", "Geometry", "B-Rep"), text("source", "From", "", "the file it came from")] },
+  { type: "MeshImported", guid: "9a1b2c30-00b1-4c00-9e00-caf0000000b1", category: "mesh",
+    produces: "mesh", hidden: true,
+    summary: "A polymesh read from a file - OBJ or STL. Whatever the file was, it is "
+           + "kept as OBJ: one format to read back, and a model file a person can "
+           + "still read. Added by Import, not from the toolbar.",
+    args: [blob("obj", "Geometry", "OBJ"), text("source", "From", "", "the file it came from"),
+           choice("smooth", "Shading", ["Faceted", "Smooth"], 0)] },
+
   { type: "GeometricalSet", guid: "9a1b2c30-00a0-4c00-9e00-caf0000000a0",
     category: "container", produces: "text",
     summary: "A folder for wireframe and surfaces - points, lines, planes, curves, "
@@ -2833,6 +2862,10 @@ export class Doc {
       features: this.features().map(f => {
         const spec = F.spec(f);
         const values = {}, refs = {}, labels = {}, driven = {}, lists = {}, texts = {};
+        // Imported geometry is published as its size and nothing else. The
+        // tree travels on every rebuild, and a few megabytes of B-Rep in it
+        // would be a few megabytes moved to redraw a name.
+        const sizes = {};
         for (const arg of spec.args) {
           const label = F.argLabel(f, arg.key, true);
           labels[arg.key] = label.entry;
@@ -2850,6 +2883,7 @@ export class Doc {
           else if (arg.kind === "choice") values[arg.key] = F.choice(f, arg.key, arg.def);
           else if (arg.kind === "code") { /* published separately, below */ }
           else if (arg.kind === "text") texts[arg.key] = F.text(f, arg.key, arg.def);
+          else if (arg.kind === "blob") sizes[arg.key] = F.code(f, arg.key, "").length;
           else if (arg.kind === "edits") lists[arg.key] = F.edits(f, arg.key);
           else if (arg.kind === "sketch") { /* published whole, below */ }
           else if (arg.kind === "refs") lists[arg.key] = F.references(f, arg.key).map(F.id);
@@ -2863,7 +2897,7 @@ export class Doc {
           id: F.id(f), name: F.name(f), type: spec.type, category: spec.category,
           produces: spec.produces, entry: f.entry, visible: F.visible(f),
           revision: F.revision(f), built: !!F.shape(f), values, refs, labels, driven,
-          lists, texts,
+          lists, texts, sizes,
         };
         const holder = F.parent(f);
         if (holder) entry.parent = F.id(holder);
@@ -2938,6 +2972,7 @@ export class Doc {
             if (Object.keys(moves).length) args[arg.key] = moves;
           }
           else if (arg.kind === "text") args[arg.key] = F.text(f, arg.key, arg.def);
+          else if (arg.kind === "blob") args[arg.key] = F.code(f, arg.key, arg.def);
           else if (arg.kind === "sketch") args[arg.key] = F.sketch(f, arg.key);
           else if (arg.kind === "refs") args[arg.key] = F.references(f, arg.key).map(t => ({ ref: F.id(t) }));
           else if (arg.kind === "choice") args[arg.key] = arg.options[F.choice(f, arg.key, arg.def)];
@@ -2984,7 +3019,7 @@ export class Doc {
         }
         const arg = spec.args.find(a => a.key === key);
         if (!arg) throw new Error(spec.type + ' has no argument "' + key + '"');
-        if (arg.kind === "code" || arg.kind === "text") {
+        if (arg.kind === "code" || arg.kind === "text" || arg.kind === "blob") {
           if (typeof value !== "string") throw new Error(key + " of " + entry.id + " must be text");
           F.setCode(f, key, value);
           continue;
@@ -3143,6 +3178,38 @@ export function clampTo(spec, value) {
   return Math.min(max, Math.max(min, value));
 }
 
+//! What a shortened blob says in place of the geometry. Recognised on the way
+//! back in, so a model that has been read rather than exported is refused
+//! instead of quietly rebuilding without the geometry it appears to describe.
+export const ELIDED = "geometry not shown";
+const elidedMark = length => "<" + ELIDED + ": " + Math.round(length / 1024) + " kB>";
+export const isElided = value =>
+  typeof value === "string" && value.startsWith("<" + ELIDED + ":");
+
+//! The model file with imported geometry taken out and its size put in its
+//! place. A copy, for reading: what the text box shows when a document carries
+//! a few megabytes of B-Rep, and what the assistant is briefed with - because
+//! nobody reads a megabyte of B-Rep and in a prompt it is a megabyte of
+//! nothing. The document itself is untouched, and what comes back says on its
+//! face that it cannot be rebuilt from.
+export function lightenModel(model) {
+  let elided = 0;
+  const features = (model.features || []).map(entry => {
+    const spec = typeSpec(entry.type);
+    if (!spec) return entry;
+    const blobs = spec.args.filter(arg => arg.kind === "blob").map(arg => arg.key);
+    if (!blobs.length) return entry;
+    const args = { ...entry.args };
+    for (const key of blobs) {
+      if (typeof args[key] !== "string" || !args[key].length) continue;
+      elided += args[key].length;
+      args[key] = elidedMark(args[key].length);
+    }
+    return { ...entry, args };
+  });
+  return elided ? { ...model, features, elided } : model;
+}
+
 //! The catalogue in the shape the HTTP kernel publishes it, so the interface
 //! reads one format whichever kernel it is talking to.
 export function schemaJson() {
@@ -3152,6 +3219,10 @@ export function schemaJson() {
     types: CATALOGUE.map(spec => ({
       type: spec.type, guid: spec.guid, category: spec.category,
       produces: spec.produces, summary: spec.summary,
+      // A node nobody adds by hand. It exists, it rebuilds, it is in the
+      // catalogue and the assistant is told about it - it just has no button,
+      // because pressing one would make an import of nothing.
+      ...(spec.hidden ? { hidden: true } : {}),
       args: spec.args.map((arg, index) => {
         const base = { key: arg.key, label: arg.label, tag: FIRST_ARG_TAG + index, kind: arg.kind };
         if (arg.showWhen) base.showWhen = arg.showWhen;
@@ -3162,6 +3233,8 @@ export function schemaJson() {
           return { ...base, default: arg.def, options: arg.options };
         if (arg.kind === "code")
           return { ...base, default: arg.def };
+        if (arg.kind === "blob")
+          return { ...base, default: "", carries: arg.carries || "" };
         if (arg.kind === "edits")
           return { ...base, default: arg.def, summary: arg.summary || "" };
         if (arg.kind === "sketch")
