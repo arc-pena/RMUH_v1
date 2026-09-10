@@ -8,8 +8,8 @@
 // people inside furniture, a door with no capacity.
 import { createWasmKernel } from "../src/wasm-kernel.js";
 import { PluginHost, findPlugin } from "../src/plugin.js";
-import { CROWD, CROWD_NODES, boundaryRings, crowdColour, footprintOf, plateOf, zSpan }
-  from "../src/crowd-plugin.js";
+import { CROWD, CROWD_LIMIT, CROWD_NODES, boundaryRings, crowdColour, footprintOf,
+         peopleFor, plateOf, zSpan } from "../src/crowd-plugin.js";
 import { BODY, FREE_SPEED, FRUIN, SIDESTEP, addWalker, blockPolygon, cellIndex,
          cellsAllowed, clearanceOf, crowdSpeed, fillRings, surfaceAt, toWorld,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
@@ -867,6 +867,51 @@ console.log("the cut has to be able to reach the model");
   check("a flat thing is not a span", zSpan([box(0, 0.5)]) === null);
   const span = zSpan([box(0, 3000), box(4200, 7400)]);
   check("two storeys span both", JSON.stringify(span) === "[0,7400]", JSON.stringify(span));
+}
+
+console.log("\nhow many people, and how many is too many");
+{
+  // A count is not a crowd. Sixty people is a busy room and a deserted
+  // masterplan, and the whole of the complaint about a 10 hectare site was that
+  // it looked empty at the same sixty. So what a plate starts with is a
+  // density - one person per ten square metres, a well-used public space - and
+  // it stops at what a frame can actually step.
+  check("a small room gets a floor's worth, not a stadium's",
+        peopleFor(100e6) === 20, String(peopleFor(100e6)));
+  check("the plate that was reported gets what it had before",
+        peopleFor(599e6) === 60, String(peopleFor(599e6)));
+  check("and it is a density, so ten times the floor is ten times the people",
+        peopleFor(2000e6) === 200 && peopleFor(20000e6) === 2000,
+        peopleFor(2000e6) + " / " + peopleFor(20000e6));
+  check("a masterplan stops at what a frame can step",
+        peopleFor(500000e6) === CROWD_LIMIT, String(peopleFor(500000e6)));
+  check("which is a measured number, not a round one",
+        CROWD_LIMIT === 4000, String(CROWD_LIMIT));
+
+  // The step itself, at the size that ceiling allows, on a masterplan-sized
+  // grid. The budget is 16.6 ms for the whole frame at 60 Hz, and this is the
+  // part of it that grows with the crowd.
+  const grid = makeGrid({ lo: [0, 0], hi: [400000, 250000], floor: 0 }, 1000);
+  grid.surface.fill(0);
+  clearanceOf(grid);
+  const fields = [[[20000, 20000]], [[380000, 230000]]].map(at => flowField(grid, at));
+  const crowd = makeCrowd(CROWD_LIMIT);
+  let seed = 11;
+  const random = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  for (let a = 0; a < CROWD_LIMIT; a++)
+    addWalker(crowd, random() * 400000, random() * 250000, a % 2, 0, random);
+  const density = makeDensity(grid);
+  measureDensity(density, crowd, grid, 1 / 30);
+  const started = Date.now();
+  for (let f = 0; f < 30; f++)
+    stepCrowd(crowd, fields, grid, density, 1 / 30, f / 30, { random });
+  const each = (Date.now() - started) / 30;
+  check("and " + CROWD_LIMIT + " of them step inside a frame",
+        each < 16, each.toFixed(1) + " ms a frame for " + crowd.count + " people");
+  let moved = 0;
+  for (let a = 0; a < crowd.count; a++) if (crowd.walked[a] > 0) moved++;
+  check("with all of them actually walking", moved > crowd.count * 0.9,
+        moved + " of " + crowd.count);
 }
 
 console.log("\na slab is a slab: the plate is the geometry, and nothing beside it");

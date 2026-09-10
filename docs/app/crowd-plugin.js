@@ -334,6 +334,28 @@ function facing(a, b, c) {
 //! same number pruneIslands uses, because it is the same question.
 const MIN_FLOOR = 4e6;
 
+//! How many people this will ever hold at once, and it is a measured number
+//! rather than a round one. The crowd step is a spatial hash rebuilt every
+//! frame and a neighbour walk per person, and on the machine this was written
+//! on it costs 2 ms at 600 people, 5.8 at 3000, 13 at 6000 and 32 at 12000 -
+//! against a 16.6 ms budget for the WHOLE frame at 60 Hz, drawing included. So
+//! four thousand is where it stops: past there the picture would still be
+//! moving, but the clock on it would be a lie.
+export const CROWD_LIMIT = 4000;
+
+//! And how much tail the whole crowd gets between them, in line segments.
+//! Twenty thousand is nine hundred people with the full twenty-three steps
+//! each, which is what this drew before there were ever four thousand of them.
+const TRAIL_SEGMENTS = 20000;
+
+//! And how many to put on a plate that nobody has said a number for. Density,
+//! not a count: sixty people is a busy room and an empty masterplan, and the
+//! whole complaint about a 500 m site was that it looked deserted at the same
+//! sixty. One person per ten square metres is a well-used public space, which
+//! is what somebody opening the package wants to see.
+export const peopleFor = area =>
+  Math.max(20, Math.min(CROWD_LIMIT, Math.round(area / 1e8) * 10));
+
 export function surfaceFrom(grid, meshes, options = {}) {
   // The mesh first, on its own terms: only what this storey actually has to
   // stand on, no borrowing and no invented ground.
@@ -781,18 +803,23 @@ class FlowView {
     this.cutChosen = false;
     this.span = null;
     this.grain = 250;
-    // Sixty on a floor, not two hundred. A crowd that is jammed from the first
-    // second shows you nothing except that it is jammed; start where it flows
-    // and wind it up until it stops, because the number where it stops is the
-    // answer you came for.
+    // A crowd that is jammed from the first second shows you nothing except
+    // that it is jammed: it starts where it flows, and you wind it up until it
+    // stops, because the number where it stops is the answer you came for.
+    // Where it starts is a density rather than a count, worked out from the
+    // plate as soon as there is one - sixty people is a busy room and a
+    // deserted masterplan.
     this.population = 60;
+    this.peopleChosen = false;
+    // When the floor's colours were last written. See paintHeat.
+    this.heatAt = null;
     this.show = { agents: true, trails: true, density: true, field: false, plate: true };
     this.map = "footfall";               // which of the three the floor shows
-    this.headings = new Float32Array(900);
+    this.headings = new Float32Array(CROWD_LIMIT);
     this.plate = null;
     this.fields = [];
     this.portals = [];
-    this.crowd = makeCrowd(900);
+    this.crowd = makeCrowd(CROWD_LIMIT);
     this.density = null;
     this.clock = 0;
     this.seed = 12345;
@@ -818,7 +845,8 @@ class FlowView {
       <div class="fl-row">
         <span class="fl-tag">People</span>
         <input type="range" id="fl-people" min="0" max="600" step="10" value="60">
-        <span class="fl-read" id="fl-people-read">60</span>
+        <input type="number" class="fl-read fl-type" id="fl-people-read"
+               min="0" step="10" value="60" aria-label="How many people">
         <button class="btn" id="fl-play">Pause</button>
         <button class="btn" id="fl-reset">Reset</button>
       </div>
@@ -864,10 +892,25 @@ class FlowView {
 
   wire() {
     const q = id => this.bar.querySelector("#" + id);
-    q("fl-people").addEventListener("input", e => {
-      this.population = +e.target.value;
-      q("fl-people-read").textContent = this.population;
-    });
+    // A number of people is a decision about the study, not a range somebody
+    // else chose: a 500 m masterplan at sixty people is a deserted masterplan.
+    // So the slider's top end follows the plate - what a well-used floor of
+    // this size holds - and the field beside it takes anything up to the limit
+    // this can actually step in a frame, which is CROWD_LIMIT and is the only
+    // hard stop here.
+    const setPeople = (many, fromField) => {
+      const wanted = Math.max(0, Math.min(CROWD_LIMIT, Math.round(Number(many) || 0)));
+      this.population = wanted;
+      this.peopleChosen = true;
+      const slider = q("fl-people");
+      if (wanted > Number(slider.max)) slider.max = String(wanted);
+      slider.value = String(wanted);
+      if (!fromField) q("fl-people-read").value = String(wanted);
+      this.refresh();
+    };
+    q("fl-people").addEventListener("input", e => setPeople(e.target.value, false));
+    q("fl-people-read").addEventListener("change", e => setPeople(e.target.value, true));
+    q("fl-people-read").addEventListener("keydown", e => e.stopPropagation());
     q("fl-cut").addEventListener("input", e => {
       this.cut = +e.target.value;
       // Moved by hand: from here it stays where it was put, and only a model
@@ -928,7 +971,7 @@ class FlowView {
       for (const other of q("fl-map").querySelectorAll("[data-map]"))
         other.setAttribute("aria-pressed", other.dataset.map === this.map ? "true" : "false");
       this.applyVisibility();
-      this.paintHeat();
+      this.paintHeat(true);
       this.refresh();
     });
     q("fl-plan").addEventListener("click", () => this.planView());
@@ -944,15 +987,15 @@ class FlowView {
     this.trailLength = 24;
     const trail = new THREE.BufferGeometry();
     trail.setAttribute("position",
-      new THREE.BufferAttribute(new Float32Array(900 * this.trailLength * 3), 3));
+      new THREE.BufferAttribute(new Float32Array(CROWD_LIMIT * this.trailLength * 3), 3));
     trail.setAttribute("color",
-      new THREE.BufferAttribute(new Float32Array(900 * this.trailLength * 3), 3));
+      new THREE.BufferAttribute(new Float32Array(CROWD_LIMIT * this.trailLength * 3), 3));
     trail.setDrawRange(0, 0);
     this.trails = new THREE.LineSegments(trail, new THREE.LineBasicMaterial({
       vertexColors: true, transparent: true, opacity: 0.75, depthWrite: false }));
     this.trails.renderOrder = 11;
     this.group.add(this.trails);
-    this.history = new Float32Array(900 * this.trailLength * 2);
+    this.history = new Float32Array(CROWD_LIMIT * this.trailLength * 2);
     this.historyAt = 0;
   }
 
@@ -965,6 +1008,8 @@ class FlowView {
   makePeople() {
     const { THREE } = this.kit;
     const person = mergedPerson(THREE);
+    this.bodies = { fine: person, coarse: mergedPerson(THREE, true) };
+    this.bodyNow = "fine";
     this.states = [
       { key: "walking",  colour: 0x2fa88d, says: "walking freely" },
       { key: "slowed",   colour: 0x9fd14e, says: "slowed by the crowd" },
@@ -977,7 +1022,7 @@ class FlowView {
       // FLAT, not lit: the colour of a person carries data here, and a shaded
       // body is darker on one side, which corrupts the very thing being read.
       const mesh = new THREE.InstancedMesh(person,
-        new THREE.MeshBasicMaterial({ color: state.colour }), 900);
+        new THREE.MeshBasicMaterial({ color: state.colour }), CROWD_LIMIT);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.count = 0;
       mesh.renderOrder = 12;
@@ -986,13 +1031,14 @@ class FlowView {
       return mesh;
     });
     this.spot = new THREE.Object3D();
-    this.headings = new Float32Array(900);
+    this.headings = new Float32Array(CROWD_LIMIT);
   }
 
   //! The crowding map, as a texture on a plane rather than a mesh per cell:
   //! twenty thousand cells is twenty thousand quads, and it is one upload.
   makePlate() {
     const { THREE } = this.kit;
+    this.heatAt = null;                        // a new plate is a new texture
     while (this.plateGroup.children.length) {
       const child = this.plateGroup.children.pop();
       if (child.geometry) child.geometry.dispose();
@@ -1226,6 +1272,13 @@ Object.assign(FlowView.prototype, {
       this.makePlate();
       return;
     }
+    // How many people this floor is worth, now that its size is known. The
+    // slider's top end is what a well-used floor of this size holds - three
+    // times the default, so there is room to crowd it - and the number itself
+    // follows the area until somebody sets one, because sixty people is a busy
+    // room and a deserted masterplan and it should not be both.
+    this.sizeCrowd();
+
     note.textContent = (this.walkableArea() / 1e6).toFixed(0) + " m² walkable · "
       + (this.plate.plate && this.plate.plate.length
           ? this.plate.plate.length === 1 ? "1 floor plate"
@@ -1343,6 +1396,26 @@ Object.assign(FlowView.prototype, {
   //! would recognise. The padded grid outside the building is not floor.
   //! Every cell somebody could stand in. Counted off the grid rather than
   //! sampled over a box, because the walkable surface is the grid now.
+  //! The people control, sized to the plate. Never past CROWD_LIMIT, which is
+  //! what a frame can actually step - a slider that can be dragged into a
+  //! freeze is a slider that lies about what the software does.
+  sizeCrowd() {
+    const slider = this.bar.querySelector("#fl-people");
+    const field = this.bar.querySelector("#fl-people-read");
+    if (!slider || !field) return;
+    const many = peopleFor(this.walkableArea());
+    slider.max = String(Math.min(CROWD_LIMIT, Math.max(200, many * 3)));
+    field.max = String(CROWD_LIMIT);
+    if (this.peopleChosen) {
+      // Somebody's own number, kept - but not past what this can step.
+      this.population = Math.min(this.population, CROWD_LIMIT);
+    } else {
+      this.population = many;
+    }
+    slider.value = String(Math.min(this.population, Number(slider.max)));
+    field.value = String(this.population);
+  },
+
   walkableArea() {
     if (!this.plate) return 0;
     const { grid } = this.plate;
@@ -1470,8 +1543,10 @@ Object.assign(FlowView.prototype, {
   },
 
   reset() {
-    this.crowd = makeCrowd(900);
+    this.crowd = makeCrowd(CROWD_LIMIT);
     this.clock = 0;
+    this.heatAt = null;                        // the clock went back; paint again
+    this.sinceDensity = 0;
     this.historyAt = 0;
     this.history.fill(0);
     if (this.density) { this.density.peak.fill(0); this.density.seen.fill(0); this.density.seconds = 0; }
@@ -1486,7 +1561,21 @@ Object.assign(FlowView.prototype, {
     if (this.running) {
       const step = Math.min(0.05, dt);
       this.clock += step;
-      measureDensity(this.density, this.crowd, this.plate.grid, step);
+      // The crowding field, and it is the other cost that is the size of the
+      // PLATE rather than of the crowd: a clear, two blur passes and a divide
+      // over every cell, which on a quarter of a million of them is 10 ms a
+      // frame whether there are two hundred people out there or four thousand.
+      // Nobody's speed changes in a sixtieth of a second because of how close
+      // somebody is standing, so on a plate that size it is measured ten times
+      // a second instead of sixty - with the elapsed time, so the seconds it
+      // integrates are still real seconds.
+      const cells = this.plate.grid.width * this.plate.grid.height;
+      const every = Math.min(0.2, cells / 2.5e6);
+      this.sinceDensity = (this.sinceDensity || 0) + step;
+      if (this.sinceDensity >= every) {
+        measureDensity(this.density, this.crowd, this.plate.grid, this.sinceDensity);
+        this.sinceDensity = 0;
+      }
       stepCrowd(this.crowd, this.fields, this.plate.grid, this.density, step, this.clock,
         { trace: this.trace, recycle: (a, now) => this.somewhereElse(a, now) });
       this.trim();
@@ -1545,6 +1634,13 @@ Object.assign(FlowView.prototype, {
         mesh.setMatrixAt(buckets[at]++, this.spot.matrix);
     }
     this.tally = buckets;
+    // The cheaper body once there are more of them than there are pixels to
+    // tell them apart with.
+    const want = this.crowd.count > 1200 ? "coarse" : "fine";
+    if (this.bodies && want !== this.bodyNow) {
+      this.bodyNow = want;
+      for (const mesh of this.crowdMeshes) mesh.geometry = this.bodies[want];
+    }
     this.crowdMeshes.forEach((mesh, i) => {
       mesh.count = buckets[i];
       mesh.instanceMatrix.needsUpdate = true;
@@ -1556,9 +1652,16 @@ Object.assign(FlowView.prototype, {
     const n = this.trailLength;
     const position = this.trails.geometry.attributes.position.array;
     const colour = this.trails.geometry.attributes.color.array;
+    // A budget of segments, shared out. Everybody keeps a tail; with four
+    // thousand people on the plate it is four steps long instead of
+    // twenty-three, because a hundred thousand line segments rewritten every
+    // frame is where the drawing stops being free - and at that density the
+    // long tails were a solid wash anyway.
+    const span = Math.max(3, Math.min(n, Math.round(TRAIL_SEGMENTS / Math.max(1, this.crowd.count))));
+    const first = Math.max(1, n - span);
     let at = 0;
     for (let a = 0; a < this.crowd.count; a++)
-      for (let s = 1; s < n; s++) {
+      for (let s = first; s < n; s++) {
         const older = (a * n + (this.historyAt + s) % n) * 2;
         const newer = (a * n + (this.historyAt + s + 1) % n) * 2;
         const ax = this.history[older], ay = this.history[older + 1];
@@ -1567,7 +1670,7 @@ Object.assign(FlowView.prototype, {
         // A trail must not leap across the room when somebody is removed and
         // the last one is swapped into their slot.
         if (Math.hypot(bx - ax, by - ay) > 2000) continue;
-        const fade = s / n * 0.85;
+        const fade = (s - first + 1) / (n - first + 1) * 0.85;
         position[at * 3] = ax; position[at * 3 + 1] = ay; position[at * 3 + 2] = z - 40;
         colour[at * 3] = 0.35 * fade; colour[at * 3 + 1] = 0.62 * fade; colour[at * 3 + 2] = 0.72 * fade;
         at++;
@@ -1594,9 +1697,20 @@ Object.assign(FlowView.prototype, {
   //! The first two are scaled to their own busiest cell, because "twice as
   //! walked-on as anywhere else" is the question; the third is scaled to
   //! Fruin F, because a density means the same thing everywhere.
-  paintHeat() {
+  //! The floor's colours. Rate limited, because this is the one thing here
+  //! whose cost is the SIZE OF THE PLATE rather than the size of the crowd: a
+  //! masterplan is a quarter of a million cells, every one of them written and
+  //! the whole texture uploaded, and doing that at sixty frames a second cost
+  //! 29 ms of every frame with two hundred people on the plate and 34 with four
+  //! thousand. The crowd was never the problem. Twice a second on a plate that
+  //! size is a heat map that still looks live and gives the frame back.
+  paintHeat(force = false) {
     if (!this.heat || !this.show.density || this.map === "off") return;
     const { grid } = this.plate;
+    const cells = grid.width * grid.height;
+    const every = Math.min(0.5, Math.max(0.05, cells / 500000));
+    if (!force && this.heatAt !== null && this.clock - this.heatAt < every) return;
+    this.heatAt = this.clock;
     const live = this.map === "live";
     const values = live ? this.density.now
                 : this.map === "occupancy" ? this.trace.occupancy : this.trace.footfall;
@@ -1656,6 +1770,16 @@ Object.assign(FlowView.prototype, {
                                        : (this.clock / 60).toFixed(1) + " min"),
       pairOf("destinations", this.goals.length
         + (this.portals.length ? " portals" : " corners")),
+      // On a floor this size, what is on it - and, when the ceiling is what is
+      // deciding the number rather than the floor, that it is.
+      ...(this.plate ? [pairOf("one person per",
+        (this.walkableArea() / 1e6 / Math.max(1, this.crowd.count)).toFixed(1) + " m²")] : []),
+      ...(this.population >= CROWD_LIMIT && this.plate
+          && peopleFor(this.walkableArea()) >= CROWD_LIMIT ? [
+        '<p class="fl-small">' + CROWD_LIMIT + " is as many as this steps in a frame, "
+        + "and a floor this size would hold more. What is on it is a sample of a "
+        + "fuller crowd, not the whole of one - the maps are still right, the "
+        + "queues are not.</p>"] : []),
     ]));
 
     if (this.crowd.journeys.length) {
@@ -1939,13 +2063,20 @@ export const CROWD = offerPlugin({
 //! they are facing. Merged by hand because r128's merge helper lives in an
 //! addon this page does not carry, and three draw calls per state instead of
 //! one is three times the cost for no gain.
-function mergedPerson(THREE) {
-  const body = new THREE.CylinderGeometry(BODY * 0.34, BODY * 0.30, 1150, 10);
+function mergedPerson(THREE, coarse = false) {
+  // Two bodies, and which one is drawn is decided by how many there are. At
+  // four thousand the fine one is 960,000 triangles a frame for a crowd whose
+  // members are four pixels tall; the coarse one is an eighth of that and looks
+  // the same at that size. Below a thousand people they are people, and the
+  // fine one is what they are drawn with.
+  const sides = coarse ? 5 : 10;
+  const body = new THREE.CylinderGeometry(BODY * 0.34, BODY * 0.30, 1150, sides);
   body.rotateX(Math.PI / 2);                        // z is up in this world
   body.translate(0, 0, 575);
-  const head = new THREE.SphereGeometry(BODY * 0.30, 12, 9);
+  const head = coarse ? new THREE.SphereGeometry(BODY * 0.30, 5, 3)
+                      : new THREE.SphereGeometry(BODY * 0.30, 12, 9);
   head.translate(0, 0, 1420);
-  const nose = new THREE.ConeGeometry(BODY * 0.15, BODY * 0.5, 7);
+  const nose = new THREE.ConeGeometry(BODY * 0.15, BODY * 0.5, coarse ? 4 : 7);
   nose.rotateX(Math.PI / 2);
   nose.translate(0, BODY * 0.40, 900);
 

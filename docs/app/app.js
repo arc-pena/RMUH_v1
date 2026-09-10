@@ -3117,6 +3117,7 @@ const graph = new GraphEditor({
   // The graph may be on another screen; the drawing is not. Draw… on a sketch
   // node opens the sketcher here.
   onSketch: id => { focus(); enterSketch(id); },
+  onPhone: () => onPhone(),
 });
 document.getElementById("btn-graph").addEventListener("click", () => graph.toggle());
 /* ----------------------------------------------------------- undo, redo */
@@ -3610,7 +3611,12 @@ async function afterPackages() {
    a list with names in it.
    ========================================================================== */
 
-const PHONE = matchMedia("(max-width: 760px)");
+//! A phone is narrow AND has a thumb on it. Width alone called a narrow window
+//! on a desktop a phone - which is what a page in a side panel is - and handed
+//! a mouse the dock, the sheets and every control sized for a thumb. The
+//! stylesheet is gated on the same two things in the same words; a narrow
+//! window with a pointer stays a desktop and is scaled down to fit instead.
+const PHONE = matchMedia("(max-width: 900px) and (pointer: coarse)");
 const onPhone = () => PHONE.matches;
 
 //! Whether opening a definition should raise the sheet that shows it. It should

@@ -385,6 +385,11 @@ export class GraphEditor {
     // the graph may be on another screen, and the drawing is not.
     this.onSketch = options.onSketch || (() => {});
     this.onClose = options.onClose || (() => {});
+    // Whether this is a phone, asked rather than worked out: the rule is one
+    // rule and it lives where the layout does, so a narrow window with a
+    // mouse in it does not get a phone's window here and a desktop's
+    // everywhere else.
+    this.onPhone = options.onPhone || (() => false);
 
     this.layout = new Map();                   // feature id -> { x, y }
     this.view = { x: 40, y: 30, z: 1 };
@@ -503,7 +508,7 @@ export class GraphEditor {
     // A phone has no second place to put a window, so it does not get one: the
     // graph fills the width, sits on the dock, and the only thing worth
     // remembering about it is nothing.
-    const phone = innerWidth <= 760;
+    const phone = this.onPhone();
     if (phone) floater.classList.add("g-phone");
     const kept = phone ? {} : readWindowState();
     const w = Math.round(Math.min(1040, Math.max(560, innerWidth * 0.62), innerWidth - 80));
