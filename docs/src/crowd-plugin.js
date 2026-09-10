@@ -22,7 +22,7 @@
 import { ARG } from "./ocaf.js";
 import { offerPlugin } from "./plugin.js";
 import { BODY, FRUIN, SHUFFLE, addWalker, cellsAllowed, clearanceOf, blockPolygon,
-         crowdSpeed, densityAt, fillRings,
+         crowdSpeed, densityAt, fillRings, removeWalker,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
          makeDensity, makeGrid, makeTrace, measureDensity, serviceBreakdown,
          stepCrowd, stranded, toCell, toWorld, walkDistance } from "./crowd.js";
@@ -177,8 +177,26 @@ export function boundaryRings(mesh, weld = 20) {
 //! thickness to cut, so its own boundary is the answer.
 export function floorRings(mesh) {
   const span = zSpan([mesh]);
-  return span ? footprintOf(mesh, (span[0] + span[1]) / 2) : boundaryRings(mesh);
+  if (!span) return boundaryRings(mesh);
+  // Cut near the BASE, not the middle. For a slab the two are the same; for
+  // anything tall they are not, and what a floor plate means is the outline of
+  // what it stands on - the middle of a building is a section through its
+  // walls, which is a different drawing entirely.
+  const at = span[0] + Math.max(1, (span[1] - span[0]) * 0.05);
+  const low = footprintOf(mesh, at);
+  return low.length ? low : boundaryRings(mesh);
 }
+
+//! Where the top of a floor is, so people stand ON it rather than inside it.
+export const floorLevel = meshes => {
+  let top = -Infinity;
+  for (const mesh of meshes) {
+    if (!mesh.positions) continue;
+    for (let i = 2; i < mesh.positions.length; i += 3)
+      if (mesh.positions[i] > top) top = mesh.positions[i];
+  }
+  return Number.isFinite(top) ? top : null;
+};
 
 //! A grid of the whole scene at a cut height, with everything blocked in.
 //! \p include are extra world points the plate must cover - the ends of a walk,
@@ -242,18 +260,35 @@ export function plateOf(meshes, cut, grain,
   // it; without one the padding is what keeps people off the outside face of
   // the perimeter walls.
   const skirt = plate.length ? Math.min(pad, grain * 2) : pad;
+  // People stand ON a floor, not inside it. Without a named floor the level is
+  // the lowest thing in the scene, which is the ground the walls stand on;
+  // with one it is the top of the plate, because that is the surface.
+  const surface = plate.length ? floorLevel(floors) : null;
   const bounds = { lo: [lo[0] - skirt, lo[1] - skirt], hi: [hi[0] + skirt, hi[1] + skirt],
-                   floor: Number.isFinite(floor) ? floor : 0 };
+                   floor: surface !== null ? surface : (Number.isFinite(floor) ? floor : 0) };
   const grid = makeGrid(bounds, grain, maxCells);
   // Carved first - everything off the plate is off the plate - then the things
   // standing on it are blocked, holes and all.
-  if (plate.length) fillRings(grid, plate, { carve: true });
+  let carved = plate.length > 0;
+  if (carved) {
+    fillRings(grid, plate, { carve: true });
+    // A carve that leaves nowhere to stand is a carve that read the outline
+    // wrong - an outline that would not close, or a shape whose section is not
+    // its floor. Rather than handing back a plate with no floor on it, the
+    // carve is dropped and the note says so. Never leave somebody looking at
+    // an empty room wondering which of the two of you is broken.
+    let free = 0;
+    for (let k = 0; k < grid.blocked.length && free < 12; k++) if (!grid.blocked[k]) free++;
+    if (free < 12) { grid.blocked.fill(0); carved = false; }
+  }
   fillRings(grid, rings);
   clearanceOf(grid);
   // What the footprints themselves span, as against the padded grid. People
   // belong inside the building; without this they wander round the outside of
   // it, which looks like a bug because it is one.
-  return { grid, rings, plate, inside: plate.length ? { lo: [...lo], hi: [...hi] } : walls };
+  return { grid, rings, plate: carved ? plate : [], carved,
+           refused: plate.length > 0 && !carved,
+           inside: carved ? { lo: [...lo], hi: [...hi] } : walls };
 }
 
 /* -------------------------------------------------------------- drivers */
@@ -865,6 +900,11 @@ Object.assign(FlowView.prototype, {
       + (this.portals.length ? "" : ", the corners of the floor")
       // Said when it happens, because a grid that quietly refused what was
       // asked of it is a measurement of something else.
+      + (this.plate.refused
+          ? " · the floor outline could not be read - it left nowhere to stand, so it is "
+            + "being treated as an obstacle again. Wire the Floor node to the face or the "
+            + "slab itself rather than to a whole building"
+          : "")
       + (grid.coarsened
           ? " · grid " + grid.cell + " mm, not the " + grid.asked + " mm asked for: "
             + (grid.width * grid.height / 1000).toFixed(0) + "k cells is what this plate can "
@@ -873,7 +913,33 @@ Object.assign(FlowView.prototype, {
           : "");
     this.makePlate();
     this.makeField();
+    this.rescue();
     this.trim();
+  },
+
+  //! Nobody stands in a wall, over a void, or off the edge of the plate.
+  //!
+  //! The step already refuses a move into a blocked cell, so this is not about
+  //! walking - it is about the floor changing under somebody. Move a desk onto
+  //! a person, cut the plate smaller, drop the cut through a different storey,
+  //! and whoever was standing there is now inside something. They are put on
+  //! the nearest free cell, and if there is not one within reach they are taken
+  //! off the floor rather than left hovering.
+  rescue() {
+    if (!this.plate || !this.crowd) return;
+    const { grid } = this.plate;
+    let moved = 0;
+    for (let a = this.crowd.count - 1; a >= 0; a--) {
+      if (!isBlocked(grid, this.crowd.x[a], this.crowd.y[a])) continue;
+      const spot = this.nearestFreeAt([this.crowd.x[a], this.crowd.y[a]]);
+      if (spot) {
+        this.crowd.x[a] = spot[0];
+        this.crowd.y[a] = spot[1];
+        this.crowd.vx[a] = this.crowd.vy[a] = 0;
+        moved++;
+      } else removeWalker(this.crowd, a);
+    }
+    return moved;
   },
 
   //! The cut slider's range follows the model rather than the other way round.

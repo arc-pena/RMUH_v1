@@ -11,7 +11,7 @@ import { PluginHost, findPlugin } from "../src/plugin.js";
 import { CROWD, CROWD_NODES, boundaryRings, crowdColour, footprintOf, plateOf, zSpan }
   from "../src/crowd-plugin.js";
 import { BODY, FREE_SPEED, FRUIN, SIDESTEP, addWalker, blockPolygon, cellIndex,
-         cellsAllowed, clearanceOf, crowdSpeed, fillRings,
+         cellsAllowed, clearanceOf, crowdSpeed, fillRings, toWorld,
          downhill, flowField, isBlocked, isovist, levelOfService, makeCrowd,
          makeDensity, makeGrid, makeTrace, measureDensity, serviceBreakdown,
          stepCrowd, stranded, toCell, walkDistance } from "../src/crowd.js";
@@ -606,6 +606,47 @@ console.log("a floor is a floor, and a ring inside a ring is a hole");
   check("as obstacles the ring between them is solid", inside(2000, 2000) === 1);
   check("and the hole in the middle is not", inside(10000, 10000) === 0,
         "a hole filled solid is the bug this is here for");
+}
+
+console.log("nobody stands in a void, or off the edge of the plate");
+{
+  // An L-shaped plate with a void in it. The bounding box of an L contains a
+  // quarter that is not floor at all, so a spawn that picks anywhere in the
+  // box puts people in mid-air - which is what "it built a bounding box floor"
+  // means.
+  const ring = pts => {
+    const positions = [], index = [];
+    for (const [x, y] of pts) positions.push(x, y, 3000);
+    // a fan from the first point: enough of a tessellation to have a boundary
+    for (let k = 1; k + 1 < pts.length; k++) index.push(0, k, k + 1);
+    return { positions, index };
+  };
+  const ell = ring([[0, 0], [20000, 0], [20000, 8000], [8000, 8000],
+                    [8000, 20000], [0, 20000]]);
+  const plate = plateOf([], 1100, 500, { floors: [ell] });
+  check("an L-shaped plate is read as an L", !!plate && plate.carved,
+        plate ? String(plate.carved) : "no plate");
+  check("people stand on top of it, not inside it", plate.grid.floor === 3000,
+        String(plate.grid.floor));
+
+  // The corner the L does not occupy must be off the floor.
+  const off = isBlocked(plate.grid, 16000, 16000);
+  const on = isBlocked(plate.grid, 4000, 4000);
+  check("the notch of the L is not floor", off === true, String(off));
+  check("and the arms of it are", on === false, String(on));
+
+  // Every cell that is walkable has to be inside the outline. Sampled rather
+  // than proved, which is what a grid lets you do.
+  let outside = 0, walkable = 0;
+  for (let j = 0; j < plate.grid.height; j++)
+    for (let i = 0; i < plate.grid.width; i++) {
+      if (plate.grid.blocked[cellIndex(plate.grid, i, j)]) continue;
+      walkable++;
+      const [x, y] = toWorld(plate.grid, i, j);
+      if (x > 8600 && y > 8600) outside++;
+    }
+  check("nothing walkable is in the notch", outside === 0,
+        outside + " of " + walkable + " walkable cells were in mid-air");
 }
 
 console.log("it has to work at both ends of the scale, and never lock up");
